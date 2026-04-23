@@ -1,0 +1,40 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+}
+
+/* Esconder botones spinner de number inputs en chrome/firefox */
+input[type='number']::-webkit-inner-spin-button,
+input[type='number']::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+input[type='number'] {
+  -moz-appearance: textfield;
+}
+
+/* Print: solo mostrar el ticket */
+@media print {
+  body * {
+    visibility: hidden;
+  }
+  #receipt-print,
+  #receipt-print * {
+    visibility: visible;
+  }
+  #receipt-print {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 80mm;
+  }
+}

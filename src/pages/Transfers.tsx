@@ -1,0 +1,205 @@
+import { useMemo, useState, type FormEvent } from 'react';
+import { useLiveQuery } from 'dexie-react-hooks';
+import { ArrowRight, Plus, Trash2 } from 'lucide-react';
+import { Button } from '@/components/ui/Button';
+import { Input } from '@/components/ui/Input';
+import { Modal } from '@/components/ui/Modal';
+import { Empty } from '@/components/ui/Empty';
+import { PageHeader } from '@/components/ui/PageHeader';
+import { Card, CardBody, CardHeader, CardTitle } from '@/components/ui/Card';
+import { data } from '@/data';
+import { useAuth } from '@/stores/auth';
+import { toast } from '@/stores/toast';
+import { formatDateTime } from '@/lib/dates';
+
+export default function Transfers() {
+  const { session } = useAuth();
+  const transfers = useLiveQuery(() => data.listTransfers(), [session?.tenantId]);
+  const depots = useLiveQuery(() => data.listDepots(), [session?.tenantId]);
+  const products = useLiveQuery(() => data.listProducts(), [session?.tenantId]);
+
+  const [modal, setModal] = useState(false);
+  const [fromId, setFromId] = useState('');
+  const [toId, setToId] = useState('');
+  const [notes, setNotes] = useState('');
+  const [items, setItems] = useState<{ productId: string; qty: number }[]>([]);
+
+  const productMap = useMemo(
+    () => new Map((products ?? []).map((p) => [p.id, p])),
+    [products],
+  );
+
+  function openNew() {
+    setFromId(depots?.[0]?.id ?? '');
+    setToId(depots?.[1]?.id ?? '');
+    setNotes('');
+    setItems([]);
+    setModal(true);
+  }
+
+  async function handleSubmit(e: FormEvent) {
+    e.preventDefault();
+    if (fromId === toId) return toast.error('Origen y destino deben ser distintos');
+    if (items.length === 0) return toast.error('Agregá al menos un item');
+    try {
+      await data.createTransfer({
+        fromDepotId: fromId,
+        toDepotId: toId,
+        notes,
+        items: items.filter((i) => i.productId && i.qty > 0),
+      });
+      toast.success('Transferencia registrada');
+      setModal(false);
+    } catch (err) {
+      toast.error((err as Error).message);
+    }
+  }
+
+  return (
+    <div>
+      <PageHeader
+        title="Transferencias"
+        subtitle="Movimientos de stock entre depósitos"
+        actions={
+          <Button onClick={openNew}>
+            <Plus className="h-4 w-4" /> Nueva transferencia
+          </Button>
+        }
+      />
+
+      {(transfers ?? []).length === 0 ? (
+        <Empty title="Sin transferencias" />
+      ) : (
+        <div className="space-y-3">
+          {transfers!.map((t) => {
+            const from = depots?.find((d) => d.id === t.fromDepotId);
+            const to = depots?.find((d) => d.id === t.toDepotId);
+            return (
+              <Card key={t.id}>
+                <CardHeader>
+                  <div className="flex items-center justify-between">
+                    <CardTitle>
+                      {from?.name} <ArrowRight className="inline h-4 w-4" /> {to?.name}
+                    </CardTitle>
+                    <span className="text-xs text-slate-500">{formatDateTime(t.createdAt)}</span>
+                  </div>
+                </CardHeader>
+                <CardBody>
+                  {t.notes && <p className="mb-2 text-sm text-slate-600">{t.notes}</p>}
+                  <ul className="text-sm">
+                    {t.items.map((it, i) => (
+                      <li key={i} className="flex justify-between py-0.5">
+                        <span>{productMap.get(it.productId)?.name ?? '—'}</span>
+                        <span className="font-semibold">{it.qty} u.</span>
+                      </li>
+                    ))}
+                  </ul>
+                </CardBody>
+              </Card>
+            );
+          })}
+        </div>
+      )}
+
+      <Modal open={modal} onClose={() => setModal(false)} title="Nueva transferencia">
+        <form onSubmit={handleSubmit} className="space-y-3">
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="mb-1 block text-xs font-medium text-slate-700">Desde</label>
+              <select
+                className="h-10 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm"
+                value={fromId}
+                onChange={(e) => setFromId(e.target.value)}
+              >
+                {(depots ?? []).map((d) => (
+                  <option key={d.id} value={d.id}>
+                    {d.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="mb-1 block text-xs font-medium text-slate-700">Hacia</label>
+              <select
+                className="h-10 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm"
+                value={toId}
+                onChange={(e) => setToId(e.target.value)}
+              >
+                {(depots ?? []).map((d) => (
+                  <option key={d.id} value={d.id}>
+                    {d.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+          <div>
+            <label className="mb-1 block text-xs font-medium text-slate-700">Notas</label>
+            <Input value={notes} onChange={(e) => setNotes(e.target.value)} />
+          </div>
+          <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+            <div className="mb-2 flex items-center justify-between">
+              <span className="text-xs font-medium text-slate-700">Items</span>
+              <button
+                type="button"
+                className="text-xs text-brand-600 hover:underline"
+                onClick={() => setItems([...items, { productId: '', qty: 1 }])}
+              >
+                + Agregar
+              </button>
+            </div>
+            {items.length === 0 && (
+              <p className="text-xs text-slate-400">Aún no agregaste productos</p>
+            )}
+            <div className="space-y-2">
+              {items.map((it, i) => (
+                <div key={i} className="flex items-center gap-2">
+                  <select
+                    className="h-9 flex-1 rounded-md border border-slate-300 bg-white px-2 text-sm"
+                    value={it.productId}
+                    onChange={(e) =>
+                      setItems(items.map((x, idx) => (idx === i ? { ...x, productId: e.target.value } : x)))
+                    }
+                  >
+                    <option value="">Seleccionar…</option>
+                    {(products ?? []).map((p) => (
+                      <option key={p.id} value={p.id}>
+                        {p.name}
+                      </option>
+                    ))}
+                  </select>
+                  <input
+                    type="number"
+                    min="1"
+                    className="h-9 w-20 rounded-md border border-slate-300 px-2 text-sm"
+                    value={it.qty}
+                    onChange={(e) =>
+                      setItems(
+                        items.map((x, idx) =>
+                          idx === i ? { ...x, qty: Number(e.target.value) || 0 } : x,
+                        ),
+                      )
+                    }
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setItems(items.filter((_, idx) => idx !== i))}
+                    className="text-slate-400 hover:text-red-600"
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+          <div className="flex justify-end gap-2 pt-2">
+            <Button type="button" variant="outline" onClick={() => setModal(false)}>
+              Cancelar
+            </Button>
+            <Button type="submit">Registrar</Button>
+          </div>
+        </form>
+      </Modal>
+    </div>
+  );
+}

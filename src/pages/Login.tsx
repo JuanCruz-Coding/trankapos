@@ -1,0 +1,81 @@
+import { useState, type FormEvent } from 'react';
+import { Link, useNavigate } from 'react-router-dom';
+import { ShoppingCart } from 'lucide-react';
+import { Button } from '@/components/ui/Button';
+import { Input } from '@/components/ui/Input';
+import { data } from '@/data';
+import { useAuth } from '@/stores/auth';
+import { toast } from '@/stores/toast';
+
+export default function Login() {
+  const [email, setEmail] = useState('demo@trankapos.local');
+  const [password, setPassword] = useState('demo1234');
+  const [loading, setLoading] = useState(false);
+  const setSession = useAuth((s) => s.setSession);
+  const navigate = useNavigate();
+
+  async function handleSubmit(e: FormEvent) {
+    e.preventDefault();
+    setLoading(true);
+    try {
+      const s = await data.login({ email, password });
+      setSession(s);
+      navigate('/pos');
+    } catch (err) {
+      toast.error((err as Error).message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <div className="flex min-h-screen items-center justify-center bg-gradient-to-br from-brand-50 via-white to-slate-100 p-4">
+      <div className="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-8 shadow-lg">
+        <div className="mb-6 flex items-center gap-3">
+          <div className="rounded-xl bg-brand-600 p-3 text-white">
+            <ShoppingCart className="h-6 w-6" />
+          </div>
+          <div>
+            <div className="text-lg font-bold text-slate-900">TrankaPOS</div>
+            <div className="text-xs text-slate-500">Punto de venta para kioskos</div>
+          </div>
+        </div>
+        <h1 className="mb-1 text-xl font-semibold text-slate-900">Ingresá a tu cuenta</h1>
+        <p className="mb-6 text-sm text-slate-500">
+          Usuario demo cargado por defecto — tocá ingresar o creá tu cuenta.
+        </p>
+        <form onSubmit={handleSubmit} className="space-y-3">
+          <div>
+            <label className="mb-1 block text-xs font-medium text-slate-700">Email</label>
+            <Input
+              type="email"
+              required
+              autoComplete="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+            />
+          </div>
+          <div>
+            <label className="mb-1 block text-xs font-medium text-slate-700">Contraseña</label>
+            <Input
+              type="password"
+              required
+              autoComplete="current-password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+            />
+          </div>
+          <Button type="submit" size="lg" className="mt-2 w-full" disabled={loading}>
+            {loading ? 'Ingresando…' : 'Ingresar'}
+          </Button>
+        </form>
+        <div className="mt-6 text-center text-sm text-slate-500">
+          ¿No tenés cuenta?{' '}
+          <Link to="/signup" className="font-medium text-brand-600 hover:underline">
+            Creá una ahora
+          </Link>
+        </div>
+      </div>
+    </div>
+  );
+}
