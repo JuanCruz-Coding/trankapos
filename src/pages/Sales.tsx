@@ -9,6 +9,7 @@ import { useAuth } from '@/stores/auth';
 import { formatARS } from '@/lib/currency';
 import { formatDateTime } from '@/lib/dates';
 import { toast } from '@/stores/toast';
+import { confirmDialog } from '@/lib/dialog';
 import type { Sale } from '@/types';
 
 export default function Sales() {
@@ -22,7 +23,12 @@ export default function Sales() {
   const [view, setView] = useState<Sale | null>(null);
 
   async function handleVoid(s: Sale) {
-    if (!confirm(`¿Anular venta por ${formatARS(s.total)}? Se devuelve stock.`)) return;
+    const ok = await confirmDialog(`¿Anular venta por ${formatARS(s.total)}?`, {
+      text: 'Se devuelve el stock al depósito de origen.',
+      confirmText: 'Anular venta',
+      danger: true,
+    });
+    if (!ok) return;
     try {
       await data.voidSale(s.id);
       toast.success('Venta anulada');

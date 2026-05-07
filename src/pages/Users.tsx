@@ -10,6 +10,7 @@ import { data } from '@/data';
 import { useAuth } from '@/stores/auth';
 import { toast } from '@/stores/toast';
 import { safeParse, userSchema } from '@/lib/schemas';
+import { confirmDialog } from '@/lib/dialog';
 import type { Role, User } from '@/types';
 
 const ROLES: { value: Role; label: string }[] = [
@@ -96,7 +97,12 @@ export default function Users() {
   }
 
   async function handleDelete(u: User) {
-    if (!confirm(`¿Eliminar usuario "${u.name}"?`)) return;
+    const ok = await confirmDialog(`¿Eliminar usuario "${u.name}"?`, {
+      text: 'No vas a poder recuperarlo.',
+      confirmText: 'Eliminar',
+      danger: true,
+    });
+    if (!ok) return;
     try {
       await data.deleteUser(u.id);
       toast.success('Usuario eliminado');

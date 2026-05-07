@@ -10,6 +10,7 @@ import { data } from '@/data';
 import { useAuth } from '@/stores/auth';
 import { toast } from '@/stores/toast';
 import { depotSchema, safeParse } from '@/lib/schemas';
+import { confirmDialog } from '@/lib/dialog';
 import type { Depot } from '@/types';
 
 interface FormState {
@@ -60,7 +61,12 @@ export default function Depots() {
   }
 
   async function handleDelete(d: Depot) {
-    if (!confirm(`¿Eliminar depósito "${d.name}"?`)) return;
+    const ok = await confirmDialog(`¿Eliminar depósito "${d.name}"?`, {
+      text: 'Se va a eliminar junto con su stock asociado.',
+      confirmText: 'Eliminar',
+      danger: true,
+    });
+    if (!ok) return;
     await data.deleteDepot(d.id);
     toast.success('Depósito eliminado');
     setRefreshKey((k) => k + 1);

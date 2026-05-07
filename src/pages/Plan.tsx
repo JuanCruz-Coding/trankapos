@@ -9,6 +9,7 @@ import { Input } from '@/components/ui/Input';
 import { data } from '@/data';
 import { useAuth } from '@/stores/auth';
 import { toast } from '@/stores/toast';
+import { confirmDialog } from '@/lib/dialog';
 import { cn } from '@/lib/utils';
 import { formatARS } from '@/lib/currency';
 import type { Plan, PlanUsage, Subscription, SubscriptionStatus } from '@/types';
@@ -67,11 +68,12 @@ export default function Plan() {
       toast.error('Ingresá un email válido de tu cuenta de Mercado Pago');
       return;
     }
-    if (!confirm(
-      'Te vamos a redirigir a Mercado Pago para autorizar el cobro mensual con tu tarjeta. ¿Continuamos?',
-    )) {
-      return;
-    }
+    const ok = await confirmDialog('Cambio de plan', {
+      text: 'Te vamos a redirigir a Mercado Pago para autorizar el cobro mensual con tu tarjeta.',
+      confirmText: 'Continuar',
+      icon: 'question',
+    });
+    if (!ok) return;
     setSubmitting(planCode);
     try {
       const backUrl = `${window.location.origin}/plan/return`;
@@ -89,15 +91,16 @@ export default function Plan() {
   }
 
   async function handleCancel() {
-    if (!confirm(
-      '¿Seguro que querés cancelar tu suscripción? Vas a perder acceso a las features del plan y volvés al plan Free al final del período.',
-    )) {
-      return;
-    }
+    const ok = await confirmDialog('¿Cancelar tu suscripción?', {
+      text: 'Vas a perder acceso a las features del plan al final del período actual.',
+      confirmText: 'Sí, cancelar',
+      cancelText: 'No',
+      danger: true,
+    });
+    if (!ok) return;
     try {
       await data.cancelSubscription();
       toast.success('Suscripción cancelada');
-      // Forzamos releer la subscription para que la UI se actualice
       const s = await data.getSubscription();
       setSub(s);
     } catch (err) {

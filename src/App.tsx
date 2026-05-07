@@ -2,7 +2,7 @@ import { useEffect } from 'react';
 import { BrowserRouter, Navigate, Outlet, Route, Routes } from 'react-router-dom';
 import { Layout } from '@/components/Layout';
 import { ProtectedRoute } from '@/components/ProtectedRoute';
-import { Toaster } from '@/components/ui/Toaster';
+import { Toaster } from 'react-hot-toast';
 import { useAuth } from '@/stores/auth';
 
 import Login from '@/pages/Login';
@@ -103,7 +103,14 @@ export function App() {
 
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
-      <Toaster />
+      <Toaster
+        position="top-right"
+        toastOptions={{
+          duration: 3500,
+          success: { iconTheme: { primary: '#10b981', secondary: '#fff' } },
+          error: { duration: 5000 },
+        }}
+      />
     </BrowserRouter>
   );
 }

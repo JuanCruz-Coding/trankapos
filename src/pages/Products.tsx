@@ -12,6 +12,7 @@ import { formatARS } from '@/lib/currency';
 import { toast } from '@/stores/toast';
 import { CSV_TEMPLATE, parseCsv, type ParseError, type ParsedRow } from '@/lib/csvImport';
 import { productSchema, safeParse } from '@/lib/schemas';
+import { confirmDialog } from '@/lib/dialog';
 import type { Product } from '@/types';
 
 interface FormState {
@@ -139,7 +140,12 @@ export default function Products() {
   }
 
   async function handleDelete(p: Product) {
-    if (!confirm(`¿Eliminar "${p.name}"?`)) return;
+    const ok = await confirmDialog(`¿Eliminar "${p.name}"?`, {
+      text: 'No vas a poder recuperarlo.',
+      confirmText: 'Eliminar',
+      danger: true,
+    });
+    if (!ok) return;
     try {
       await data.deleteProduct(p.id);
       toast.success('Producto eliminado');
@@ -511,11 +517,14 @@ export default function Products() {
               <button
                 className="text-slate-400 hover:text-red-600"
                 onClick={async () => {
-                  if (confirm(`¿Eliminar categoría "${c.name}"?`)) {
-                    await data.deleteCategory(c.id);
-                    toast.success('Categoría eliminada');
-                    bumpRefresh();
-                  }
+                  const ok = await confirmDialog(`¿Eliminar categoría "${c.name}"?`, {
+                    confirmText: 'Eliminar',
+                    danger: true,
+                  });
+                  if (!ok) return;
+                  await data.deleteCategory(c.id);
+                  toast.success('Categoría eliminada');
+                  bumpRefresh();
                 }}
               >
                 <Trash2 className="h-4 w-4" />
