@@ -312,7 +312,11 @@ class SupabaseDriver implements DataDriver {
     }));
   }
 
-  async subscribeToPlan(planCode: string, backUrl: string): Promise<{ initPoint: string }> {
+  async subscribeToPlan(
+    planCode: string,
+    backUrl: string,
+    payerEmail: string,
+  ): Promise<{ initPoint: string }> {
     await this.requireSession();
     const { data: sessionData } = await this.sb.auth.getSession();
     const token = sessionData.session?.access_token;
@@ -326,7 +330,7 @@ class SupabaseDriver implements DataDriver {
         Authorization: `Bearer ${token}`,
         apikey: import.meta.env.VITE_SUPABASE_ANON_KEY ?? '',
       },
-      body: JSON.stringify({ planCode, backUrl }),
+      body: JSON.stringify({ planCode, backUrl, payerEmail }),
     });
     const body = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(body?.error ?? `Error HTTP ${res.status}`);

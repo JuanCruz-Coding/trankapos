@@ -11,3 +11,9 @@ verify_jwt = false
 
 [functions.create-subscription]
 verify_jwt = false
+
+# MP llama a este webhook sin Authorization header — debe estar abierto.
+# La validación real se hace adentro chequeando la firma HMAC del header
+# x-signature contra un secret (TODO en producción).
+[functions.mp-webhook]
+verify_jwt = false

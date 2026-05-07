@@ -113,7 +113,11 @@ export interface DataDriver {
   getSubscription(): Promise<Subscription>;
   getUsage(): Promise<PlanUsage>;
   listPlans(): Promise<Plan[]>;
-  subscribeToPlan(planCode: string, backUrl: string): Promise<{ initPoint: string }>;
+  subscribeToPlan(
+    planCode: string,
+    backUrl: string,
+    payerEmail: string,
+  ): Promise<{ initPoint: string }>;
 
   // --- depots ---
   listDepots(): Promise<Depot[]>;

@@ -5,7 +5,9 @@ import { Card, CardBody, CardHeader, CardTitle } from '@/components/ui/Card';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { Button } from '@/components/ui/Button';
 import { Modal } from '@/components/ui/Modal';
+import { Input } from '@/components/ui/Input';
 import { data } from '@/data';
+import { useAuth } from '@/stores/auth';
 import { toast } from '@/stores/toast';
 import { cn } from '@/lib/utils';
 import { formatARS } from '@/lib/currency';
@@ -26,12 +28,14 @@ const FEATURE_LABELS: Record<string, string> = {
 };
 
 export default function Plan() {
+  const { session } = useAuth();
   const [sub, setSub] = useState<Subscription | null>(null);
   const [usage, setUsage] = useState<PlanUsage | null>(null);
   const [plans, setPlans] = useState<Plan[]>([]);
   const [loading, setLoading] = useState(true);
   const [changeModal, setChangeModal] = useState(false);
   const [submitting, setSubmitting] = useState<string | null>(null);
+  const [payerEmail, setPayerEmail] = useState(session?.email ?? '');
 
   useEffect(() => {
     let cancelled = false;
@@ -59,10 +63,14 @@ export default function Plan() {
   }, []);
 
   async function handleSubscribe(planCode: string) {
+    if (!payerEmail || !payerEmail.includes('@')) {
+      toast.error('Ingresá un email válido de tu cuenta de Mercado Pago');
+      return;
+    }
     setSubmitting(planCode);
     try {
       const backUrl = `${window.location.origin}/plan/return`;
-      const { initPoint } = await data.subscribeToPlan(planCode, backUrl);
+      const { initPoint } = await data.subscribeToPlan(planCode, backUrl, payerEmail);
       // Redirige al user a la URL de MP — ahí ingresa la tarjeta y autoriza.
       window.location.href = initPoint;
     } catch (err) {
@@ -168,6 +176,22 @@ export default function Plan() {
         title="Cambiar de plan"
         widthClass="max-w-3xl"
       >
+        <div className="mb-4">
+          <label className="mb-1 block text-xs font-medium text-slate-700">
+            Email de tu cuenta de Mercado Pago
+          </label>
+          <Input
+            type="email"
+            value={payerEmail}
+            onChange={(e) => setPayerEmail(e.target.value)}
+            placeholder="kiosco@ejemplo.com"
+          />
+          <p className="mt-1 text-xs text-slate-500">
+            Acá vas a recibir las notificaciones de cobro. En sandbox, usá el email
+            del usuario comprador de prueba.
+          </p>
+        </div>
+
         <div className="grid gap-3 md:grid-cols-2">
           {plans
             .filter((p) => p.code !== 'free')

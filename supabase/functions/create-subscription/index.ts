@@ -29,7 +29,8 @@ const corsHeaders = {
 
 interface Body {
   planCode: 'basic' | 'pro' | 'business';
-  backUrl: string; // a dónde MP redirige al user después de autorizar
+  backUrl: string;     // a dónde MP redirige al user después de autorizar
+  payerEmail: string;  // email de la cuenta MP del que va a pagar
 }
 
 function jsonResponse(body: unknown, status: number) {
@@ -43,9 +44,9 @@ Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders });
 
   try {
-    const { planCode, backUrl } = (await req.json()) as Body;
-    if (!planCode || !backUrl) {
-      return jsonResponse({ error: 'Faltan planCode o backUrl' }, 400);
+    const { planCode, backUrl, payerEmail } = (await req.json()) as Body;
+    if (!planCode || !backUrl || !payerEmail) {
+      return jsonResponse({ error: 'Faltan planCode, backUrl o payerEmail' }, 400);
     }
     if (!['basic', 'pro', 'business'].includes(planCode)) {
       return jsonResponse({ error: 'planCode inválido' }, 400);
@@ -92,6 +93,8 @@ Deno.serve(async (req) => {
     const mpToken = Deno.env.get('MP_ACCESS_TOKEN');
     if (!mpToken) return jsonResponse({ error: 'MP_ACCESS_TOKEN no configurado' }, 500);
 
+    // payer_email: el email de la cuenta MP del cliente. En sandbox debe ser
+    // el email del TESTUSER comprador. En prod real es el email MP del kiosco.
     const preapprovalBody = {
       reason: `TrankaPos · Plan ${plan.name}`,
       auto_recurring: {
@@ -100,7 +103,7 @@ Deno.serve(async (req) => {
         transaction_amount: Number(plan.price_monthly),
         currency_id: 'ARS',
       },
-      payer_email: userRes.user.email,
+      payer_email: payerEmail,
       back_url: backUrl,
       external_reference: mem.tenant_id, // así correlacionamos en el webhook
       status: 'pending',
