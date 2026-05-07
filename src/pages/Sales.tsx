@@ -13,9 +13,10 @@ import type { Sale } from '@/types';
 
 export default function Sales() {
   const { session, activeDepotId } = useAuth();
+  const [refreshKey, setRefreshKey] = useState(0);
   const sales = useLiveQuery(
     () => data.listSales({ depotId: activeDepotId ?? undefined }),
-    [session?.tenantId, activeDepotId],
+    [session?.tenantId, activeDepotId, refreshKey],
   );
   const users = useLiveQuery(() => data.listUsers(), [session?.tenantId]);
   const [view, setView] = useState<Sale | null>(null);
@@ -25,6 +26,7 @@ export default function Sales() {
     try {
       await data.voidSale(s.id);
       toast.success('Venta anulada');
+      setRefreshKey((k) => k + 1);
     } catch (err) {
       toast.error((err as Error).message);
     }

@@ -143,3 +143,32 @@ export interface AuthSession {
   email: string;
   name: string;
 }
+
+export interface Plan {
+  id: string;
+  code: string;
+  name: string;
+  priceMonthly: number;
+  maxDepots: number | null;
+  maxUsers: number | null;
+  maxProducts: number | null;
+  features: Record<string, boolean>;
+}
+
+export type SubscriptionStatus = 'trialing' | 'active' | 'past_due' | 'canceled';
+
+export interface Subscription {
+  id: string;
+  tenantId: string;
+  plan: Plan;
+  status: SubscriptionStatus;
+  trialEndsAt: string | null;
+  currentPeriodStart: string | null;
+  currentPeriodEnd: string | null;
+}
+
+export interface PlanUsage {
+  depots: number;
+  users: number;
+  products: number;
+}

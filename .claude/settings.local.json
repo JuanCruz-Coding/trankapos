@@ -5,7 +5,12 @@
       "Bash(npm install *)",
       "Bash(npx tsc *)",
       "Bash(npm run *)",
-      "Bash(gh auth *)"
+      "Bash(gh auth *)",
+      "Bash(Get-ChildItem -Path \"C:\\\\Users\\\\Juan Cruz\\\\Documents\\\\TrankaPos\" -Recurse -Depth 2)",
+      "Bash(Select-Object FullName)",
+      "Bash(git switch *)",
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)"
     ]
   }
 }

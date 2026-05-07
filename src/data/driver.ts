@@ -4,10 +4,13 @@ import type {
   CashRegister,
   Category,
   Depot,
+  Plan,
+  PlanUsage,
   Product,
   Role,
   Sale,
   StockItem,
+  Subscription,
   Tenant,
   Transfer,
   User,
@@ -105,6 +108,12 @@ export interface DataDriver {
 
   // --- tenant ---
   getTenant(): Promise<Tenant>;
+
+  // --- plan / subscription ---
+  getSubscription(): Promise<Subscription>;
+  getUsage(): Promise<PlanUsage>;
+  listPlans(): Promise<Plan[]>;
+  subscribeToPlan(planCode: string, backUrl: string): Promise<{ initPoint: string }>;
 
   // --- depots ---
   listDepots(): Promise<Depot[]>;

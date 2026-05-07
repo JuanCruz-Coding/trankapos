@@ -18,6 +18,8 @@ import Sales from '@/pages/Sales';
 import Stock from '@/pages/Stock';
 import Transfers from '@/pages/Transfers';
 import Help from '@/pages/Help';
+import Plan from '@/pages/Plan';
+import PlanReturn from '@/pages/PlanReturn';
 
 export function App() {
   const init = useAuth((s) => s.init);
@@ -81,6 +83,22 @@ export function App() {
             }
           />
           <Route path="help" element={<Help />} />
+          <Route
+            path="plan"
+            element={
+              <ProtectedRoute roles={['owner']}>
+                <Plan />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="plan/return"
+            element={
+              <ProtectedRoute roles={['owner']}>
+                <PlanReturn />
+              </ProtectedRoute>
+            }
+          />
         </Route>
 
         <Route path="*" element={<Navigate to="/" replace />} />

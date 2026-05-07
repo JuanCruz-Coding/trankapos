@@ -7,10 +7,13 @@ import { Button } from '@/components/ui/Button';
 import { data } from '@/data';
 import { useAuth } from '@/stores/auth';
 import { formatARS } from '@/lib/currency';
+import { addMoney } from '@/lib/money';
 import { dayKey, rangeFromPreset, type RangePreset } from '@/lib/dates';
 import { format } from 'date-fns';
 import { es } from 'date-fns/locale';
 import { PAYMENT_METHODS, type PaymentMethod } from '@/types';
+
+type StatusFilter = 'active' | 'voided' | 'all';
 
 const PRESETS: { value: RangePreset; label: string }[] = [
   { value: 'today', label: 'Hoy' },
@@ -22,79 +25,108 @@ const PRESETS: { value: RangePreset; label: string }[] = [
 export default function Reports() {
   const { session, activeDepotId } = useAuth();
   const [preset, setPreset] = useState<RangePreset>('7d');
+  const [categoryId, setCategoryId] = useState<string>('');
+  const [status, setStatus] = useState<StatusFilter>('active');
 
   const sales = useLiveQuery(() => data.listSales({}), [session?.tenantId]);
   const users = useLiveQuery(() => data.listUsers(), [session?.tenantId]);
   const depots = useLiveQuery(() => data.listDepots(), [session?.tenantId]);
+  const products = useLiveQuery(() => data.listProducts(), [session?.tenantId]);
+  const categories = useLiveQuery(() => data.listCategories(), [session?.tenantId]);
 
   const range = rangeFromPreset(preset);
 
-  const filtered = useMemo(
-    () =>
-      (sales ?? []).filter(
-        (s) =>
-          !s.voided &&
-          new Date(s.createdAt) >= range.from &&
-          new Date(s.createdAt) <= range.to &&
-          (!activeDepotId || s.depotId === activeDepotId),
-      ),
-    [sales, range.from, range.to, activeDepotId],
+  // map productId → categoryId para filtrar líneas por categoría
+  const productCategory = useMemo(
+    () => new Map((products ?? []).map((p) => [p.id, p.categoryId])),
+    [products],
   );
 
-  const total = filtered.reduce((a, s) => a + s.total, 0);
+  const filtered = useMemo(
+    () =>
+      (sales ?? [])
+        .filter((s) => {
+          if (status === 'active' && s.voided) return false;
+          if (status === 'voided' && !s.voided) return false;
+          if (new Date(s.createdAt) < range.from) return false;
+          if (new Date(s.createdAt) > range.to) return false;
+          if (activeDepotId && s.depotId !== activeDepotId) return false;
+          if (categoryId) {
+            const hasCategory = s.items.some(
+              (it) => productCategory.get(it.productId) === categoryId,
+            );
+            if (!hasCategory) return false;
+          }
+          return true;
+        }),
+    [sales, range.from, range.to, activeDepotId, status, categoryId, productCategory],
+  );
+
+  const total = addMoney(...filtered.map((s) => s.total));
   const count = filtered.length;
   const byDay = useMemo(() => {
-    const map = new Map<string, number>();
+    const map = new Map<string, number[]>();
     for (const s of filtered) {
       const k = dayKey(s.createdAt);
-      map.set(k, (map.get(k) ?? 0) + s.total);
+      const arr = map.get(k) ?? [];
+      arr.push(s.total);
+      map.set(k, arr);
     }
     return Array.from(map.entries())
       .sort()
-      .map(([day, total]) => ({
+      .map(([day, totals]) => ({
         day,
         label: format(new Date(day), 'dd/MM', { locale: es }),
-        total,
+        total: addMoney(...totals),
       }));
   }, [filtered]);
 
   const byPayment = useMemo(() => {
-    const map = new Map<PaymentMethod, number>();
+    const map = new Map<PaymentMethod, number[]>();
     for (const s of filtered) {
       for (const p of s.payments) {
-        map.set(p.method, (map.get(p.method) ?? 0) + p.amount);
+        const arr = map.get(p.method) ?? [];
+        arr.push(p.amount);
+        map.set(p.method, arr);
       }
     }
-    return PAYMENT_METHODS.map((m) => ({ label: m.label, total: map.get(m.value) ?? 0 }));
+    return PAYMENT_METHODS.map((m) => ({
+      label: m.label,
+      total: addMoney(...(map.get(m.value) ?? [])),
+    }));
   }, [filtered]);
 
   const byCashier = useMemo(() => {
-    const map = new Map<string, { count: number; total: number }>();
+    const map = new Map<string, { count: number; totals: number[] }>();
     for (const s of filtered) {
-      const cur = map.get(s.cashierId) ?? { count: 0, total: 0 };
+      const cur = map.get(s.cashierId) ?? { count: 0, totals: [] };
       cur.count++;
-      cur.total += s.total;
+      cur.totals.push(s.total);
       map.set(s.cashierId, cur);
     }
     return Array.from(map.entries()).map(([id, v]) => ({
       id,
       name: users?.find((u) => u.id === id)?.name ?? '—',
-      ...v,
+      count: v.count,
+      total: addMoney(...v.totals),
     }));
   }, [filtered, users]);
 
   const byProduct = useMemo(() => {
-    const map = new Map<string, { name: string; qty: number; total: number }>();
+    const map = new Map<string, { name: string; qty: number; totals: number[] }>();
     for (const s of filtered) {
       for (const it of s.items) {
-        const cur = map.get(it.productId) ?? { name: it.name, qty: 0, total: 0 };
+        if (categoryId && productCategory.get(it.productId) !== categoryId) continue;
+        const cur = map.get(it.productId) ?? { name: it.name, qty: 0, totals: [] };
         cur.qty += it.qty;
-        cur.total += it.subtotal;
+        cur.totals.push(it.subtotal);
         map.set(it.productId, cur);
       }
     }
-    return Array.from(map.values()).sort((a, b) => b.total - a.total);
-  }, [filtered]);
+    return Array.from(map.values())
+      .map((v) => ({ name: v.name, qty: v.qty, total: addMoney(...v.totals) }))
+      .sort((a, b) => b.total - a.total);
+  }, [filtered, categoryId, productCategory]);
 
   function exportCSV() {
     const rows = [
@@ -129,7 +161,7 @@ export default function Reports() {
         actions={<Button variant="outline" onClick={exportCSV}>Exportar CSV</Button>}
       />
 
-      <div className="mb-4 flex flex-wrap gap-2">
+      <div className="mb-4 flex flex-wrap items-center gap-2">
         {PRESETS.map((p) => (
           <button
             key={p.value}
@@ -144,6 +176,28 @@ export default function Reports() {
             {p.label}
           </button>
         ))}
+        <span className="mx-1 h-4 w-px bg-slate-300" />
+        <select
+          className="h-8 rounded-md border border-slate-300 bg-white px-2 text-xs"
+          value={categoryId}
+          onChange={(e) => setCategoryId(e.target.value)}
+        >
+          <option value="">Todas las categorías</option>
+          {(categories ?? []).map((c) => (
+            <option key={c.id} value={c.id}>
+              {c.name}
+            </option>
+          ))}
+        </select>
+        <select
+          className="h-8 rounded-md border border-slate-300 bg-white px-2 text-xs"
+          value={status}
+          onChange={(e) => setStatus(e.target.value as StatusFilter)}
+        >
+          <option value="active">Solo no anuladas</option>
+          <option value="voided">Solo anuladas</option>
+          <option value="all">Todas</option>
+        </select>
       </div>
 
       <div className="mb-6 grid gap-3 md:grid-cols-3">

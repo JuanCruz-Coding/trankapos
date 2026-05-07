@@ -18,6 +18,8 @@ import { data } from '@/data';
 import { useAuth } from '@/stores/auth';
 import { useCart, cartTotals } from '@/stores/cart';
 import { formatARS } from '@/lib/currency';
+import { lineSubtotal, subMoney } from '@/lib/money';
+import { buildSaleFromCart, summarizeSale } from '@/lib/sales';
 import { toast } from '@/stores/toast';
 import { PAYMENT_METHODS, type PaymentMethod, type Sale } from '@/types';
 
@@ -178,7 +180,7 @@ export default function Pos() {
                     <div className="flex-1" />
                     <div className="text-right">
                       <div className="text-sm font-semibold">
-                        {formatARS(line.price * line.qty - line.discount)}
+                        {formatARS(lineSubtotal(line.price, line.qty, line.discount))}
                       </div>
                       {line.discount > 0 && (
                         <div className="text-xs text-red-600">-{formatARS(line.discount)}</div>
@@ -354,8 +356,10 @@ function PaymentModal({ open, onClose, total, onCompleted }: PayProps) {
     }
   }, [open, total]);
 
-  const paid = payments.reduce((a, p) => a + p.amount, 0);
-  const diff = total - paid;
+  const summary = summarizeSale(lines, discount, payments);
+  const paid = summary.paid;
+  const diff = summary.diff;
+  const exact = summary.exact;
 
   function setRow(i: number, field: 'method' | 'amount', value: string) {
     setPayments((ps) =>
@@ -372,25 +376,17 @@ function PaymentModal({ open, onClose, total, onCompleted }: PayProps) {
 
   async function handleConfirm() {
     if (!session || !activeDepotId) return;
-    if (Math.abs(diff) > 0.01) {
-      toast.error('Los pagos deben cubrir exactamente el total');
-      return;
-    }
     setLoading(true);
     try {
       const reg = await data.currentOpenRegister(activeDepotId);
-      const sale = await data.createSale({
+      const saleInput = buildSaleFromCart({
         depotId: activeDepotId,
         registerId: reg?.id ?? null,
-        items: lines.map((l) => ({
-          productId: l.productId,
-          qty: l.qty,
-          price: l.price,
-          discount: l.discount,
-        })),
+        lines,
+        globalDiscount: discount,
         payments,
-        discount,
       });
+      const sale = await data.createSale(saleInput);
       onCompleted(sale);
     } catch (err) {
       toast.error((err as Error).message);
@@ -456,14 +452,14 @@ function PaymentModal({ open, onClose, total, onCompleted }: PayProps) {
         <div
           className={
             'flex justify-between ' +
-            (Math.abs(diff) < 0.01
+            (exact
               ? 'text-emerald-700'
               : diff > 0
                 ? 'text-red-700'
                 : 'text-amber-700')
           }
         >
-          <span>{diff > 0 ? 'Falta' : diff < 0 ? 'Vuelto' : 'Exacto'}</span>
+          <span>{exact ? 'Exacto' : diff > 0 ? 'Falta' : 'Vuelto'}</span>
           <span className="font-semibold">{formatARS(Math.abs(diff))}</span>
         </div>
       </div>
@@ -475,7 +471,7 @@ function PaymentModal({ open, onClose, total, onCompleted }: PayProps) {
         <Button
           className="flex-1"
           onClick={handleConfirm}
-          disabled={loading || Math.abs(diff) > 0.01}
+          disabled={loading || !exact}
         >
           {loading ? 'Procesando…' : 'Confirmar'}
         </Button>

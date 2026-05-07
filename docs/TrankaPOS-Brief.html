@@ -1,0 +1,343 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8" />
+<title>TrankaPOS — Presentación del sistema</title>
+<style>
+  :root {
+    --brand: #196df5;
+    --brand-dark: #0f4fbf;
+    --ink: #0f172a;
+    --muted: #475569;
+    --soft: #e2e8f0;
+    --bg: #ffffff;
+    --accent-bg: #eff6ff;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    font-size: 11pt;
+    line-height: 1.55;
+  }
+  .page {
+    max-width: 780px;
+    margin: 0 auto;
+    padding: 48px 56px;
+  }
+  header.cover {
+    border-bottom: 4px solid var(--brand);
+    padding-bottom: 24px;
+    margin-bottom: 32px;
+  }
+  .badge {
+    display: inline-block;
+    background: var(--brand);
+    color: #fff;
+    font-size: 10pt;
+    font-weight: 600;
+    letter-spacing: 0.5px;
+    text-transform: uppercase;
+    padding: 4px 10px;
+    border-radius: 4px;
+    margin-bottom: 12px;
+  }
+  h1 {
+    font-size: 32pt;
+    margin: 4px 0 6px;
+    font-weight: 800;
+    letter-spacing: -0.5px;
+  }
+  h1 span.accent { color: var(--brand); }
+  .tagline {
+    font-size: 14pt;
+    color: var(--muted);
+    margin: 0;
+  }
+  .meta {
+    margin-top: 18px;
+    font-size: 10pt;
+    color: var(--muted);
+  }
+  .meta a { color: var(--brand); text-decoration: none; }
+
+  h2 {
+    font-size: 16pt;
+    margin: 34px 0 10px;
+    padding-bottom: 6px;
+    border-bottom: 2px solid var(--soft);
+    color: var(--ink);
+  }
+  h3 {
+    font-size: 12pt;
+    margin: 18px 0 6px;
+    color: var(--brand-dark);
+  }
+  p { margin: 0 0 10px; }
+
+  ul { padding-left: 20px; margin: 6px 0 10px; }
+  li { margin-bottom: 4px; }
+
+  .summary {
+    background: var(--accent-bg);
+    border-left: 4px solid var(--brand);
+    padding: 14px 16px;
+    border-radius: 4px;
+    margin: 18px 0 0;
+    font-size: 10.5pt;
+  }
+
+  .grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+    margin-top: 10px;
+  }
+  .card {
+    border: 1px solid var(--soft);
+    border-radius: 8px;
+    padding: 12px 14px;
+    page-break-inside: avoid;
+  }
+  .card h4 {
+    margin: 0 0 4px;
+    font-size: 11pt;
+    color: var(--brand-dark);
+  }
+  .card p {
+    margin: 0;
+    font-size: 10pt;
+    color: var(--muted);
+  }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-top: 10px;
+    font-size: 10pt;
+  }
+  th, td {
+    text-align: left;
+    padding: 8px 10px;
+    border-bottom: 1px solid var(--soft);
+  }
+  th {
+    background: #f8fafc;
+    font-weight: 600;
+    color: var(--muted);
+    text-transform: uppercase;
+    font-size: 9pt;
+    letter-spacing: 0.4px;
+  }
+
+  .tag {
+    display: inline-block;
+    background: #f1f5f9;
+    color: var(--muted);
+    font-size: 9pt;
+    padding: 2px 8px;
+    border-radius: 12px;
+    margin: 2px 4px 2px 0;
+  }
+  .tag.brand { background: var(--accent-bg); color: var(--brand-dark); }
+
+  .footer {
+    margin-top: 40px;
+    padding-top: 14px;
+    border-top: 1px solid var(--soft);
+    font-size: 9pt;
+    color: var(--muted);
+    display: flex;
+    justify-content: space-between;
+  }
+
+  @page { size: A4; margin: 12mm; }
+  @media print {
+    .page { padding: 0; max-width: none; }
+    h2 { page-break-after: avoid; }
+    .card, section { page-break-inside: avoid; }
+  }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <header class="cover">
+    <span class="badge">Presentación del sistema</span>
+    <h1>Tranka<span class="accent">POS</span></h1>
+    <p class="tagline">Punto de venta multi-sucursal para comercios que quieren control real de stock, caja y ventas.</p>
+    <div class="meta">
+      Demo en vivo: <a href="https://trankapos.vercel.app">trankapos.vercel.app</a> &nbsp;·&nbsp;
+      Usuario: <strong>demo@trankapos.local</strong> &nbsp;·&nbsp; Clave: <strong>demo1234</strong>
+    </div>
+  </header>
+
+  <section>
+    <h2>Qué es TrankaPOS</h2>
+    <p>
+      TrankaPOS es un punto de venta web diseñado para comercios con uno o varios depósitos
+      (kioscos, minimarkets, almacenes, tiendas). Permite vender rápido, controlar stock en
+      tiempo real, manejar caja por turno y analizar las ventas con reportes claros. Funciona
+      en cualquier dispositivo con navegador — notebook, tablet o celular — sin necesidad de
+      instalaciones.
+    </p>
+    <div class="summary">
+      <strong>Estado actual:</strong> MVP funcional con modo demo 100% operativo en el navegador
+      (datos locales). Preparado para conectar a un backend multi-tenant y operar como SaaS.
+    </div>
+  </section>
+
+  <section>
+    <h2>Módulos incluidos</h2>
+    <div class="grid">
+      <div class="card">
+        <h4>1. Punto de venta (POS)</h4>
+        <p>Búsqueda por nombre o código de barras, carrito con descuentos por línea y globales, cobros combinados en múltiples medios de pago, impresión de ticket.</p>
+      </div>
+      <div class="card">
+        <h4>2. Productos</h4>
+        <p>Catálogo con precio, costo, código de barras, categorías, impuesto y estado activo/inactivo. Alta masiva vía importación CSV.</p>
+      </div>
+      <div class="card">
+        <h4>3. Stock por depósito</h4>
+        <p>Cantidad disponible, stock mínimo con alertas, ajustes manuales con motivo, trazabilidad de movimientos.</p>
+      </div>
+      <div class="card">
+        <h4>4. Transferencias</h4>
+        <p>Movimiento de mercadería entre depósitos con descuento automático en origen y alta en destino.</p>
+      </div>
+      <div class="card">
+        <h4>5. Caja</h4>
+        <p>Apertura con monto inicial, ingresos y egresos intra-turno, cierre con arqueo automático y cálculo de diferencia.</p>
+      </div>
+      <div class="card">
+        <h4>6. Ventas</h4>
+        <p>Listado filtrable por fecha, depósito y cajero. Detalle por ticket, reimpresión y anulación con devolución automática de stock.</p>
+      </div>
+      <div class="card">
+        <h4>7. Reportes</h4>
+        <p>Totales, cantidad de tickets, ticket promedio, evolución diaria, productos más vendidos y distribución por medio de pago.</p>
+      </div>
+      <div class="card">
+        <h4>8. Dashboard</h4>
+        <p>KPIs del día, gráfico de ventas de los últimos 14 días, top de productos de la semana y alertas de stock crítico.</p>
+      </div>
+      <div class="card">
+        <h4>9. Depósitos</h4>
+        <p>Alta y baja de sucursales / puntos de venta. Cada depósito maneja su stock y su caja de forma independiente.</p>
+      </div>
+      <div class="card">
+        <h4>10. Usuarios y roles</h4>
+        <p>Dueño, encargado y cajero. Restricciones automáticas por rol y reset de contraseña desde la administración.</p>
+      </div>
+      <div class="card">
+        <h4>11. Ayuda integrada</h4>
+        <p>Manual de uso dentro de la aplicación con buscador, secciones por módulo y preguntas frecuentes.</p>
+      </div>
+      <div class="card">
+        <h4>12. Multi-tenant ready</h4>
+        <p>Arquitectura preparada para aislar datos por comercio: cada cliente opera su propia tienda sin ver datos ajenos.</p>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Roles de usuario</h2>
+    <table>
+      <thead>
+        <tr><th>Rol</th><th>Permisos</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><strong>Dueño (owner)</strong></td><td>Acceso total: todas las secciones, alta/baja de usuarios y depósitos.</td></tr>
+        <tr><td><strong>Encargado (manager)</strong></td><td>Todo menos administración de otros dueños. Ve reportes, transferencias y depósitos.</td></tr>
+        <tr><td><strong>Cajero (cashier)</strong></td><td>Vender, operar caja, consultar productos y stock. Sin acceso a reportes ni administración.</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>Medios de pago soportados</h2>
+    <p>
+      <span class="tag brand">Efectivo</span>
+      <span class="tag brand">Débito</span>
+      <span class="tag brand">Crédito</span>
+      <span class="tag brand">Transferencia</span>
+      <span class="tag brand">QR</span>
+    </p>
+    <p>Una misma venta puede combinar varios medios de pago (ej.: parte en efectivo + parte con tarjeta).</p>
+  </section>
+
+  <section>
+    <h2>Stack técnico</h2>
+    <p>Aplicación web moderna, ligera y rápida, pensada para escalar:</p>
+    <p>
+      <span class="tag">React 18</span>
+      <span class="tag">TypeScript</span>
+      <span class="tag">Vite</span>
+      <span class="tag">TailwindCSS</span>
+      <span class="tag">Zustand</span>
+      <span class="tag">React Router</span>
+      <span class="tag">Dexie (IndexedDB)</span>
+      <span class="tag">Recharts</span>
+      <span class="tag">Zod</span>
+      <span class="tag">Supabase-ready</span>
+    </p>
+    <ul>
+      <li><strong>Frontend:</strong> React + TypeScript compilado con Vite. Diseño responsive con Tailwind.</li>
+      <li><strong>Datos:</strong> capa de acceso abstracta (<em>DataDriver</em>) que hoy usa IndexedDB local y está preparada para Supabase/Postgres con RLS multi-tenant.</li>
+      <li><strong>Deploy:</strong> Vercel con despliegue automático por cada push a GitHub.</li>
+      <li><strong>PWA ready:</strong> puede instalarse en la pantalla de inicio del dispositivo.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>Diferenciales</h2>
+    <ul>
+      <li><strong>Velocidad al vender.</strong> Lector de código de barras con foco automático, acceso rápido con F2, grilla de productos tocable.</li>
+      <li><strong>Multi-depósito desde el día uno.</strong> Mismo precio y catálogo, stock y caja independientes por sucursal.</li>
+      <li><strong>Control de caja real.</strong> Arqueo automático: apertura + ventas en efectivo + movimientos, con diferencia calculada.</li>
+      <li><strong>Alertas proactivas.</strong> Stock crítico visible en el Dashboard y en el propio POS al momento de vender.</li>
+      <li><strong>Roles con restricciones automáticas.</strong> El menú se adapta al rol del usuario logueado.</li>
+      <li><strong>Sin instalación.</strong> Funciona en cualquier navegador. Actualizaciones automáticas sin que el comercio tenga que hacer nada.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>Roadmap</h2>
+    <table>
+      <thead>
+        <tr><th>Fase</th><th>Qué se suma</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><strong>v1.0 · Actual</strong></td><td>Demo pública, todo el flujo operativo en modo local.</td></tr>
+        <tr><td><strong>v1.1 · SaaS</strong></td><td>Backend Supabase multi-tenant, signup con verificación de email, billing con Stripe/MercadoPago.</td></tr>
+        <tr><td><strong>v1.2 · Fiscal AR</strong></td><td>Integración con AFIP para facturación electrónica (FCE A, B, C).</td></tr>
+        <tr><td><strong>v1.3 · Integraciones</strong></td><td>Impresora térmica ESC/POS, lectores de barras BT, cajón de dinero, balanza.</td></tr>
+        <tr><td><strong>v1.4 · Offline + sync</strong></td><td>Venta sin internet con sincronización diferida ante caída de conexión.</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>Acceso a la demo</h2>
+    <p>La demo está online y es funcional end-to-end:</p>
+    <ul>
+      <li><strong>URL:</strong> <a href="https://trankapos.vercel.app">https://trankapos.vercel.app</a></li>
+      <li><strong>Usuario dueño:</strong> demo@trankapos.local / demo1234</li>
+      <li><strong>Usuario cajero:</strong> cajero@trankapos.local / demo1234</li>
+    </ul>
+    <p>
+      La demo incluye 10 productos de ejemplo, 2 depósitos y 14 días de historial de ventas pre-cargados.
+      Todos los datos se almacenan en el dispositivo del visitante: cada persona ve su propia copia independiente.
+    </p>
+  </section>
+
+  <div class="footer">
+    <span>TrankaPOS &copy; 2026</span>
+    <span>Documento generado el 24/04/2026</span>
+  </div>
+</div>
+</body>
+</html>

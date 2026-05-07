@@ -18,26 +18,28 @@ export default function Cash() {
   const [openModal, setOpenModal] = useState(false);
   const [closeModal, setCloseModal] = useState(false);
   const [mvModal, setMvModal] = useState<false | 'in' | 'out'>(false);
+  const [refreshKey, setRefreshKey] = useState(0);
+  const bumpRefresh = () => setRefreshKey((k) => k + 1);
 
   const openReg = useLiveQuery(async () => {
     if (!activeDepotId) return null;
     return data.currentOpenRegister(activeDepotId);
-  }, [activeDepotId]);
+  }, [activeDepotId, refreshKey]);
 
   const regs = useLiveQuery(async () => {
     if (!activeDepotId) return [];
     return data.listRegisters(activeDepotId);
-  }, [activeDepotId]);
+  }, [activeDepotId, refreshKey]);
 
   const sales = useLiveQuery(async () => {
     if (!openReg) return [];
     return data.listSales({ depotId: activeDepotId ?? undefined });
-  }, [openReg?.id]);
+  }, [openReg?.id, refreshKey]);
 
   const movements = useLiveQuery(async () => {
     if (!openReg) return [];
     return data.listCashMovements(openReg.id);
-  }, [openReg?.id]);
+  }, [openReg?.id, refreshKey]);
 
   const regSales = useMemo(
     () => (sales ?? []).filter((s) => s.registerId === openReg?.id && !s.voided),
@@ -220,18 +222,25 @@ export default function Cash() {
         </CardBody>
       </Card>
 
-      <OpenModal open={openModal} onClose={() => setOpenModal(false)} depotId={activeDepotId} />
+      <OpenModal
+        open={openModal}
+        onClose={() => setOpenModal(false)}
+        depotId={activeDepotId}
+        onSuccess={bumpRefresh}
+      />
       <CloseModal
         open={closeModal}
         onClose={() => setCloseModal(false)}
         registerId={openReg?.id}
         expected={expectedCash}
+        onSuccess={bumpRefresh}
       />
       <MovementModal
         kind={mvModal === false ? 'in' : mvModal}
         open={!!mvModal}
         onClose={() => setMvModal(false)}
         registerId={openReg?.id}
+        onSuccess={bumpRefresh}
       />
     </div>
   );
@@ -256,7 +265,17 @@ function Stat({ label, value, highlight }: { label: string; value: string; highl
   );
 }
 
-function OpenModal({ open, onClose, depotId }: { open: boolean; onClose: () => void; depotId: string }) {
+function OpenModal({
+  open,
+  onClose,
+  depotId,
+  onSuccess,
+}: {
+  open: boolean;
+  onClose: () => void;
+  depotId: string;
+  onSuccess: () => void;
+}) {
   const [amount, setAmount] = useState('');
 
   async function handleSubmit(e: FormEvent) {
@@ -264,6 +283,7 @@ function OpenModal({ open, onClose, depotId }: { open: boolean; onClose: () => v
     try {
       await data.openRegister({ depotId, openingAmount: Number(amount) || 0 });
       toast.success('Caja abierta');
+      onSuccess();
       onClose();
       setAmount('');
     } catch (err) {
@@ -301,11 +321,13 @@ function CloseModal({
   onClose,
   registerId,
   expected,
+  onSuccess,
 }: {
   open: boolean;
   onClose: () => void;
   registerId?: string;
   expected: number;
+  onSuccess: () => void;
 }) {
   const [amount, setAmount] = useState('');
   const [notes, setNotes] = useState('');
@@ -320,6 +342,7 @@ function CloseModal({
         notes,
       });
       toast.success('Caja cerrada');
+      onSuccess();
       onClose();
       setAmount('');
       setNotes('');
@@ -368,11 +391,13 @@ function MovementModal({
   onClose,
   kind,
   registerId,
+  onSuccess,
 }: {
   open: boolean;
   onClose: () => void;
   kind: 'in' | 'out';
   registerId?: string;
+  onSuccess: () => void;
 }) {
   const [amount, setAmount] = useState('');
   const [reason, setReason] = useState('');
@@ -388,6 +413,7 @@ function MovementModal({
         reason,
       });
       toast.success(kind === 'in' ? 'Ingreso registrado' : 'Egreso registrado');
+      onSuccess();
       setAmount('');
       setReason('');
       onClose();

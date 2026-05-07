@@ -7,12 +7,20 @@ import { data } from '@/data';
 import { useAuth } from '@/stores/auth';
 import { toast } from '@/stores/toast';
 
+const DEMO_EMAIL = 'demo@trankapos.local';
+const DEMO_PASSWORD = 'demo1234';
+
 export default function Login() {
-  const [email, setEmail] = useState('demo@trankapos.local');
-  const [password, setPassword] = useState('demo1234');
+  const [email, setEmail] = useState(import.meta.env.DEV ? DEMO_EMAIL : '');
+  const [password, setPassword] = useState(import.meta.env.DEV ? DEMO_PASSWORD : '');
   const [loading, setLoading] = useState(false);
   const setSession = useAuth((s) => s.setSession);
   const navigate = useNavigate();
+
+  function fillDemo() {
+    setEmail(DEMO_EMAIL);
+    setPassword(DEMO_PASSWORD);
+  }
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
@@ -41,9 +49,16 @@ export default function Login() {
           </div>
         </div>
         <h1 className="mb-1 text-xl font-semibold text-slate-900">Ingresá a tu cuenta</h1>
-        <p className="mb-6 text-sm text-slate-500">
-          Usuario demo cargado por defecto — tocá ingresar o creá tu cuenta.
+        <p className="mb-4 text-sm text-slate-500">
+          Probá la app sin registrarte usando la cuenta demo.
         </p>
+        <button
+          type="button"
+          onClick={fillDemo}
+          className="mb-6 w-full rounded-lg border border-dashed border-brand-300 bg-brand-50 px-3 py-2 text-sm text-brand-700 transition hover:border-brand-500 hover:bg-brand-100"
+        >
+          Usar cuenta demo
+        </button>
         <form onSubmit={handleSubmit} className="space-y-3">
           <div>
             <label className="mb-1 block text-xs font-medium text-slate-700">Email</label>
