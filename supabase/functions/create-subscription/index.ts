@@ -129,9 +129,10 @@ Deno.serve(async (req) => {
       );
     }
 
-    // 5. Guardar el preapproval id en subscriptions (con admin client porque
-    //    el RLS permite update solo a owner — y queremos asegurar que igual
-    //    funcione independiente de quién haga la llamada).
+    // 5. Guardar el preapproval id como pendiente. NO tocamos plan_id —
+    //    eso lo hace el webhook cuando MP confirma con status=authorized.
+    //    Si solo cambiamos plan_id acá, el cliente queda con el plan nuevo
+    //    aunque nunca confirme el pago (acceso sin pagar = bug grave).
     const adminClient = createClient(
       Deno.env.get('SUPABASE_URL')!,
       Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!,
@@ -140,7 +141,7 @@ Deno.serve(async (req) => {
       .from('subscriptions')
       .update({
         mp_subscription_id: mpData.id,
-        plan_id: plan.id, // opcional: ya guardamos a qué plan se está suscribiendo
+        pending_plan_id: plan.id,
       })
       .eq('tenant_id', mem.tenant_id);
 

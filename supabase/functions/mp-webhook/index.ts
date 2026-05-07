@@ -168,16 +168,33 @@ Deno.serve(async (req) => {
 
       const newStatus = mapPreapprovalStatus(pre.status);
       const now = new Date().toISOString();
+      const isAuthorized = pre.status === 'authorized';
 
-      await adminClient
+      // Si MP confirmó (authorized), recién ahora promovemos pending_plan_id
+      // a plan_id. Para eso necesitamos leer el sub primero.
+      const { data: subRow } = await adminClient
         .from('subscriptions')
-        .update({
-          status: newStatus,
-          mp_subscription_id: pre.id,
-          current_period_start: pre.status === 'authorized' ? now : null,
-          current_period_end: pre.status === 'authorized' ? addMonths(now, 1) : null,
-        })
-        .eq('tenant_id', tenantId);
+        .select('pending_plan_id, plan_id')
+        .eq('tenant_id', tenantId)
+        .single();
+
+      const update: Record<string, unknown> = {
+        status: newStatus,
+        mp_subscription_id: pre.id,
+        current_period_start: isAuthorized ? now : null,
+        current_period_end: isAuthorized ? addMonths(now, 1) : null,
+      };
+      if (isAuthorized && subRow?.pending_plan_id) {
+        update.plan_id = subRow.pending_plan_id;
+        update.pending_plan_id = null;
+      }
+      // Si la suscripción se canceló, también limpiamos pending para no dejar
+      // ruido si después hay un nuevo intento.
+      if (pre.status === 'cancelled') {
+        update.pending_plan_id = null;
+      }
+
+      await adminClient.from('subscriptions').update(update).eq('tenant_id', tenantId);
 
       return new Response(JSON.stringify({ ok: true, status: newStatus }), { status: 200 });
     }

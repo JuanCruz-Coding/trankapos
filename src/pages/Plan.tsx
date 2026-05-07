@@ -67,10 +67,19 @@ export default function Plan() {
       toast.error('Ingresá un email válido de tu cuenta de Mercado Pago');
       return;
     }
+    if (!confirm(
+      'Te vamos a redirigir a Mercado Pago para autorizar el cobro mensual con tu tarjeta. ¿Continuamos?',
+    )) {
+      return;
+    }
     setSubmitting(planCode);
     try {
       const backUrl = `${window.location.origin}/plan/return`;
       const { initPoint } = await data.subscribeToPlan(planCode, backUrl, payerEmail);
+      if (!initPoint) {
+        throw new Error('Mercado Pago no devolvió la URL de pago. Probá de nuevo.');
+      }
+      toast.info('Redirigiendo a Mercado Pago…');
       // Redirige al user a la URL de MP — ahí ingresa la tarjeta y autoriza.
       window.location.href = initPoint;
     } catch (err) {
