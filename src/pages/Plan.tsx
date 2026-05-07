@@ -159,7 +159,7 @@ export default function Plan() {
 
             <div className="flex gap-2 pt-2">
               <Button onClick={() => setChangeModal(true)}>Cambiar de plan</Button>
-              {sub.status === 'active' && sub.plan.code !== 'free' && (
+              {sub.plan.code !== 'free' && sub.status !== 'canceled' && (
                 <Button variant="outline" onClick={handleCancel}>
                   Cancelar suscripción
                 </Button>
