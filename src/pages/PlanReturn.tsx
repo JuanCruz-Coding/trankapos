@@ -6,23 +6,29 @@ import { Card, CardBody } from '@/components/ui/Card';
 
 // MP redirige acá tras autorizar la suscripción. Los query params típicos:
 //   ?preapproval_id=xxx&status=approved (o pending / rejected)
-// Esta página solo muestra feedback al usuario. El status real se actualiza
-// cuando llegue el webhook de MP a la Edge Function `mp-webhook`.
+// Cuando el user vuelve a mano con "Volver al sitio del vendedor", suele
+// llegar SIN query params — por eso manejamos el caso default con un mensaje
+// amigable + countdown que lo lleva a /plan solo.
+
+const REDIRECT_SECONDS = 4;
 
 export default function PlanReturn() {
   const [params] = useSearchParams();
   const navigate = useNavigate();
-  const [tick, setTick] = useState(0);
+  const [secondsLeft, setSecondsLeft] = useState(REDIRECT_SECONDS);
 
   const status = params.get('status') ?? params.get('collection_status') ?? 'unknown';
   const preapprovalId = params.get('preapproval_id');
 
-  // Refresca cada 3s para forzar releer la suscripción cuando volvés a /plan
+  // Countdown que redirige automáticamente a /plan cuando llega a 0.
   useEffect(() => {
-    const t = setInterval(() => setTick((v) => v + 1), 3000);
-    return () => clearInterval(t);
-  }, []);
-  void tick;
+    if (secondsLeft <= 0) {
+      navigate('/plan');
+      return;
+    }
+    const t = setTimeout(() => setSecondsLeft((s) => s - 1), 1000);
+    return () => clearTimeout(t);
+  }, [secondsLeft, navigate]);
 
   const view = (() => {
     switch (status) {
@@ -37,7 +43,7 @@ export default function PlanReturn() {
         return {
           icon: <Clock className="h-12 w-12 text-sky-500" />,
           title: 'Pago pendiente',
-          desc: 'Mercado Pago todavía está procesando tu suscripción. Te avisaremos por mail cuando esté confirmada.',
+          desc: 'Mercado Pago todavía está procesando tu suscripción. Te avisaremos cuando esté confirmada.',
         };
       case 'rejected':
         return {
@@ -47,9 +53,9 @@ export default function PlanReturn() {
         };
       default:
         return {
-          icon: <Clock className="h-12 w-12 text-slate-400" />,
-          title: 'Procesando…',
-          desc: 'Estamos confirmando el resultado con Mercado Pago.',
+          icon: <CheckCircle2 className="h-12 w-12 text-emerald-500" />,
+          title: 'Volviste al POS',
+          desc: 'Si autorizaste el pago, tu plan se va a activar en unos segundos cuando confirme Mercado Pago.',
         };
     }
   })();
@@ -66,7 +72,15 @@ export default function PlanReturn() {
               ID de suscripción: <code>{preapprovalId.slice(0, 12)}…</code>
             </div>
           )}
-          <Button onClick={() => navigate('/plan')}>Volver a Mi plan</Button>
+          <p className="text-xs text-slate-400">
+            Te redirigimos a Mi plan en {secondsLeft} seg…
+          </p>
+          <div className="flex gap-2">
+            <Button variant="outline" onClick={() => navigate('/')}>
+              Ir al inicio
+            </Button>
+            <Button onClick={() => navigate('/plan')}>Ir a Mi plan</Button>
+          </div>
         </CardBody>
       </Card>
     </div>

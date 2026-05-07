@@ -12,7 +12,8 @@
       "Bash(git add *)",
       "Bash(git commit -m ' *)",
       "Bash(git push *)",
-      "Bash(git commit -m 'fix\\(mp\\): pedir payer_email al user antes de crear preapproval *)"
+      "Bash(git commit -m 'fix\\(mp\\): pedir payer_email al user antes de crear preapproval *)",
+      "Bash(git commit *)"
     ]
   }
 }
