@@ -118,6 +118,7 @@ export interface DataDriver {
     backUrl: string,
     payerEmail: string,
   ): Promise<{ initPoint: string }>;
+  cancelSubscription(): Promise<void>;
 
   // --- depots ---
   listDepots(): Promise<Depot[]>;

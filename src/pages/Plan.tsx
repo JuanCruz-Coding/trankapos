@@ -79,6 +79,23 @@ export default function Plan() {
     }
   }
 
+  async function handleCancel() {
+    if (!confirm(
+      '¿Seguro que querés cancelar tu suscripción? Vas a perder acceso a las features del plan y volvés al plan Free al final del período.',
+    )) {
+      return;
+    }
+    try {
+      await data.cancelSubscription();
+      toast.success('Suscripción cancelada');
+      // Forzamos releer la subscription para que la UI se actualice
+      const s = await data.getSubscription();
+      setSub(s);
+    } catch (err) {
+      toast.error((err as Error).message);
+    }
+  }
+
   if (loading) {
     return <div className="p-6 text-sm text-slate-500">Cargando…</div>;
   }
@@ -140,8 +157,13 @@ export default function Plan() {
             <UsageBar label="Usuarios" used={usage.users} max={sub.plan.maxUsers} />
             <UsageBar label="Productos" used={usage.products} max={sub.plan.maxProducts} />
 
-            <div className="pt-2">
+            <div className="flex gap-2 pt-2">
               <Button onClick={() => setChangeModal(true)}>Cambiar de plan</Button>
+              {sub.status === 'active' && sub.plan.code !== 'free' && (
+                <Button variant="outline" onClick={handleCancel}>
+                  Cancelar suscripción
+                </Button>
+              )}
             </div>
           </CardBody>
         </Card>

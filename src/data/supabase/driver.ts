@@ -312,6 +312,25 @@ class SupabaseDriver implements DataDriver {
     }));
   }
 
+  async cancelSubscription(): Promise<void> {
+    await this.requireSession();
+    const { data: sessionData } = await this.sb.auth.getSession();
+    const token = sessionData.session?.access_token;
+    if (!token) throw new Error('No autenticado');
+
+    const url = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/cancel-subscription`;
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+        apikey: import.meta.env.VITE_SUPABASE_ANON_KEY ?? '',
+      },
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(body?.error ?? `Error HTTP ${res.status}`);
+  }
+
   async subscribeToPlan(
     planCode: string,
     backUrl: string,

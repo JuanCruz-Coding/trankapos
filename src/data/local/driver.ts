@@ -187,6 +187,10 @@ export class LocalDriver implements DataDriver {
     throw new Error('La suscripción solo funciona con el driver de Supabase.');
   }
 
+  async cancelSubscription(): Promise<void> {
+    throw new Error('La cancelación solo funciona con el driver de Supabase.');
+  }
+
   // --- depots ---
   async listDepots(): Promise<Depot[]> {
     const s = await this.requireSession();
