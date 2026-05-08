@@ -10,9 +10,34 @@ body,
 
 body {
   font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  color: #0A0A0A;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
-/* Esconder botones spinner de number inputs en chrome/firefox */
+/* Tipografía display alineada con la landing TrankaSoft. Usar para títulos
+   de sección, hero copy y números de KPI. El body queda en Inter. */
+.font-display {
+  font-family: 'Space Grotesk', system-ui, sans-serif;
+  letter-spacing: -0.02em;
+}
+
+/* Eyebrow + marker: micro-tipografía técnica del brandbook */
+.eyebrow {
+  font-size: 11px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  font-weight: 500;
+}
+.marker {
+  font-size: 10px;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Esconder spinners de number inputs en chrome/firefox */
 input[type='number']::-webkit-inner-spin-button,
 input[type='number']::-webkit-outer-spin-button {
   -webkit-appearance: none;
@@ -20,6 +45,85 @@ input[type='number']::-webkit-outer-spin-button {
 }
 input[type='number'] {
   -moz-appearance: textfield;
+}
+
+/* ── Background patterns ──────────────────────────────────────── */
+
+.dots-light {
+  background-image: radial-gradient(rgba(10, 31, 102, 0.08) 1px, transparent 1px);
+  background-size: 28px 28px;
+}
+
+.dots-dark {
+  background-image: radial-gradient(rgba(255, 255, 255, 0.08) 1px, transparent 1px);
+  background-size: 28px 28px;
+}
+
+/* Halo cyan/blue para hero y CTAs destacados */
+.halo-cyan {
+  background: radial-gradient(circle at center, rgba(63, 169, 255, 0.5) 0%, rgba(63, 169, 255, 0) 65%);
+  filter: blur(40px);
+}
+.halo-blue {
+  background: radial-gradient(circle at center, rgba(21, 101, 240, 0.4) 0%, rgba(21, 101, 240, 0) 65%);
+  filter: blur(50px);
+}
+
+/* ── Status dot pulsante ──────────────────────────────────────── */
+
+.status-dot {
+  position: relative;
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 9999px;
+  background: #3FA9FF;
+  box-shadow: 0 0 0 0 rgba(63, 169, 255, 0.6);
+  animation: status-pulse 2.4s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+.status-dot--blue {
+  background: #1565F0;
+  animation-name: status-pulse-blue;
+}
+.status-dot--orange {
+  background: #FF5A1F;
+  animation-name: status-pulse-orange;
+}
+.status-dot--green {
+  background: #10b981;
+  animation-name: status-pulse-green;
+}
+
+@keyframes status-pulse {
+  0%   { box-shadow: 0 0 0 0 rgba(63, 169, 255, 0.55); }
+  70%  { box-shadow: 0 0 0 8px rgba(63, 169, 255, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(63, 169, 255, 0); }
+}
+@keyframes status-pulse-blue {
+  0%   { box-shadow: 0 0 0 0 rgba(21, 101, 240, 0.5); }
+  70%  { box-shadow: 0 0 0 8px rgba(21, 101, 240, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(21, 101, 240, 0); }
+}
+@keyframes status-pulse-orange {
+  0%   { box-shadow: 0 0 0 0 rgba(255, 90, 31, 0.5); }
+  70%  { box-shadow: 0 0 0 8px rgba(255, 90, 31, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(255, 90, 31, 0); }
+}
+@keyframes status-pulse-green {
+  0%   { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.5); }
+  70%  { box-shadow: 0 0 0 8px rgba(16, 185, 129, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0); }
+}
+
+/* ── Reduced motion respect ───────────────────────────────────── */
+
+@media (prefers-reduced-motion: reduce) {
+  .status-dot,
+  .status-dot--blue,
+  .status-dot--orange,
+  .status-dot--green {
+    animation: none;
+  }
 }
 
 /* Print: solo mostrar el ticket */

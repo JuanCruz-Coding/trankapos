@@ -323,11 +323,11 @@ export default function Pos() {
                     <div className="line-clamp-2 min-h-[2.5rem] text-sm font-medium text-slate-900">
                       {p.name}
                     </div>
-                    <div className="mt-1 flex items-center justify-between">
-                      <div className="font-bold text-brand-700">{formatARS(p.price)}</div>
+                    <div className="mt-1 flex flex-wrap items-baseline justify-between gap-x-2 gap-y-0.5">
+                      <div className="font-bold tabular-nums text-brand-700">{formatARS(p.price)}</div>
                       <div
                         className={
-                          'text-xs ' +
+                          'text-xs tabular-nums ' +
                           (low ? 'text-red-600' : qty < 5 ? 'text-amber-600' : 'text-slate-500')
                         }
                       >

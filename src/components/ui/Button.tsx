@@ -1,7 +1,7 @@
 import { forwardRef, type ButtonHTMLAttributes } from 'react';
 import { cn } from '@/lib/utils';
 
-type Variant = 'primary' | 'secondary' | 'ghost' | 'danger' | 'outline';
+type Variant = 'primary' | 'secondary' | 'ghost' | 'danger' | 'outline' | 'accent';
 type Size = 'sm' | 'md' | 'lg';
 
 interface Props extends ButtonHTMLAttributes<HTMLButtonElement> {
@@ -10,11 +10,12 @@ interface Props extends ButtonHTMLAttributes<HTMLButtonElement> {
 }
 
 const variants: Record<Variant, string> = {
-  primary: 'bg-brand-600 text-white hover:bg-brand-700 active:bg-brand-800 disabled:bg-brand-300',
+  primary: 'bg-brand-600 text-white hover:bg-brand-700 active:bg-navy disabled:bg-brand-300',
   secondary: 'bg-slate-200 text-slate-900 hover:bg-slate-300 active:bg-slate-400',
   ghost: 'bg-transparent text-slate-700 hover:bg-slate-100',
   danger: 'bg-red-600 text-white hover:bg-red-700 active:bg-red-800',
   outline: 'border border-slate-300 bg-white text-slate-700 hover:bg-slate-50',
+  accent: 'bg-accent text-white hover:bg-accent-dark active:bg-accent-dark',
 };
 
 const sizes: Record<Size, string> = {

@@ -62,13 +62,11 @@ export function Layout({ children }: PropsWithChildren) {
 
   const sidebar = (
     <aside className="flex h-full w-60 shrink-0 flex-col border-r border-slate-200 bg-white">
-      <div className="flex items-center gap-2 border-b border-slate-200 px-4 py-4">
-        <div className="rounded-lg bg-brand-600 p-2 text-white">
-          <ShoppingCart className="h-5 w-5" />
-        </div>
-        <div>
-          <div className="text-sm font-bold text-slate-900">TrankaPOS</div>
-          <div className="text-xs text-slate-500">MVP</div>
+      <div className="flex items-center gap-2.5 border-b border-slate-200 px-4 py-4">
+        <img src="/brand/isotipo.png" alt="TrankaSoft" className="h-9 w-9" />
+        <div className="min-w-0">
+          <div className="font-display text-sm font-bold leading-tight text-navy">TrankaPOS</div>
+          <div className="marker text-slate-400">Software con calma</div>
         </div>
       </div>
       <nav className="flex-1 overflow-y-auto p-2">
@@ -81,9 +79,9 @@ export function Layout({ children }: PropsWithChildren) {
               onClick={() => setOpen(false)}
               className={({ isActive }) =>
                 cn(
-                  'mb-1 flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium',
+                  'mb-1 flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition',
                   isActive
-                    ? 'bg-brand-50 text-brand-700'
+                    ? 'bg-ice text-navy'
                     : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900',
                 )
               }
@@ -150,10 +148,8 @@ export function Layout({ children }: PropsWithChildren) {
             {open ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />}
           </button>
           <Link to="/pos" className="flex items-center gap-2">
-            <div className="rounded-md bg-brand-600 p-1.5 text-white">
-              <ShoppingCart className="h-4 w-4" />
-            </div>
-            <span className="text-sm font-bold">TrankaPOS</span>
+            <img src="/brand/isotipo.png" alt="TrankaSoft" className="h-7 w-7" />
+            <span className="font-display text-sm font-bold text-navy">TrankaPOS</span>
           </Link>
           <div className="w-8" />
         </header>
