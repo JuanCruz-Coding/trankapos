@@ -174,7 +174,31 @@ class SupabaseDriver implements DataDriver {
     });
     if (rpcErr) throw new Error(`Error creando tenant: ${rpcErr.message}`);
 
+    // Mandamos email de bienvenida (best-effort, no bloquea el signup)
+    void this.sendWelcomeEmail();
+
     return this.loadSession();
+  }
+
+  private async sendWelcomeEmail(): Promise<void> {
+    try {
+      const { data: sessionData } = await this.sb.auth.getSession();
+      const token = sessionData.session?.access_token;
+      if (!token) return;
+
+      const url = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/send-welcome-email`;
+      await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+          apikey: import.meta.env.VITE_SUPABASE_ANON_KEY ?? '',
+        },
+      });
+    } catch (err) {
+      // Si falla el email, no rompe el signup
+      console.warn('No se pudo mandar email de bienvenida:', err);
+    }
   }
 
   async login(input: LoginInput): Promise<AuthSession> {

@@ -19,6 +19,47 @@
 // =====================================================================
 
 import { createClient } from 'jsr:@supabase/supabase-js@2';
+import { sendEmail } from '../_shared/email.ts';
+import {
+  pastDueEmail,
+  subscriptionActivatedEmail,
+} from '../_shared/email-templates.ts';
+
+// Helper: dado un tenantId, obtiene email + name + nombre del plan del owner.
+async function getOwnerInfo(
+  // deno-lint-ignore no-explicit-any
+  adminClient: any,
+  tenantId: string,
+): Promise<{ email: string; name: string; planName: string; planAmount: number } | null> {
+  const { data: mem } = await adminClient
+    .from('memberships')
+    .select('user_id')
+    .eq('tenant_id', tenantId)
+    .eq('role', 'owner')
+    .eq('active', true)
+    .limit(1)
+    .maybeSingle();
+  if (!mem) return null;
+
+  const { data: prof } = await adminClient
+    .from('profiles')
+    .select('email, name')
+    .eq('id', mem.user_id)
+    .maybeSingle();
+  if (!prof) return null;
+
+  const { data: sub } = await adminClient
+    .from('subscriptions')
+    .select('plans:plan_id ( name, price_monthly )')
+    .eq('tenant_id', tenantId)
+    .single();
+  // plans puede venir como objeto o array dependiendo del schema cache de PostgREST
+  const planRow = Array.isArray(sub?.plans) ? sub.plans[0] : sub?.plans;
+  const planName = planRow?.name ?? 'Pro';
+  const planAmount = Number(planRow?.price_monthly ?? 0);
+
+  return { email: prof.email, name: prof.name, planName, planAmount };
+}
 
 interface MpWebhookPayload {
   type?: string;
@@ -196,6 +237,22 @@ Deno.serve(async (req) => {
 
       await adminClient.from('subscriptions').update(update).eq('tenant_id', tenantId);
 
+      // Notificar por email cuando hay cambios de estado importantes
+      if (isAuthorized) {
+        const info = await getOwnerInfo(adminClient, tenantId);
+        if (info) {
+          const tpl = subscriptionActivatedEmail(info.name, info.planName, info.planAmount);
+          await sendEmail({ to: info.email, ...tpl });
+        }
+      }
+      if (pre.status === 'paused') {
+        const info = await getOwnerInfo(adminClient, tenantId);
+        if (info) {
+          const tpl = pastDueEmail(info.name, info.planName, info.planAmount);
+          await sendEmail({ to: info.email, ...tpl });
+        }
+      }
+
       return new Response(JSON.stringify({ ok: true, status: newStatus }), { status: 200 });
     }
 
@@ -228,6 +285,22 @@ Deno.serve(async (req) => {
         .from('subscriptions')
         .update(update)
         .eq('mp_subscription_id', preapprovalId);
+
+      // Si el cobro recurrente falló, notificamos al owner
+      if (!isApproved) {
+        const { data: subRow } = await adminClient
+          .from('subscriptions')
+          .select('tenant_id')
+          .eq('mp_subscription_id', preapprovalId)
+          .single();
+        if (subRow?.tenant_id) {
+          const info = await getOwnerInfo(adminClient, subRow.tenant_id);
+          if (info) {
+            const tpl = pastDueEmail(info.name, info.planName, info.planAmount);
+            await sendEmail({ to: info.email, ...tpl });
+          }
+        }
+      }
 
       return new Response(JSON.stringify({ ok: true }), { status: 200 });
     }
