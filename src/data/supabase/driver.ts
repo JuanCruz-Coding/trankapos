@@ -600,130 +600,46 @@ class SupabaseDriver implements DataDriver {
     deltaQty: number,
     minQty?: number,
   ): Promise<void> {
-    const s = await this.requireSession();
-    const { data: existing, error: selErr } = await this.sb
-      .from('stock_items')
-      .select('id, qty, min_qty')
-      .eq('depot_id', depotId)
-      .eq('product_id', productId)
-      .maybeSingle();
-    if (selErr) throw new Error(selErr.message);
-
-    if (existing) {
-      const newQty = Number(existing.qty) + deltaQty;
-      const newMin = minQty !== undefined ? minQty : Number(existing.min_qty);
-      const { error } = await this.sb
-        .from('stock_items')
-        .update({ qty: newQty, min_qty: newMin })
-        .eq('id', existing.id);
-      if (error) throw new Error(error.message);
-    } else {
-      const { error } = await this.sb.from('stock_items').insert({
-        tenant_id: s.tenantId,
-        depot_id: depotId,
-        product_id: productId,
-        qty: deltaQty,
-        min_qty: minQty ?? 0,
-      });
-      if (error) throw new Error(error.message);
-    }
+    await this.requireSession();
+    // Usa RPC SQL con SELECT ... FOR UPDATE para evitar races read-modify-write
+    // cuando dos cajeros tocan el mismo producto al mismo tiempo. Ver migration 005.
+    const { error } = await this.sb.rpc('adjust_stock_atomic', {
+      p_product_id: productId,
+      p_depot_id: depotId,
+      p_delta: deltaQty,
+      p_min_qty: minQty ?? null,
+    });
+    if (error) throw new Error(error.message);
   }
 
   // ===== SALES =====
-  // NOTA DE DISEÑO: createSale y voidSale tocan 3 tablas (sales, sale_items,
-  // sale_payments) + stock. Supabase JS no soporta transacciones cliente, así
-  // que esto NO es atómico. Si hay fallo de red en medio de una venta, podés
-  // quedar con stock o items inconsistentes. Para producción, conviene migrar
-  // a una RPC `public.create_sale()` que haga todo en una transacción Postgres.
+  // createSale ahora delega a la RPC SQL public.create_sale_atomic (migration 005),
+  // que hace todo en una sola transacción con SELECT FOR UPDATE de stock_items.
+  // Si cualquier paso falla, el rollback automático de Postgres revierte todo.
+  // La RPC también valida stock disponible — NO permite vender en negativo.
 
   async createSale(input: SaleInput): Promise<Sale> {
     const s = await this.requireSession();
-    if (input.items.length === 0) throw new Error('El carrito está vacío');
-    if (input.discount < 0) throw new Error('Descuento global inválido');
 
-    // Resolvemos productos para snapshotear nombre/barcode al momento de la venta
-    const productIds = input.items.map((i) => i.productId);
-    const { data: prodRows, error: prodErr } = await this.sb
-      .from('products')
-      .select('id, name, barcode')
-      .in('id', productIds);
-    if (prodErr) throw new Error(prodErr.message);
-    const byId = new Map((prodRows ?? []).map((p) => [p.id, p]));
-
-    const itemsToInsert = input.items.map((it) => {
-      const p = byId.get(it.productId);
-      if (!p) throw new Error('Producto no encontrado en el carrito');
-      if (it.qty <= 0) throw new Error(`Cantidad inválida para "${p.name}"`);
-      if (it.price < 0) throw new Error(`Precio inválido para "${p.name}"`);
-      if (it.discount < 0) throw new Error(`Descuento inválido para "${p.name}"`);
-      const sub = lineSubtotal(it.price, it.qty, it.discount);
-      if (sub < 0) throw new Error(`El descuento de "${p.name}" supera el subtotal de la línea`);
-      return { ...it, name: p.name, barcode: p.barcode, subtotal: sub };
+    const { data: saleId, error: rpcErr } = await this.sb.rpc('create_sale_atomic', {
+      p_tenant_id: s.tenantId,
+      p_depot_id: input.depotId,
+      p_register_id: input.registerId ?? null,
+      p_discount: input.discount,
+      p_items: input.items.map((it) => ({
+        product_id: it.productId,
+        qty: it.qty,
+        price: it.price,
+        discount: it.discount,
+      })),
+      p_payments: input.payments.map((p) => ({
+        method: p.method,
+        amount: p.amount,
+      })),
     });
+    if (rpcErr) throw new Error(rpcErr.message);
 
-    const subtotal = addMoney(...itemsToInsert.map((i) => i.subtotal));
-    const total = subMoney(subtotal, input.discount);
-    if (total < 0) throw new Error('El descuento global supera el subtotal');
-    const paid = addMoney(...input.payments.map((p) => p.amount));
-    if (!eqMoney(paid, total)) {
-      throw new Error(`Pagos (${paid.toFixed(2)}) no coinciden con total (${total.toFixed(2)})`);
-    }
-
-    // 1. Insert sale (header)
-    const { data: saleRow, error: saleErr } = await this.sb
-      .from('sales')
-      .insert({
-        tenant_id: s.tenantId,
-        depot_id: input.depotId,
-        register_id: input.registerId,
-        cashier_id: s.userId,
-        subtotal,
-        discount: input.discount,
-        total,
-        voided: false,
-      })
-      .select()
-      .single();
-    if (saleErr) throw new Error(saleErr.message);
-    const saleId = saleRow.id;
-
-    // 2. Insert sale_items (bulk)
-    const itemRows = itemsToInsert.map((it) => ({
-      sale_id: saleId,
-      tenant_id: s.tenantId,
-      product_id: it.productId,
-      name: it.name,
-      barcode: it.barcode,
-      price: it.price,
-      qty: it.qty,
-      discount: it.discount,
-      subtotal: it.subtotal,
-    }));
-    const { error: itemsErr } = await this.sb.from('sale_items').insert(itemRows);
-    if (itemsErr) {
-      await this.sb.from('sales').delete().eq('id', saleId);
-      throw new Error(itemsErr.message);
-    }
-
-    // 3. Insert sale_payments (bulk)
-    const paymentRows = input.payments.map((p) => ({
-      sale_id: saleId,
-      tenant_id: s.tenantId,
-      method: p.method,
-      amount: p.amount,
-    }));
-    const { error: payErr } = await this.sb.from('sale_payments').insert(paymentRows);
-    if (payErr) {
-      await this.sb.from('sales').delete().eq('id', saleId);
-      throw new Error(payErr.message);
-    }
-
-    // 4. Decrementar stock
-    for (const it of input.items) {
-      await this.adjustStock(it.productId, input.depotId, -it.qty);
-    }
-
-    // 5. Re-leer la sale completa
+    // Re-leer la sale completa para devolver el objeto al cliente
     const { data: full, error: fullErr } = await this.sb
       .from('sales')
       .select('*, sale_items(*), sale_payments(method, amount)')

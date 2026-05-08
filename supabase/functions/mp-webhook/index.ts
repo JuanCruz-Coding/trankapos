@@ -101,10 +101,10 @@ function timingSafeEqual(a: string, b: string): boolean {
 async function verifySignature(req: Request, dataId: string): Promise<boolean> {
   const secret = Deno.env.get('MP_WEBHOOK_SECRET');
   if (!secret) {
-    // Sin secret configurado, dejamos pasar pero loggeamos warning. Esto
-    // permite probar en sandbox antes de configurar el secret.
-    console.warn('MP_WEBHOOK_SECRET no configurado — webhook sin verificar');
-    return true;
+    // Fail-closed: sin secret configurado, rechazamos. No hay bypass de dev:
+    // para probar en local, setear MP_WEBHOOK_SECRET en el .env de Supabase.
+    console.error('MP_WEBHOOK_SECRET no configurado — rechazando webhook');
+    return false;
   }
 
   const sigHeader = req.headers.get('x-signature') ?? '';
@@ -189,6 +189,36 @@ Deno.serve(async (req) => {
     Deno.env.get('SUPABASE_URL')!,
     Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!,
   );
+
+  // IDEMPOTENCIA: registramos el request_id antes de procesar. Si ya existe
+  // (porque MP reenvió el mismo evento), retornamos 200 sin tocar nada.
+  // Sin esto, cada reenvío de authorized_payment extiende current_period_end
+  // 1 mes — regalo silencioso de meses pagos.
+  const requestId = req.headers.get('x-request-id') ?? '';
+  if (requestId) {
+    const { error: dupErr } = await adminClient
+      .from('processed_webhook_events')
+      .insert({
+        request_id: requestId,
+        event_type: type,
+        data_id: dataId,
+      });
+
+    if (dupErr) {
+      // 23505 = unique_violation → ya procesado, idempotent return.
+      if (dupErr.code === '23505') {
+        return new Response(
+          JSON.stringify({ ok: true, ignored: 'duplicate', request_id: requestId }),
+          { status: 200 },
+        );
+      }
+      // Otro error en la tabla (ej. tabla no existe): loggeamos y seguimos
+      // sin bloquear el procesamiento. La idempotencia degrada graceful.
+      console.error('Error registrando processed_webhook_events:', dupErr);
+    }
+  } else {
+    console.warn('Webhook sin x-request-id — sin protección de idempotencia');
+  }
 
   try {
     if (type.includes('preapproval') && !type.includes('authorized_payment')) {
