@@ -651,24 +651,11 @@ class SupabaseDriver implements DataDriver {
 
   async voidSale(id: string): Promise<void> {
     const s = await this.requireSession();
-    const { data: sale, error: selErr } = await this.sb
-      .from('sales')
-      .select('*, sale_items(product_id, qty)')
-      .eq('id', id)
-      .single();
-    if (selErr || !sale) throw new Error('Venta no encontrada');
-    if (sale.voided) return;
-
-    const { error: updErr } = await this.sb
-      .from('sales')
-      .update({ voided: true })
-      .eq('id', id);
-    if (updErr) throw new Error(updErr.message);
-
-    for (const it of sale.sale_items as { product_id: string; qty: string }[]) {
-      await this.adjustStock(it.product_id, sale.depot_id, Number(it.qty));
-    }
-    void s;
+    const { error } = await this.sb.rpc('void_sale_atomic', {
+      p_tenant_id: s.tenantId,
+      p_sale_id: id,
+    });
+    if (error) throw new Error(error.message);
   }
 
   async listSales(q: SalesQuery): Promise<Sale[]> {
