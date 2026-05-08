@@ -6,10 +6,13 @@ import type {
   CashRegister,
   Category,
   Depot,
+  Plan,
+  PlanUsage,
   Product,
   Sale,
   SaleItem,
   StockItem,
+  Subscription,
   Tenant,
   Transfer,
   User,
@@ -30,6 +33,7 @@ import type {
   UserInput,
 } from '../driver';
 import { hashPassword, verifyPassword } from '@/lib/hash';
+import { addMoney, eqMoney, lineSubtotal, subMoney } from '@/lib/money';
 
 const now = () => new Date().toISOString();
 
@@ -138,6 +142,53 @@ export class LocalDriver implements DataDriver {
     const t = await db.tenants.get(s.tenantId);
     if (!t) throw new Error('Tenant no encontrado');
     return t;
+  }
+
+  // En modo local no hay subscriptions reales — devolvemos un plan ficticio
+  // sin límites. El SaaS y los chequeos de plan sólo aplican en modo Supabase.
+  async getSubscription(): Promise<Subscription> {
+    const s = await this.requireSession();
+    return {
+      id: 'local-stub',
+      tenantId: s.tenantId,
+      status: 'active',
+      trialEndsAt: null,
+      currentPeriodStart: null,
+      currentPeriodEnd: null,
+      plan: {
+        id: 'local-stub',
+        code: 'local',
+        name: 'Local (sin límites)',
+        priceMonthly: 0,
+        maxDepots: null,
+        maxUsers: null,
+        maxProducts: null,
+        features: { transfers: true, advanced_reports: true, csv_export: true, api: true },
+      },
+    };
+  }
+
+  async getUsage(): Promise<PlanUsage> {
+    const s = await this.requireSession();
+    const [depots, users, products] = await Promise.all([
+      db.depots.where('tenantId').equals(s.tenantId).count(),
+      db.users.where('tenantId').equals(s.tenantId).filter((u) => u.active).count(),
+      db.products.where('tenantId').equals(s.tenantId).count(),
+    ]);
+    return { depots, users, products };
+  }
+
+  async listPlans(): Promise<Plan[]> {
+    // En modo local devolvemos un array vacío — los planes solo aplican en Supabase.
+    return [];
+  }
+
+  async subscribeToPlan(): Promise<{ initPoint: string }> {
+    throw new Error('La suscripción solo funciona con el driver de Supabase.');
+  }
+
+  async cancelSubscription(): Promise<void> {
+    throw new Error('La cancelación solo funciona con el driver de Supabase.');
   }
 
   // --- depots ---
@@ -357,17 +408,22 @@ export class LocalDriver implements DataDriver {
   // --- sales ---
   async createSale(input: SaleInput): Promise<Sale> {
     const s = await this.requireSession();
+    if (input.items.length === 0) throw new Error('El carrito está vacío');
     const id = uuid();
     const ts = now();
     const products = await db.products.where('tenantId').equals(s.tenantId).toArray();
     const byId = new Map(products.map((p) => [p.id, p]));
 
-    let subtotal = 0;
     const items: SaleItem[] = input.items.map((it) => {
       const p = byId.get(it.productId);
       if (!p) throw new Error('Producto no encontrado en el carrito');
-      const lineSub = it.price * it.qty - it.discount;
-      subtotal += lineSub;
+      if (it.qty <= 0) throw new Error(`Cantidad inválida para "${p.name}"`);
+      if (it.price < 0) throw new Error(`Precio inválido para "${p.name}"`);
+      if (it.discount < 0) throw new Error(`Descuento inválido para "${p.name}"`);
+      const lineSub = lineSubtotal(it.price, it.qty, it.discount);
+      if (lineSub < 0) {
+        throw new Error(`El descuento de "${p.name}" supera el subtotal de la línea`);
+      }
       return {
         id: uuid(),
         productId: p.id,
@@ -380,9 +436,12 @@ export class LocalDriver implements DataDriver {
       };
     });
 
-    const total = subtotal - input.discount;
-    const paid = input.payments.reduce((acc, p) => acc + p.amount, 0);
-    if (Math.abs(paid - total) > 0.01) {
+    if (input.discount < 0) throw new Error('Descuento global inválido');
+    const subtotal = addMoney(...items.map((i) => i.subtotal));
+    const total = subMoney(subtotal, input.discount);
+    if (total < 0) throw new Error('El descuento global supera el subtotal');
+    const paid = addMoney(...input.payments.map((p) => p.amount));
+    if (!eqMoney(paid, total)) {
       throw new Error(`Pagos (${paid.toFixed(2)}) no coinciden con total (${total.toFixed(2)})`);
     }
 
@@ -493,20 +552,21 @@ export class LocalDriver implements DataDriver {
     if (reg.closedAt) throw new Error('Caja ya cerrada');
     const sales = await db.sales.where('tenantId').equals(s.tenantId).toArray();
     const regSales = sales.filter((x) => x.registerId === reg.id && !x.voided);
-    const cashIn = regSales.reduce(
-      (acc, sale) => acc + sale.payments.filter((p) => p.method === 'cash').reduce((a, p) => a + p.amount, 0),
-      0,
+    const cashAmounts = regSales.flatMap((sale) =>
+      sale.payments.filter((p) => p.method === 'cash').map((p) => p.amount),
     );
+    const cashIn = addMoney(...cashAmounts);
     const movements = await db.cashMovements.where('registerId').equals(reg.id).toArray();
-    const movNet = movements.reduce((acc, m) => acc + (m.kind === 'in' ? m.amount : -m.amount), 0);
-    const expected = reg.openingAmount + cashIn + movNet;
+    const movIn = addMoney(...movements.filter((m) => m.kind === 'in').map((m) => m.amount));
+    const movOut = addMoney(...movements.filter((m) => m.kind === 'out').map((m) => m.amount));
+    const expected = subMoney(addMoney(reg.openingAmount, cashIn, movIn), movOut);
     const updated: CashRegister = {
       ...reg,
       closedAt: now(),
       closedBy: s.userId,
       closingAmount: input.closingAmount,
       expectedCash: expected,
-      difference: input.closingAmount - expected,
+      difference: subMoney(input.closingAmount, expected),
       notes: input.notes,
     };
     await db.registers.put(updated);
@@ -543,6 +603,12 @@ export class LocalDriver implements DataDriver {
   // --- transfers ---
   async createTransfer(input: TransferInput): Promise<Transfer> {
     const s = await this.requireSession();
+    if (input.fromDepotId === input.toDepotId) {
+      throw new Error('Origen y destino deben ser distintos');
+    }
+    if (input.items.length === 0) {
+      throw new Error('La transferencia no tiene items');
+    }
     const id = uuid();
     const ts = now();
     const transfer: Transfer = {
@@ -555,28 +621,35 @@ export class LocalDriver implements DataDriver {
       notes: input.notes,
       items: input.items,
     };
+
+    // Pre-validar stock disponible en origen antes de tocar la BD
+    const products = await db.products.where('tenantId').equals(s.tenantId).toArray();
+    const productById = new Map(products.map((p) => [p.id, p]));
+    for (const it of input.items) {
+      if (it.qty <= 0) throw new Error('Las cantidades deben ser mayores a cero');
+      const src = await db.stock
+        .where('[tenantId+depotId+productId]')
+        .equals([s.tenantId, input.fromDepotId, it.productId])
+        .first();
+      const available = src?.qty ?? 0;
+      if (available < it.qty) {
+        const name = productById.get(it.productId)?.name ?? 'producto';
+        throw new Error(
+          `Stock insuficiente de "${name}" en el depósito origen (disponible: ${available}, pedido: ${it.qty})`,
+        );
+      }
+    }
+
     await db.transaction('rw', db.transfers, db.stock, async () => {
       await db.transfers.put(transfer);
       for (const it of input.items) {
-        // decrement source
         const src = await db.stock
           .where('[tenantId+depotId+productId]')
           .equals([s.tenantId, input.fromDepotId, it.productId])
           .first();
         if (src) {
           await db.stock.put({ ...src, qty: src.qty - it.qty, updatedAt: ts });
-        } else {
-          await db.stock.put({
-            id: uuid(),
-            tenantId: s.tenantId,
-            depotId: input.fromDepotId,
-            productId: it.productId,
-            qty: -it.qty,
-            minQty: 0,
-            updatedAt: ts,
-          });
         }
-        // increment destination
         const dst = await db.stock
           .where('[tenantId+depotId+productId]')
           .equals([s.tenantId, input.toDepotId, it.productId])

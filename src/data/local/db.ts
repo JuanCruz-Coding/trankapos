@@ -34,6 +34,8 @@ export class TrankaPosDB extends Dexie {
 
   constructor() {
     super('trankapos');
+
+    // v1: schema inicial
     this.version(1).stores({
       tenants: 'id, name',
       users: 'id, tenantId, email, [tenantId+email]',
@@ -46,6 +48,15 @@ export class TrankaPosDB extends Dexie {
       cashMovements: 'id, tenantId, registerId, createdAt',
       transfers: 'id, tenantId, createdAt',
       session: 'id',
+    });
+
+    // v2: agrega índices para reportes (filtro por estado anulada y por categoría
+    // del producto). Cuando agregues un campo nuevo a una tabla, sumá una nueva
+    // versión acá con .upgrade() para migrar las filas existentes; nunca modifiques
+    // versiones previas, Dexie las usa para abrir BDs viejas.
+    this.version(2).stores({
+      sales: 'id, tenantId, depotId, cashierId, createdAt, voided',
+      products: 'id, tenantId, barcode, [tenantId+barcode], categoryId',
     });
   }
 }

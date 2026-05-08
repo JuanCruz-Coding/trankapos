@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import type { Product } from '@/types';
+import { addMoney, lineSubtotal, subMoney, gtMoney } from '@/lib/money';
 
 export interface CartLine {
   productId: string;
@@ -70,7 +71,8 @@ export const useCart = create<CartState>((set) => ({
 }));
 
 export function cartTotals(lines: CartLine[], globalDiscount: number) {
-  const subtotal = lines.reduce((acc, l) => acc + l.price * l.qty - l.discount, 0);
-  const total = Math.max(0, subtotal - globalDiscount);
+  const subtotal = addMoney(...lines.map((l) => lineSubtotal(l.price, l.qty, l.discount)));
+  const afterDiscount = subMoney(subtotal, globalDiscount);
+  const total = gtMoney(afterDiscount, 0) ? afterDiscount : 0;
   return { subtotal, total };
 }

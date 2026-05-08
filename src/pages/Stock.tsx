@@ -12,9 +12,10 @@ import type { Product } from '@/types';
 
 export default function Stock() {
   const { session, activeDepotId } = useAuth();
+  const [refreshKey, setRefreshKey] = useState(0);
   const products = useLiveQuery(() => data.listProducts(), [session?.tenantId]);
   const depots = useLiveQuery(() => data.listDepots(), [session?.tenantId]);
-  const stock = useLiveQuery(() => data.listStock(), [session?.tenantId]);
+  const stock = useLiveQuery(() => data.listStock(), [session?.tenantId, refreshKey]);
   const [search, setSearch] = useState('');
   const [depotFilter, setDepotFilter] = useState<string>('all');
   const [edit, setEdit] = useState<{ product: Product; depotId: string } | null>(null);
@@ -124,6 +125,7 @@ export default function Stock() {
               ?.minQty ?? 0
           }
           onClose={() => setEdit(null)}
+          onSuccess={() => setRefreshKey((k) => k + 1)}
         />
       )}
     </div>
@@ -136,12 +138,14 @@ function AdjustModal({
   currentQty,
   currentMin,
   onClose,
+  onSuccess,
 }: {
   product: Product;
   depotId: string;
   currentQty: number;
   currentMin: number;
   onClose: () => void;
+  onSuccess: () => void;
 }) {
   const [mode, setMode] = useState<'delta' | 'set'>('delta');
   const [qty, setQty] = useState('');
@@ -154,6 +158,7 @@ function AdjustModal({
       const delta = mode === 'delta' ? val : val - currentQty;
       await data.adjustStock(product.id, depotId, delta, Number(minQty) || 0);
       toast.success('Stock actualizado');
+      onSuccess();
       onClose();
     } catch (err) {
       toast.error((err as Error).message);

@@ -9,6 +9,8 @@ import { PageHeader } from '@/components/ui/PageHeader';
 import { data } from '@/data';
 import { useAuth } from '@/stores/auth';
 import { toast } from '@/stores/toast';
+import { depotSchema, safeParse } from '@/lib/schemas';
+import { confirmDialog } from '@/lib/dialog';
 import type { Depot } from '@/types';
 
 interface FormState {
@@ -20,7 +22,8 @@ interface FormState {
 
 export default function Depots() {
   const { session } = useAuth();
-  const depots = useLiveQuery(() => data.listDepots(), [session?.tenantId]);
+  const [refreshKey, setRefreshKey] = useState(0);
+  const depots = useLiveQuery(() => data.listDepots(), [session?.tenantId, refreshKey]);
   const [modal, setModal] = useState(false);
   const [form, setForm] = useState<FormState>({ name: '', address: '', active: true });
 
@@ -36,28 +39,37 @@ export default function Depots() {
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
+    const parsed = safeParse(depotSchema, {
+      name: form.name,
+      address: form.address,
+      active: form.active,
+    });
+    if (!parsed.ok) return toast.error(parsed.error);
     try {
       if (form.id) {
-        await data.updateDepot(form.id, {
-          name: form.name,
-          address: form.address,
-          active: form.active,
-        });
+        await data.updateDepot(form.id, parsed.data);
         toast.success('Depósito actualizado');
       } else {
-        await data.createDepot({ name: form.name, address: form.address, active: form.active });
+        await data.createDepot(parsed.data);
         toast.success('Depósito creado');
       }
       setModal(false);
+      setRefreshKey((k) => k + 1);
     } catch (err) {
       toast.error((err as Error).message);
     }
   }
 
   async function handleDelete(d: Depot) {
-    if (!confirm(`¿Eliminar depósito "${d.name}"?`)) return;
+    const ok = await confirmDialog(`¿Eliminar depósito "${d.name}"?`, {
+      text: 'Se va a eliminar junto con su stock asociado.',
+      confirmText: 'Eliminar',
+      danger: true,
+    });
+    if (!ok) return;
     await data.deleteDepot(d.id);
     toast.success('Depósito eliminado');
+    setRefreshKey((k) => k + 1);
   }
 
   return (

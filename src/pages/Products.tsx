@@ -11,6 +11,8 @@ import { useAuth } from '@/stores/auth';
 import { formatARS } from '@/lib/currency';
 import { toast } from '@/stores/toast';
 import { CSV_TEMPLATE, parseCsv, type ParseError, type ParsedRow } from '@/lib/csvImport';
+import { productSchema, safeParse } from '@/lib/schemas';
+import { confirmDialog } from '@/lib/dialog';
 import type { Product } from '@/types';
 
 interface FormState {
@@ -47,13 +49,15 @@ interface ImportStats {
 
 export default function Products() {
   const { session, activeDepotId } = useAuth();
+  const [refreshKey, setRefreshKey] = useState(0);
+  const bumpRefresh = () => setRefreshKey((k) => k + 1);
   const products = useLiveQuery(async () => {
     if (!session) return [];
     return data.listProducts();
-  }, [session?.tenantId]);
-  const categories = useLiveQuery(() => data.listCategories(), [session?.tenantId]);
+  }, [session?.tenantId, refreshKey]);
+  const categories = useLiveQuery(() => data.listCategories(), [session?.tenantId, refreshKey]);
   const depots = useLiveQuery(() => data.listDepots(), [session?.tenantId]);
-  const stock = useLiveQuery(() => data.listStock(), [session?.tenantId]);
+  const stock = useLiveQuery(() => data.listStock(), [session?.tenantId, refreshKey]);
 
   const [search, setSearch] = useState('');
   const [modal, setModal] = useState(false);
@@ -103,18 +107,19 @@ export default function Products() {
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
+    const parsed = safeParse(productSchema, {
+      name: form.name,
+      barcode: form.barcode,
+      price: Number(form.price),
+      cost: Number(form.cost),
+      categoryId: form.categoryId || null,
+      taxRate: Number(form.taxRate),
+      active: form.active,
+    });
+    if (!parsed.ok) return toast.error(parsed.error);
     try {
-      const payload = {
-        name: form.name.trim(),
-        barcode: form.barcode.trim() || null,
-        price: Number(form.price) || 0,
-        cost: Number(form.cost) || 0,
-        categoryId: form.categoryId || null,
-        taxRate: Number(form.taxRate) || 0,
-        active: form.active,
-      };
       if (form.id) {
-        await data.updateProduct(form.id, payload);
+        await data.updateProduct(form.id, parsed.data);
         toast.success('Producto actualizado');
       } else {
         const initialStock = Object.entries(form.initialStock)
@@ -124,20 +129,27 @@ export default function Products() {
             minQty: Number(v.minQty) || 0,
           }))
           .filter((x) => x.qty > 0 || x.minQty > 0);
-        await data.createProduct({ ...payload, initialStock });
+        await data.createProduct({ ...parsed.data, initialStock });
         toast.success('Producto creado');
       }
       setModal(false);
+      bumpRefresh();
     } catch (err) {
       toast.error((err as Error).message);
     }
   }
 
   async function handleDelete(p: Product) {
-    if (!confirm(`¿Eliminar "${p.name}"?`)) return;
+    const ok = await confirmDialog(`¿Eliminar "${p.name}"?`, {
+      text: 'No vas a poder recuperarlo.',
+      confirmText: 'Eliminar',
+      danger: true,
+    });
+    if (!ok) return;
     try {
       await data.deleteProduct(p.id);
       toast.success('Producto eliminado');
+      bumpRefresh();
     } catch (err) {
       toast.error((err as Error).message);
     }
@@ -235,6 +247,7 @@ export default function Products() {
 
     setImportStats({ created, updated, errors, total: importRows.length });
     setImportPhase('done');
+    bumpRefresh();
   }
 
   const stockByProduct = useMemo(() => {
@@ -486,6 +499,7 @@ export default function Products() {
             await data.createCategory({ name: newCat.trim() });
             setNewCat('');
             toast.success('Categoría creada');
+            bumpRefresh();
           }}
           className="mb-3 flex gap-2"
         >
@@ -503,10 +517,14 @@ export default function Products() {
               <button
                 className="text-slate-400 hover:text-red-600"
                 onClick={async () => {
-                  if (confirm(`¿Eliminar categoría "${c.name}"?`)) {
-                    await data.deleteCategory(c.id);
-                    toast.success('Categoría eliminada');
-                  }
+                  const ok = await confirmDialog(`¿Eliminar categoría "${c.name}"?`, {
+                    confirmText: 'Eliminar',
+                    danger: true,
+                  });
+                  if (!ok) return;
+                  await data.deleteCategory(c.id);
+                  toast.success('Categoría eliminada');
+                  bumpRefresh();
                 }}
               >
                 <Trash2 className="h-4 w-4" />

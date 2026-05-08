@@ -1,0 +1,25 @@
+project_id = "khopeeibdkjlbvisxkzo"
+
+# verify_jwt = false hace que Supabase NO valide el JWT antes de invocar la
+# función, lo cual es necesario para que el preflight CORS (OPTIONS sin
+# Authorization header) llegue a nuestro handler. La validación del JWT del
+# caller la hacemos manualmente adentro del código, así que no perdemos
+# seguridad: cualquier llamada sin un token válido es rechazada por la propia
+# función.
+[functions.create-team-user]
+verify_jwt = false
+
+[functions.create-subscription]
+verify_jwt = false
+
+# MP llama a este webhook sin Authorization header — debe estar abierto.
+# La validación real se hace adentro chequeando la firma HMAC del header
+# x-signature contra MP_WEBHOOK_SECRET.
+[functions.mp-webhook]
+verify_jwt = false
+
+[functions.cancel-subscription]
+verify_jwt = false
+
+[functions.send-welcome-email]
+verify_jwt = false

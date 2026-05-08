@@ -11,10 +11,12 @@ import { data } from '@/data';
 import { useAuth } from '@/stores/auth';
 import { toast } from '@/stores/toast';
 import { formatDateTime } from '@/lib/dates';
+import { safeParse, transferSchema } from '@/lib/schemas';
 
 export default function Transfers() {
   const { session } = useAuth();
-  const transfers = useLiveQuery(() => data.listTransfers(), [session?.tenantId]);
+  const [refreshKey, setRefreshKey] = useState(0);
+  const transfers = useLiveQuery(() => data.listTransfers(), [session?.tenantId, refreshKey]);
   const depots = useLiveQuery(() => data.listDepots(), [session?.tenantId]);
   const products = useLiveQuery(() => data.listProducts(), [session?.tenantId]);
 
@@ -39,17 +41,18 @@ export default function Transfers() {
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
-    if (fromId === toId) return toast.error('Origen y destino deben ser distintos');
-    if (items.length === 0) return toast.error('Agregá al menos un item');
+    const parsed = safeParse(transferSchema, {
+      fromDepotId: fromId,
+      toDepotId: toId,
+      notes,
+      items: items.filter((i) => i.productId && i.qty > 0),
+    });
+    if (!parsed.ok) return toast.error(parsed.error);
     try {
-      await data.createTransfer({
-        fromDepotId: fromId,
-        toDepotId: toId,
-        notes,
-        items: items.filter((i) => i.productId && i.qty > 0),
-      });
+      await data.createTransfer(parsed.data);
       toast.success('Transferencia registrada');
       setModal(false);
+      setRefreshKey((k) => k + 1);
     } catch (err) {
       toast.error((err as Error).message);
     }

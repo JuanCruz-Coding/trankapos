@@ -9,6 +9,8 @@ import { PageHeader } from '@/components/ui/PageHeader';
 import { data } from '@/data';
 import { useAuth } from '@/stores/auth';
 import { toast } from '@/stores/toast';
+import { safeParse, userSchema } from '@/lib/schemas';
+import { confirmDialog } from '@/lib/dialog';
 import type { Role, User } from '@/types';
 
 const ROLES: { value: Role; label: string }[] = [
@@ -38,8 +40,12 @@ const emptyForm: FormState = {
 
 export default function Users() {
   const { session } = useAuth();
-  const users = useLiveQuery(() => data.listUsers(), [session?.tenantId]);
-  const depots = useLiveQuery(() => data.listDepots(), [session?.tenantId]);
+  // refreshKey: con drivers que no son Dexie (ej. Supabase), useLiveQuery no se
+  // entera de las escrituras. Bumpeamos este contador después de cada mutation
+  // para forzar el re-fetch.
+  const [refreshKey, setRefreshKey] = useState(0);
+  const users = useLiveQuery(() => data.listUsers(), [session?.tenantId, refreshKey]);
+  const depots = useLiveQuery(() => data.listDepots(), [session?.tenantId, refreshKey]);
   const [modal, setModal] = useState(false);
   const [form, setForm] = useState<FormState>(emptyForm);
 
@@ -63,37 +69,44 @@ export default function Users() {
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
+    const parsed = safeParse(userSchema, {
+      email: form.email,
+      name: form.name,
+      password: form.password || undefined,
+      role: form.role,
+      depotId: form.depotId || null,
+      active: form.active,
+    });
+    if (!parsed.ok) return toast.error(parsed.error);
+    if (!form.id && !parsed.data.password) {
+      return toast.error('La contraseña es obligatoria al crear un usuario');
+    }
     try {
-      const payload = {
-        email: form.email,
-        name: form.name,
-        role: form.role,
-        depotId: form.depotId || null,
-        active: form.active,
-        ...(form.password ? { password: form.password } : {}),
-      };
       if (form.id) {
-        await data.updateUser(form.id, payload);
+        await data.updateUser(form.id, parsed.data);
         toast.success('Usuario actualizado');
       } else {
-        if (!form.password) {
-          toast.error('Password requerido');
-          return;
-        }
-        await data.createUser(payload as any);
+        await data.createUser({ ...parsed.data, password: parsed.data.password! });
         toast.success('Usuario creado');
       }
       setModal(false);
+      setRefreshKey((k) => k + 1);
     } catch (err) {
       toast.error((err as Error).message);
     }
   }
 
   async function handleDelete(u: User) {
-    if (!confirm(`¿Eliminar usuario "${u.name}"?`)) return;
+    const ok = await confirmDialog(`¿Eliminar usuario "${u.name}"?`, {
+      text: 'No vas a poder recuperarlo.',
+      confirmText: 'Eliminar',
+      danger: true,
+    });
+    if (!ok) return;
     try {
       await data.deleteUser(u.id);
       toast.success('Usuario eliminado');
+      setRefreshKey((k) => k + 1);
     } catch (err) {
       toast.error((err as Error).message);
     }

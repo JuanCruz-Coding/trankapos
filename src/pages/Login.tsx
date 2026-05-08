@@ -8,8 +8,8 @@ import { useAuth } from '@/stores/auth';
 import { toast } from '@/stores/toast';
 
 export default function Login() {
-  const [email, setEmail] = useState('demo@trankapos.local');
-  const [password, setPassword] = useState('demo1234');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const setSession = useAuth((s) => s.setSession);
   const navigate = useNavigate();
@@ -42,7 +42,7 @@ export default function Login() {
         </div>
         <h1 className="mb-1 text-xl font-semibold text-slate-900">Ingresá a tu cuenta</h1>
         <p className="mb-6 text-sm text-slate-500">
-          Usuario demo cargado por defecto — tocá ingresar o creá tu cuenta.
+          Bienvenido de vuelta. Ingresá tus credenciales para continuar.
         </p>
         <form onSubmit={handleSubmit} className="space-y-3">
           <div>
@@ -74,6 +74,11 @@ export default function Login() {
           <Link to="/signup" className="font-medium text-brand-600 hover:underline">
             Creá una ahora
           </Link>
+        </div>
+        <div className="mt-2 text-center text-xs text-slate-400">
+          <Link to="/terms" className="hover:underline">Términos</Link>
+          {' · '}
+          <Link to="/privacy" className="hover:underline">Privacidad</Link>
         </div>
       </div>
     </div>

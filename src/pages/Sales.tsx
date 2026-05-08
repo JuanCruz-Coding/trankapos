@@ -9,22 +9,30 @@ import { useAuth } from '@/stores/auth';
 import { formatARS } from '@/lib/currency';
 import { formatDateTime } from '@/lib/dates';
 import { toast } from '@/stores/toast';
+import { confirmDialog } from '@/lib/dialog';
 import type { Sale } from '@/types';
 
 export default function Sales() {
   const { session, activeDepotId } = useAuth();
+  const [refreshKey, setRefreshKey] = useState(0);
   const sales = useLiveQuery(
     () => data.listSales({ depotId: activeDepotId ?? undefined }),
-    [session?.tenantId, activeDepotId],
+    [session?.tenantId, activeDepotId, refreshKey],
   );
   const users = useLiveQuery(() => data.listUsers(), [session?.tenantId]);
   const [view, setView] = useState<Sale | null>(null);
 
   async function handleVoid(s: Sale) {
-    if (!confirm(`¿Anular venta por ${formatARS(s.total)}? Se devuelve stock.`)) return;
+    const ok = await confirmDialog(`¿Anular venta por ${formatARS(s.total)}?`, {
+      text: 'Se devuelve el stock al depósito de origen.',
+      confirmText: 'Anular venta',
+      danger: true,
+    });
+    if (!ok) return;
     try {
       await data.voidSale(s.id);
       toast.success('Venta anulada');
+      setRefreshKey((k) => k + 1);
     } catch (err) {
       toast.error((err as Error).message);
     }
