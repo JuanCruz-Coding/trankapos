@@ -65,10 +65,11 @@ create index on subscriptions(tenant_id);
 -- profile = perfil del usuario en el POS (datos globales, no específicos de un tenant)
 -- el id matchea auth.users.id (Supabase Auth maneja email/password)
 create table profiles (
-  id          uuid primary key references auth.users(id) on delete cascade,
-  name        text not null,
-  email       text not null,
-  created_at  timestamptz not null default now()
+  id                       uuid primary key references auth.users(id) on delete cascade,
+  name                     text not null,
+  email                    text not null,
+  welcome_email_sent_at    timestamptz,
+  created_at               timestamptz not null default now()
 );
 
 create type member_role as enum ('owner','manager','cashier');

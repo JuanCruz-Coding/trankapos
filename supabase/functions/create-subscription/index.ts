@@ -20,12 +20,7 @@
 
 import { createClient } from 'jsr:@supabase/supabase-js@2';
 
-const corsHeaders = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers':
-    'authorization, x-client-info, apikey, content-type',
-  'Access-Control-Allow-Methods': 'POST, OPTIONS',
-};
+const ALLOWED_ORIGINS = ['https://pos.trankasoft.com', 'http://localhost:5173'];
 
 interface Body {
   planCode: 'basic' | 'pro' | 'business';
@@ -33,14 +28,24 @@ interface Body {
   payerEmail: string;  // email de la cuenta MP del que va a pagar
 }
 
-function jsonResponse(body: unknown, status: number) {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-  });
-}
-
 Deno.serve(async (req) => {
+  const origin = req.headers.get('origin');
+  const allowed =
+    origin && ALLOWED_ORIGINS.includes(origin) ? origin : 'https://pos.trankasoft.com';
+  const corsHeaders = {
+    'Access-Control-Allow-Origin': allowed,
+    'Access-Control-Allow-Headers':
+      'authorization, x-client-info, apikey, content-type',
+    'Access-Control-Allow-Methods': 'POST, OPTIONS',
+    Vary: 'Origin',
+  };
+  function jsonResponse(body: unknown, status: number) {
+    return new Response(JSON.stringify(body), {
+      status,
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+    });
+  }
+
   if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders });
 
   try {
@@ -120,10 +125,12 @@ Deno.serve(async (req) => {
 
     const mpData = await mpRes.json();
     if (!mpRes.ok) {
+      // Loggeamos el detalle solo server-side. No devolvemos mpData al cliente
+      // porque puede incluir info sensible (URLs internas, payer data, etc).
+      console.error('MP preapproval error:', mpRes.status, mpData);
       return jsonResponse(
         {
-          error: `Error de Mercado Pago: ${mpData.message ?? mpRes.status}`,
-          mpDetail: mpData,
+          error: `Error de Mercado Pago (${mpRes.status}). Probá de nuevo o contactá soporte.`,
         },
         500,
       );

@@ -517,7 +517,13 @@ export class LocalDriver implements DataDriver {
     if (q.to) sales = sales.filter((x) => x.createdAt <= q.to!);
     if (q.depotId) sales = sales.filter((x) => x.depotId === q.depotId);
     if (q.cashierId) sales = sales.filter((x) => x.cashierId === q.cashierId);
-    return sales.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+    if (q.registerId) sales = sales.filter((x) => x.registerId === q.registerId);
+    sales = sales.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+    if (q.limit !== undefined) {
+      const offset = q.offset ?? 0;
+      sales = sales.slice(offset, offset + q.limit);
+    }
+    return sales;
   }
 
   // --- cash register ---

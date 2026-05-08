@@ -12,12 +12,15 @@ import { toast } from '@/stores/toast';
 import { confirmDialog } from '@/lib/dialog';
 import type { Sale } from '@/types';
 
+const PAGE_SIZE = 50;
+
 export default function Sales() {
   const { session, activeDepotId } = useAuth();
   const [refreshKey, setRefreshKey] = useState(0);
+  const [limit, setLimit] = useState(PAGE_SIZE);
   const sales = useLiveQuery(
-    () => data.listSales({ depotId: activeDepotId ?? undefined }),
-    [session?.tenantId, activeDepotId, refreshKey],
+    () => data.listSales({ depotId: activeDepotId ?? undefined, limit }),
+    [session?.tenantId, activeDepotId, refreshKey, limit],
   );
   const users = useLiveQuery(() => data.listUsers(), [session?.tenantId]);
   const [view, setView] = useState<Sale | null>(null);
@@ -103,6 +106,17 @@ export default function Sales() {
               ))}
             </tbody>
           </table>
+          {sales!.length >= limit && (
+            <div className="border-t border-slate-100 bg-slate-50 p-3 text-center">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setLimit((l) => l + PAGE_SIZE)}
+              >
+                Cargar más ventas
+              </Button>
+            </div>
+          )}
         </div>
       )}
 

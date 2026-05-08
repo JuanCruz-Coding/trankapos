@@ -681,6 +681,11 @@ class SupabaseDriver implements DataDriver {
     if (q.to) query = query.lte('created_at', q.to);
     if (q.depotId) query = query.eq('depot_id', q.depotId);
     if (q.cashierId) query = query.eq('cashier_id', q.cashierId);
+    if (q.registerId) query = query.eq('register_id', q.registerId);
+    if (q.limit !== undefined) {
+      const offset = q.offset ?? 0;
+      query = query.range(offset, offset + q.limit - 1);
+    }
 
     const { data, error } = await query;
     if (error) throw new Error(error.message);

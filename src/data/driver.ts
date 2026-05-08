@@ -97,6 +97,9 @@ export interface SalesQuery {
   to?: string;
   depotId?: string;
   cashierId?: string;
+  registerId?: string;
+  limit?: number;
+  offset?: number;
 }
 
 export interface DataDriver {

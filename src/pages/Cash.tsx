@@ -33,7 +33,7 @@ export default function Cash() {
 
   const sales = useLiveQuery(async () => {
     if (!openReg) return [];
-    return data.listSales({ depotId: activeDepotId ?? undefined });
+    return data.listSales({ registerId: openReg.id });
   }, [openReg?.id, refreshKey]);
 
   const movements = useLiveQuery(async () => {
@@ -42,8 +42,8 @@ export default function Cash() {
   }, [openReg?.id, refreshKey]);
 
   const regSales = useMemo(
-    () => (sales ?? []).filter((s) => s.registerId === openReg?.id && !s.voided),
-    [sales, openReg],
+    () => (sales ?? []).filter((s) => !s.voided),
+    [sales],
   );
 
   const cashIn = useMemo(
