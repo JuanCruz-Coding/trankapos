@@ -157,6 +157,8 @@ create table cash_registers (
   notes           text
 );
 create index on cash_registers(tenant_id, depot_id);
+create unique index cash_registers_one_open_per_depot
+  on cash_registers(depot_id) where closed_at is null;
 
 create type cash_movement_kind as enum ('in','out');
 
@@ -419,6 +421,10 @@ declare
 begin
   if auth.uid() is null then
     raise exception 'No authenticated user';
+  end if;
+
+  if exists (select 1 from memberships where user_id = auth.uid()) then
+    raise exception 'User already has a tenant';
   end if;
 
   select email into v_email from auth.users where id = auth.uid();
