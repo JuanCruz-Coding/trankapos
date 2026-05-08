@@ -100,6 +100,9 @@ export default function Plan() {
     if (!ok) return;
     try {
       await data.cancelSubscription();
+      // Si había un pending_plan_id residual (ej. intento de upgrade que
+      // nunca se completó), limpiarlo: el tenant ya no quiere upgrade.
+      await data.clearPendingPlan().catch(() => {});
       toast.success('Suscripción cancelada');
       const s = await data.getSubscription();
       setSub(s);

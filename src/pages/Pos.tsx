@@ -102,6 +102,11 @@ export default function Pos() {
         toast.error(`Sin resultado para "${code}"`);
         return;
       }
+      const stockQty = stockByProduct.get(product.id) ?? 0;
+      if (stockQty <= 0) {
+        toast.error(`Sin stock de "${product.name}"`);
+        return;
+      }
       addProduct(product);
     } catch (err) {
       toast.error((err as Error).message);
@@ -166,13 +171,24 @@ export default function Pos() {
                         type="number"
                         step="0.01"
                         min="0"
+                        max="999999"
                         className="h-8 w-16 rounded-md border border-slate-200 text-center text-sm"
                         value={line.qty}
-                        onChange={(e) => updateQty(line.productId, Number(e.target.value) || 0)}
+                        onChange={(e) => {
+                          const v = Number(e.target.value) || 0;
+                          if (v > 999999) {
+                            toast.error('Cantidad máxima: 999.999');
+                            return;
+                          }
+                          updateQty(line.productId, v);
+                        }}
                       />
                       <button
                         className="flex h-8 w-8 items-center justify-center rounded-md bg-slate-100 hover:bg-slate-200"
-                        onClick={() => updateQty(line.productId, line.qty + 1)}
+                        onClick={() => {
+                          if (line.qty >= 999999) return;
+                          updateQty(line.productId, line.qty + 1);
+                        }}
                       >
                         <Plus className="h-3.5 w-3.5" />
                       </button>
@@ -291,8 +307,15 @@ export default function Pos() {
                 return (
                   <button
                     key={p.id}
-                    onClick={() => addProduct(p)}
-                    className="group flex flex-col rounded-lg border border-slate-200 bg-white p-3 text-left shadow-sm transition hover:border-brand-400 hover:shadow-md"
+                    onClick={() => {
+                      if (low) {
+                        toast.error(`Sin stock de "${p.name}"`);
+                        return;
+                      }
+                      addProduct(p);
+                    }}
+                    disabled={low}
+                    className="group flex flex-col rounded-lg border border-slate-200 bg-white p-3 text-left shadow-sm transition hover:border-brand-400 hover:shadow-md disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:border-slate-200 disabled:hover:shadow-sm"
                   >
                     <div className="mb-2 flex h-20 items-center justify-center rounded-md bg-slate-50 text-slate-300">
                       <Package className="h-8 w-8" />

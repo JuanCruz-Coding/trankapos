@@ -191,6 +191,10 @@ export class LocalDriver implements DataDriver {
     throw new Error('La cancelación solo funciona con el driver de Supabase.');
   }
 
+  async clearPendingPlan(): Promise<void> {
+    // No aplica en LocalDriver: no hay flow de subscripción real.
+  }
+
   // --- depots ---
   async listDepots(): Promise<Depot[]> {
     const s = await this.requireSession();

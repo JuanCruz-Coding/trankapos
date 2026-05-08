@@ -355,6 +355,19 @@ class SupabaseDriver implements DataDriver {
     if (!res.ok) throw new Error(body?.error ?? `Error HTTP ${res.status}`);
   }
 
+  // Limpia pending_plan_id del tenant. Se usa cuando MP rechaza el pago
+  // o el user abandona el checkout — sin esto el campo queda con un plan
+  // que nunca se confirmó y puede llevar a promociones incorrectas si
+  // un webhook tardío llega con authorized.
+  async clearPendingPlan(): Promise<void> {
+    const s = await this.requireSession();
+    const { error } = await this.sb
+      .from('subscriptions')
+      .update({ pending_plan_id: null })
+      .eq('tenant_id', s.tenantId);
+    if (error) throw new Error(error.message);
+  }
+
   async subscribeToPlan(
     planCode: string,
     backUrl: string,
@@ -955,83 +968,38 @@ class SupabaseDriver implements DataDriver {
   }
 
   // ===== TRANSFERS =====
-  // Misma nota de atomicidad que createSale: toca transfers + transfer_items
-  // + stock_items en pasos secuenciales. Si falla en el medio, podría quedar
-  // estado inconsistente. Migrar a RPC en producción.
+  // createTransfer delega a la RPC SQL public.create_transfer_atomic
+  // (migration 010), que hace todo en una sola transacción con SELECT FOR
+  // UPDATE en stock origen. Si cualquier paso falla, rollback automático.
 
   async createTransfer(input: TransferInput): Promise<Transfer> {
     const s = await this.requireSession();
-    if (input.fromDepotId === input.toDepotId) {
-      throw new Error('Origen y destino deben ser distintos');
-    }
-    if (input.items.length === 0) throw new Error('La transferencia no tiene items');
 
-    // 1. Pre-validar stock disponible en origen
-    const productIds = input.items.map((it) => it.productId);
-    const { data: stockRows, error: stockErr } = await this.sb
-      .from('stock_items')
-      .select('product_id, qty')
-      .eq('depot_id', input.fromDepotId)
-      .in('product_id', productIds);
-    if (stockErr) throw new Error(stockErr.message);
-    const stockByProduct = new Map(
-      (stockRows ?? []).map((r) => [r.product_id, Number(r.qty)]),
+    const { data: transferId, error: rpcErr } = await this.sb.rpc(
+      'create_transfer_atomic',
+      {
+        p_tenant_id: s.tenantId,
+        p_from_depot_id: input.fromDepotId,
+        p_to_depot_id: input.toDepotId,
+        p_notes: input.notes ?? '',
+        p_items: input.items.map((it) => ({
+          product_id: it.productId,
+          qty: it.qty,
+        })),
+      },
     );
+    if (rpcErr) throw new Error(rpcErr.message);
 
-    const { data: prodRows, error: prodErr } = await this.sb
-      .from('products')
-      .select('id, name')
-      .in('id', productIds);
-    if (prodErr) throw new Error(prodErr.message);
-    const nameById = new Map((prodRows ?? []).map((p) => [p.id, p.name]));
-
-    for (const it of input.items) {
-      if (it.qty <= 0) throw new Error('Las cantidades deben ser mayores a cero');
-      const available = stockByProduct.get(it.productId) ?? 0;
-      if (available < it.qty) {
-        const name = nameById.get(it.productId) ?? 'producto';
-        throw new Error(
-          `Stock insuficiente de "${name}" en el depósito origen (disponible: ${available}, pedido: ${it.qty})`,
-        );
-      }
-    }
-
-    // 2. Crear transfer (header)
+    // Re-fetch del header para obtener created_at server-side.
     const { data: header, error: headerErr } = await this.sb
       .from('transfers')
-      .insert({
-        tenant_id: s.tenantId,
-        from_depot_id: input.fromDepotId,
-        to_depot_id: input.toDepotId,
-        created_by: s.userId,
-        notes: input.notes,
-      })
-      .select()
+      .select('created_at')
+      .eq('id', transferId as string)
       .single();
     if (headerErr) throw new Error(headerErr.message);
-    const transferId = header.id;
-
-    // 3. Crear transfer_items (bulk)
-    const itemRows = input.items.map((it) => ({
-      transfer_id: transferId,
-      tenant_id: s.tenantId,
-      product_id: it.productId,
-      qty: it.qty,
-    }));
-    const { error: itemsErr } = await this.sb.from('transfer_items').insert(itemRows);
-    if (itemsErr) {
-      await this.sb.from('transfers').delete().eq('id', transferId);
-      throw new Error(itemsErr.message);
-    }
-
-    // 4. Mover stock
-    for (const it of input.items) {
-      await this.adjustStock(it.productId, input.fromDepotId, -it.qty);
-      await this.adjustStock(it.productId, input.toDepotId, it.qty);
-    }
 
     return {
-      id: transferId,
+      id: transferId as string,
       tenantId: s.tenantId,
       fromDepotId: input.fromDepotId,
       toDepotId: input.toDepotId,

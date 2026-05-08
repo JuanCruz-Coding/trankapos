@@ -119,6 +119,7 @@ export interface DataDriver {
     payerEmail: string,
   ): Promise<{ initPoint: string }>;
   cancelSubscription(): Promise<void>;
+  clearPendingPlan(): Promise<void>;
 
   // --- depots ---
   listDepots(): Promise<Depot[]>;

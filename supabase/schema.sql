@@ -85,6 +85,8 @@ create table memberships (
 );
 create index on memberships(user_id);
 create index on memberships(tenant_id);
+create unique index memberships_one_active_owner_per_tenant
+  on memberships(tenant_id) where role = 'owner' and active = true;
 
 
 -- ---------------------------------------------------------------------

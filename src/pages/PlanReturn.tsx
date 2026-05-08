@@ -3,6 +3,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import { CheckCircle2, Clock, XCircle } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { Card, CardBody } from '@/components/ui/Card';
+import { data } from '@/data';
 
 // MP redirige acá tras autorizar la suscripción. Los query params típicos:
 //   ?preapproval_id=xxx&status=approved (o pending / rejected)
@@ -19,6 +20,18 @@ export default function PlanReturn() {
 
   const status = params.get('status') ?? params.get('collection_status') ?? 'unknown';
   const preapprovalId = params.get('preapproval_id');
+
+  // Si MP rechazó el pago, limpiamos el pending_plan_id del tenant: el
+  // preapproval no se va a autorizar y dejarlo apuntando a un plan que
+  // nunca se compró confunde el estado y un webhook tardío podría llegar
+  // a promover ese plan sin pago real.
+  useEffect(() => {
+    if (status === 'rejected') {
+      data.clearPendingPlan().catch(() => {
+        // best-effort: si falla no rompemos la UX del retorno.
+      });
+    }
+  }, [status]);
 
   // Countdown que redirige automáticamente a /plan cuando llega a 0.
   useEffect(() => {
