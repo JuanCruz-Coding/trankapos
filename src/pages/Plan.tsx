@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { differenceInDays } from 'date-fns';
-import { Crown, Check, X, Sparkles, ArrowRight } from 'lucide-react';
+import { Crown, Check, X, Sparkles, ArrowRight, AlertTriangle } from 'lucide-react';
 import { Card, CardBody, CardHeader, CardTitle } from '@/components/ui/Card';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { Button } from '@/components/ui/Button';
@@ -127,6 +127,28 @@ export default function Plan() {
         title="Mi plan"
         subtitle="Información de tu suscripción y uso actual"
       />
+
+      {sub.status === 'past_due' && (
+        <div className="mb-4 flex items-start gap-3 rounded-xl border border-red-200 bg-red-50 p-4">
+          <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-red-600" />
+          <div className="flex-1 text-sm text-red-900">
+            <strong className="block text-base">Pago vencido</strong>
+            <p className="mt-1">
+              No pudimos cobrar tu última cuota. Para mantener tu plan activo, actualizá la
+              tarjeta o el medio de pago en tu cuenta de Mercado Pago.
+            </p>
+            <a
+              href="https://www.mercadopago.com.ar/subscriptions"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="mt-2 inline-flex items-center gap-1 font-semibold text-red-700 underline hover:text-red-800"
+            >
+              Actualizar medio de pago en MP
+              <ArrowRight className="h-3.5 w-3.5" />
+            </a>
+          </div>
+        </div>
+      )}
 
       <div className="grid gap-4 lg:grid-cols-3">
         <Card className="lg:col-span-2">

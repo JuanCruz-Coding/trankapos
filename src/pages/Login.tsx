@@ -75,6 +75,11 @@ export default function Login() {
             Creá una ahora
           </Link>
         </div>
+        <div className="mt-2 text-center text-xs text-slate-400">
+          <Link to="/terms" className="hover:underline">Términos</Link>
+          {' · '}
+          <Link to="/privacy" className="hover:underline">Privacidad</Link>
+        </div>
       </div>
     </div>
   );

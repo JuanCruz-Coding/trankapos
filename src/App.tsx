@@ -20,6 +20,8 @@ import Transfers from '@/pages/Transfers';
 import Help from '@/pages/Help';
 import Plan from '@/pages/Plan';
 import PlanReturn from '@/pages/PlanReturn';
+import Terms from '@/pages/Terms';
+import Privacy from '@/pages/Privacy';
 
 export function App() {
   const init = useAuth((s) => s.init);
@@ -32,6 +34,8 @@ export function App() {
       <Routes>
         <Route path="/login" element={<Login />} />
         <Route path="/signup" element={<Signup />} />
+        <Route path="/terms" element={<Terms />} />
+        <Route path="/privacy" element={<Privacy />} />
 
         <Route
           path="/"

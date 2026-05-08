@@ -129,14 +129,47 @@ Deno.serve(async (req) => {
       );
     }
 
-    // 5. Guardar el preapproval id como pendiente. NO tocamos plan_id —
-    //    eso lo hace el webhook cuando MP confirma con status=authorized.
-    //    Si solo cambiamos plan_id acá, el cliente queda con el plan nuevo
-    //    aunque nunca confirme el pago (acceso sin pagar = bug grave).
+    // 5a. Si ya había una suscripción activa en MP, la cancelamos primero.
+    //     Sin esto, al cambiar de plan quedan DOS preapprovals activos y
+    //     MP cobra ambos. Best-effort: si falla la cancelación del viejo,
+    //     loggeamos pero seguimos con el flow nuevo (el cliente igual quiso
+    //     cambiar; podemos limpiar manualmente después si es necesario).
     const adminClient = createClient(
       Deno.env.get('SUPABASE_URL')!,
       Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!,
     );
+
+    const { data: currentSub } = await adminClient
+      .from('subscriptions')
+      .select('mp_subscription_id, status')
+      .eq('tenant_id', mem.tenant_id)
+      .single();
+
+    if (
+      currentSub?.mp_subscription_id &&
+      ['active', 'past_due', 'trialing'].includes(currentSub.status)
+    ) {
+      try {
+        await fetch(
+          `https://api.mercadopago.com/preapproval/${currentSub.mp_subscription_id}`,
+          {
+            method: 'PUT',
+            headers: {
+              Authorization: `Bearer ${mpToken}`,
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ status: 'cancelled' }),
+          },
+        );
+      } catch (e) {
+        console.error('Error cancelando preapproval anterior:', e);
+      }
+    }
+
+    // 5b. Guardar el preapproval id NUEVO como pendiente. NO tocamos plan_id —
+    //     eso lo hace el webhook cuando MP confirma con status=authorized.
+    //     Si solo cambiamos plan_id acá, el cliente queda con el plan nuevo
+    //     aunque nunca confirme el pago (acceso sin pagar = bug grave).
     await adminClient
       .from('subscriptions')
       .update({

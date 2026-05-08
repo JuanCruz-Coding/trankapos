@@ -102,6 +102,17 @@ export default function Signup() {
           <Button type="submit" size="lg" className="mt-2 w-full" disabled={loading}>
             {loading ? 'Creando…' : 'Crear cuenta'}
           </Button>
+          <p className="text-center text-xs text-slate-500">
+            Al crear la cuenta aceptás nuestros{' '}
+            <Link to="/terms" className="text-brand-600 hover:underline">
+              Términos
+            </Link>{' '}
+            y{' '}
+            <Link to="/privacy" className="text-brand-600 hover:underline">
+              Política de privacidad
+            </Link>
+            .
+          </p>
         </form>
         <div className="mt-6 text-center text-sm text-slate-500">
           ¿Ya tenés cuenta?{' '}
