@@ -67,14 +67,52 @@ Deno.serve(async (req) => {
     if (!sub.mp_subscription_id) {
       return jsonResponse({ error: 'No hay suscripción activa para cancelar' }, 400);
     }
-    if (sub.status === 'canceled') {
-      return jsonResponse({ ok: true, alreadyCanceled: true }, 200);
-    }
 
-    // 3. Cancelar en MP
     const mpToken = Deno.env.get('MP_ACCESS_TOKEN');
     if (!mpToken) return jsonResponse({ error: 'MP_ACCESS_TOKEN no configurado' }, 500);
 
+    // 3. Verificar estado real en MP antes de decidir.
+    //    Si solo confiamos en sub.status local, podemos retornar alreadyCanceled
+    //    cuando local está desincronizado (webhook perdido, fix manual) y MP
+    //    sigue cobrando al cliente.
+    const mpStatusRes = await fetch(
+      `https://api.mercadopago.com/preapproval/${sub.mp_subscription_id}`,
+      { headers: { Authorization: `Bearer ${mpToken}` } },
+    );
+
+    let mpStatus: string;
+    if (mpStatusRes.status === 404) {
+      // Preapproval no existe en MP → tratamos como cancelled.
+      mpStatus = 'cancelled';
+    } else if (!mpStatusRes.ok) {
+      const detail = await mpStatusRes.text();
+      console.error('Error consultando MP:', detail);
+      return jsonResponse(
+        { error: `Error consultando estado en Mercado Pago: ${mpStatusRes.status}` },
+        500,
+      );
+    } else {
+      const mpData = (await mpStatusRes.json()) as { status?: string };
+      mpStatus = mpData.status ?? '';
+    }
+
+    const adminClient = createClient(
+      Deno.env.get('SUPABASE_URL')!,
+      Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!,
+    );
+
+    // 4. Si MP ya está cancelled, solo sincronizamos local si está desincronizado.
+    if (mpStatus === 'cancelled') {
+      if (sub.status !== 'canceled') {
+        await adminClient
+          .from('subscriptions')
+          .update({ status: 'canceled' })
+          .eq('tenant_id', mem.tenant_id);
+      }
+      return jsonResponse({ ok: true, alreadyCanceled: true }, 200);
+    }
+
+    // 5. MP sigue activo → cancelar.
     const mpRes = await fetch(
       `https://api.mercadopago.com/preapproval/${sub.mp_subscription_id}`,
       {
@@ -96,12 +134,8 @@ Deno.serve(async (req) => {
       );
     }
 
-    // 4. Update local — marcamos como canceled. El webhook lo va a confirmar
-    //    después con el status real, pero queremos UX inmediata.
-    const adminClient = createClient(
-      Deno.env.get('SUPABASE_URL')!,
-      Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!,
-    );
+    // 6. Update local. El webhook va a confirmar después con el status real,
+    //    pero queremos UX inmediata.
     await adminClient
       .from('subscriptions')
       .update({ status: 'canceled' })
