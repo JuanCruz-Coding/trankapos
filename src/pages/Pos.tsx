@@ -22,6 +22,7 @@ import { useCart, cartTotals } from '@/stores/cart';
 import { formatARS } from '@/lib/currency';
 import { lineSubtotal, subMoney } from '@/lib/money';
 import { buildSaleFromCart, summarizeSale } from '@/lib/sales';
+import { beepError, beepSuccess } from '@/lib/sound';
 import { toast } from '@/stores/toast';
 import { PAYMENT_METHODS, type PaymentMethod, type Sale } from '@/types';
 
@@ -100,16 +101,20 @@ export default function Pos() {
     try {
       const product = await data.findProductByBarcode(code);
       if (!product) {
+        beepError();
         toast.error(`Sin resultado para "${code}"`);
         return;
       }
       const stockQty = stockByProduct.get(product.id) ?? 0;
       if (stockQty <= 0) {
+        beepError();
         toast.error(`Sin stock de "${product.name}"`);
         return;
       }
       addProduct(product);
+      beepSuccess();
     } catch (err) {
+      beepError();
       toast.error((err as Error).message);
     }
   }
