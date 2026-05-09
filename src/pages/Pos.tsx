@@ -22,7 +22,7 @@ import { useCart, cartTotals } from '@/stores/cart';
 import { formatARS } from '@/lib/currency';
 import { lineSubtotal, subMoney } from '@/lib/money';
 import { buildSaleFromCart, summarizeSale } from '@/lib/sales';
-import { beepError, beepSuccess } from '@/lib/sound';
+import { beepError, beepSuccess, primeAudio } from '@/lib/sound';
 import { toast } from '@/stores/toast';
 import { PAYMENT_METHODS, type PaymentMethod, type Sale } from '@/types';
 
@@ -121,6 +121,7 @@ export default function Pos() {
 
   async function handleBarcode(e: FormEvent) {
     e.preventDefault();
+    primeAudio();
     setBarcode('');
     await processCode(barcode);
   }
@@ -301,7 +302,10 @@ export default function Pos() {
             type="button"
             variant="outline"
             className="lg:hidden"
-            onClick={() => setScannerOpen(true)}
+            onClick={() => {
+              primeAudio();
+              setScannerOpen(true);
+            }}
             aria-label="Escanear con cámara"
           >
             <Camera className="h-4 w-4" />
@@ -334,11 +338,14 @@ export default function Pos() {
                   <button
                     key={p.id}
                     onClick={() => {
+                      primeAudio();
                       if (low) {
+                        beepError();
                         toast.error(`Sin stock de "${p.name}"`);
                         return;
                       }
                       addProduct(p);
+                      beepSuccess();
                     }}
                     disabled={low}
                     className="group flex flex-col rounded-lg border border-slate-200 bg-white p-3 text-left shadow-sm transition hover:border-brand-400 hover:shadow-md disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:border-slate-200 disabled:hover:shadow-sm"
