@@ -47,6 +47,11 @@ export interface Tenant {
   posRequireCustomer: boolean;
   // Stock
   stockAlertsEnabled: boolean;
+  // SKU
+  skuAutoEnabled: boolean;
+  skuPrefix: string;
+  // Señas
+  posPartialReservesStock: boolean;
   // Branding
   logoUrl: string | null;
 }
@@ -68,6 +73,9 @@ export interface TenantSettingsInput {
   posRoundTo?: number;
   posRequireCustomer?: boolean;
   stockAlertsEnabled?: boolean;
+  skuAutoEnabled?: boolean;
+  skuPrefix?: string;
+  posPartialReservesStock?: boolean;
 }
 
 export interface User {
@@ -117,6 +125,7 @@ export interface Product {
   tenantId: string;
   name: string;
   barcode: string | null;
+  sku: string | null;
   price: number;
   cost: number;
   categoryId: string | null;
@@ -133,6 +142,7 @@ export interface StockItem {
   warehouseId: string;
   productId: string;
   qty: number;
+  qtyReserved: number;
   minQty: number;
   updatedAt: string;
 }
@@ -179,6 +189,8 @@ export interface SalePayment {
   amount: number;
 }
 
+export type SaleStatus = 'paid' | 'partial';
+
 export interface Sale {
   id: string;
   tenantId: string;
@@ -190,6 +202,8 @@ export interface Sale {
   subtotal: number;
   discount: number;
   total: number;
+  status: SaleStatus;
+  stockReservedMode: boolean;
   createdAt: string;
   voided: boolean;
 }

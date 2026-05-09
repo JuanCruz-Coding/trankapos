@@ -20,6 +20,7 @@ import type {
   Warehouse,
 } from '@/types';
 import type {
+  AddPaymentInput,
   BranchInput,
   CashMovementInput,
   CategoryInput,
@@ -59,11 +60,34 @@ function withTenantDefaults(t: Partial<Tenant> & Pick<Tenant, 'id' | 'name' | 'c
     posRoundTo: t.posRoundTo ?? 1,
     posRequireCustomer: t.posRequireCustomer ?? false,
     stockAlertsEnabled: t.stockAlertsEnabled ?? true,
+    skuAutoEnabled: t.skuAutoEnabled ?? true,
+    skuPrefix: t.skuPrefix ?? '200',
+    posPartialReservesStock: t.posPartialReservesStock ?? false,
     logoUrl: t.logoUrl ?? null,
   };
 }
+
+// Replica el trigger SQL assign_product_sku para LocalDriver: si el producto
+// se crea sin barcode y sin SKU manual, y el tenant tiene auto_enabled,
+// genera {prefix}-{NNNN} con correlativo único.
+async function generateNextSkuLocal(tenantId: string, prefix: string): Promise<string> {
+  const products = await import('./db').then((m) => m.db.products.where('tenantId').equals(tenantId).toArray());
+  const re = new RegExp(`^${prefix.replace(/[-/\\^$*+?.()|[\]{}]/g, '\\$&')}-(\\d+)$`);
+  let max = 0;
+  for (const p of products) {
+    const sku = (p as Product).sku;
+    if (!sku) continue;
+    const m = re.exec(sku);
+    if (m) {
+      const n = parseInt(m[1], 10);
+      if (Number.isFinite(n) && n > max) max = n;
+    }
+  }
+  const next = max + 1;
+  return `${prefix}-${String(next).padStart(5, '0')}`;
+}
 import { hashPassword, verifyPassword } from '@/lib/hash';
-import { addMoney, eqMoney, lineSubtotal, subMoney } from '@/lib/money';
+import { addMoney, eqMoney, gtMoney, lineSubtotal, subMoney } from '@/lib/money';
 
 const now = () => new Date().toISOString();
 
@@ -460,19 +484,38 @@ export class LocalDriver implements DataDriver {
     return p;
   }
 
-  async findProductByBarcode(barcode: string): Promise<Product | null> {
+  async findProductByCode(code: string): Promise<Product | null> {
     const s = await this.requireSession();
-    const p = await db.products.where('[tenantId+barcode]').equals([s.tenantId, barcode]).first();
-    return p ?? null;
+    // Probar barcode primero (índice compuesto)
+    const byBarcode = await db.products
+      .where('[tenantId+barcode]')
+      .equals([s.tenantId, code])
+      .first();
+    if (byBarcode) return byBarcode;
+    // Sino por SKU. Sin índice compuesto en sku — scan + filter (vol bajo).
+    const all = await db.products.where('tenantId').equals(s.tenantId).toArray();
+    return all.find((p) => p.sku === code) ?? null;
   }
 
   async createProduct(input: ProductInput): Promise<Product> {
     const s = await this.requireSession();
+
+    // Replica del trigger SQL assign_product_sku: si no hay sku ni barcode,
+    // y el tenant tiene sku_auto_enabled, generamos uno automático.
+    let finalSku = input.sku ?? null;
+    if (!finalSku && !input.barcode) {
+      const tenant = await this.getTenant();
+      if (tenant.skuAutoEnabled) {
+        finalSku = await generateNextSkuLocal(s.tenantId, tenant.skuPrefix);
+      }
+    }
+
     const product: Product = {
       id: uuid(),
       tenantId: s.tenantId,
       name: input.name,
       barcode: input.barcode,
+      sku: finalSku,
       price: input.price,
       cost: input.cost,
       categoryId: input.categoryId,
@@ -492,6 +535,7 @@ export class LocalDriver implements DataDriver {
             warehouseId: row.warehouseId,
             productId: product.id,
             qty: row.qty,
+            qtyReserved: 0,
             minQty: row.minQty,
             updatedAt: now(),
           };
@@ -556,6 +600,7 @@ export class LocalDriver implements DataDriver {
         warehouseId,
         productId,
         qty: deltaQty,
+        qtyReserved: 0,
         minQty: minQty ?? 0,
         updatedAt: now(),
       };
@@ -575,6 +620,10 @@ export class LocalDriver implements DataDriver {
     const tenant = await this.getTenant();
     const allowNegativeGlobal = tenant.posAllowNegativeStock;
     const maxDiscountPct = tenant.posMaxDiscountPercent;
+    const partialReserves = tenant.posPartialReservesStock;
+    const isPartial = input.partial === true;
+    // Modo de stock para esta venta: solo usa reserva si partial Y el tenant lo tiene activo.
+    const stockMode = isPartial && partialReserves;
 
     const id = uuid();
     const ts = now();
@@ -630,8 +679,26 @@ export class LocalDriver implements DataDriver {
     const total = subMoney(subtotal, input.discount);
     if (total < 0) throw new Error('El descuento global supera el subtotal');
     const paid = addMoney(...input.payments.map((p) => p.amount));
-    if (!eqMoney(paid, total)) {
-      throw new Error(`Pagos (${paid.toFixed(2)}) no coinciden con total (${total.toFixed(2)})`);
+
+    let saleStatus: Sale['status'];
+    let actualStockMode = stockMode;
+    if (isPartial) {
+      if (paid <= 0) throw new Error('Una seña debe tener al menos un pago');
+      if (paid > total) {
+        throw new Error(`El pago de la seña (${paid.toFixed(2)}) no puede superar el total (${total.toFixed(2)})`);
+      }
+      if (eqMoney(paid, total)) {
+        // partial=true pero los pagos cubren el total: lo registramos como paid.
+        saleStatus = 'paid';
+        actualStockMode = false;
+      } else {
+        saleStatus = 'partial';
+      }
+    } else {
+      if (!eqMoney(paid, total)) {
+        throw new Error(`Pagos (${paid.toFixed(2)}) no coinciden con total (${total.toFixed(2)})`);
+      }
+      saleStatus = 'paid';
     }
 
     const sale: Sale = {
@@ -645,6 +712,8 @@ export class LocalDriver implements DataDriver {
       subtotal,
       discount: input.discount,
       total,
+      status: saleStatus,
+      stockReservedMode: actualStockMode,
       createdAt: ts,
       voided: false,
     };
@@ -660,7 +729,9 @@ export class LocalDriver implements DataDriver {
           .where('[tenantId+warehouseId+productId]')
           .equals([s.tenantId, warehouse.id, it.productId])
           .first();
-        const available = stock?.qty ?? 0;
+        const onHand = stock?.qty ?? 0;
+        const reserved = stock?.qtyReserved ?? 0;
+        const available = onHand - reserved;
 
         if (available < it.qty) {
           if (!product.allowSaleWhenZero && !allowNegativeGlobal) {
@@ -670,23 +741,99 @@ export class LocalDriver implements DataDriver {
           }
         }
 
-        if (stock) {
-          await db.stock.put({ ...stock, qty: stock.qty - it.qty, updatedAt: ts });
+        if (actualStockMode) {
+          // Modo reserva: sumar qtyReserved (qty no se toca)
+          if (stock) {
+            await db.stock.put({ ...stock, qtyReserved: reserved + it.qty, updatedAt: ts });
+          } else {
+            await db.stock.put({
+              id: uuid(),
+              tenantId: s.tenantId,
+              warehouseId: warehouse.id,
+              productId: it.productId,
+              qty: 0,
+              qtyReserved: it.qty,
+              minQty: 0,
+              updatedAt: ts,
+            });
+          }
         } else {
+          // Modo se-lleva o venta normal: bajar qty
+          if (stock) {
+            await db.stock.put({ ...stock, qty: stock.qty - it.qty, updatedAt: ts });
+          } else {
+            await db.stock.put({
+              id: uuid(),
+              tenantId: s.tenantId,
+              warehouseId: warehouse.id,
+              productId: it.productId,
+              qty: -it.qty,
+              qtyReserved: 0,
+              minQty: 0,
+              updatedAt: ts,
+            });
+          }
+        }
+      }
+    });
+
+    return sale;
+  }
+
+  async addPaymentToSale(input: AddPaymentInput): Promise<Sale> {
+    const s = await this.requireSession();
+    if (input.payments.length === 0) throw new Error('No hay pagos para agregar');
+
+    const sale = await db.sales.get(input.saleId);
+    if (!sale || sale.tenantId !== s.tenantId) throw new Error('Venta no encontrada');
+    if (sale.status === 'paid') throw new Error('La venta ya está saldada');
+
+    const ts = now();
+    const paidSoFar = addMoney(...sale.payments.map((p) => p.amount));
+    const newAmount = addMoney(...input.payments.map((p) => p.amount));
+
+    for (const p of input.payments) {
+      if (p.amount <= 0) throw new Error('Los montos de pago deben ser mayores a 0');
+    }
+
+    const totalAfter = addMoney(paidSoFar, newAmount);
+    if (gtMoney(totalAfter, addMoney(sale.total, 0.005))) {
+      throw new Error(
+        `Los pagos (${newAmount.toFixed(2)}) superan el saldo pendiente (${subMoney(sale.total, paidSoFar).toFixed(2)})`,
+      );
+    }
+
+    const willPromote = eqMoney(totalAfter, sale.total);
+    const updatedSale: Sale = {
+      ...sale,
+      payments: [...sale.payments, ...input.payments],
+      status: willPromote ? 'paid' : 'partial',
+    };
+
+    await db.transaction('rw', db.sales, db.stock, async () => {
+      await db.sales.put(updatedSale);
+
+      // Si llegó al total y el stock estaba reservado, materializar
+      if (willPromote && sale.stockReservedMode) {
+        const warehouse = await this.getDefaultWarehouse(sale.branchId);
+        if (!warehouse) return;
+        for (const it of sale.items) {
+          const stock = await db.stock
+            .where('[tenantId+warehouseId+productId]')
+            .equals([s.tenantId, warehouse.id, it.productId])
+            .first();
+          if (!stock) continue;
           await db.stock.put({
-            id: uuid(),
-            tenantId: s.tenantId,
-            warehouseId: warehouse.id,
-            productId: it.productId,
-            qty: -it.qty,
-            minQty: 0,
+            ...stock,
+            qty: stock.qty - it.qty,
+            qtyReserved: Math.max((stock.qtyReserved ?? 0) - it.qty, 0),
             updatedAt: ts,
           });
         }
       }
     });
 
-    return sale;
+    return updatedSale;
   }
 
   async voidSale(id: string): Promise<void> {
@@ -697,6 +844,9 @@ export class LocalDriver implements DataDriver {
     const warehouse = await this.getDefaultWarehouse(sale.branchId);
     if (!warehouse) throw new Error('La sucursal de la venta no tiene un depósito principal');
     const ts = now();
+    // Si la venta era partial con stock reservado y aún no se materializó, liberamos qty_reserved.
+    // Sino sumamos qty (devolución estándar).
+    const releaseReserved = sale.status === 'partial' && sale.stockReservedMode;
     await db.transaction('rw', db.sales, db.stock, async () => {
       await db.sales.put({ ...sale, voided: true });
       for (const it of sale.items) {
@@ -704,7 +854,14 @@ export class LocalDriver implements DataDriver {
           .where('[tenantId+warehouseId+productId]')
           .equals([s.tenantId, warehouse.id, it.productId])
           .first();
-        if (stock) {
+        if (!stock) continue;
+        if (releaseReserved) {
+          await db.stock.put({
+            ...stock,
+            qtyReserved: Math.max((stock.qtyReserved ?? 0) - it.qty, 0),
+            updatedAt: ts,
+          });
+        } else {
           await db.stock.put({ ...stock, qty: stock.qty + it.qty, updatedAt: ts });
         }
       }
@@ -873,6 +1030,7 @@ export class LocalDriver implements DataDriver {
             warehouseId: input.toWarehouseId,
             productId: it.productId,
             qty: it.qty,
+            qtyReserved: 0,
             minQty: 0,
             updatedAt: ts,
           });

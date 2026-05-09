@@ -12,6 +12,7 @@ describe('productSchema', () => {
   const valid = {
     name: 'Coca Cola',
     barcode: '7790895000119',
+    sku: null,
     price: 1500,
     cost: 800,
     taxRate: 21,

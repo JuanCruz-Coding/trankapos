@@ -14,6 +14,8 @@ export interface BuildSaleArgs {
   lines: CartLine[];
   globalDiscount: number;
   payments: PaymentLine[];
+  /** Si true, los pagos pueden ser menores al total (seña). */
+  partial?: boolean;
 }
 
 export interface SaleSummary {
@@ -43,7 +45,7 @@ export function summarizeSale(lines: CartLine[], globalDiscount: number, payment
  * No persiste — eso lo hace el driver.
  */
 export function buildSaleFromCart(args: BuildSaleArgs): SaleInput {
-  const { branchId, registerId, lines, globalDiscount, payments } = args;
+  const { branchId, registerId, lines, globalDiscount, payments, partial } = args;
 
   if (!branchId) throw new Error('Seleccioná una sucursal antes de cobrar');
   if (lines.length === 0) throw new Error('El carrito está vacío');
@@ -64,11 +66,19 @@ export function buildSaleFromCart(args: BuildSaleArgs): SaleInput {
   if (subMoney(summary.subtotal, globalDiscount) < 0) {
     throw new Error('El descuento global supera el subtotal');
   }
-  if (!summary.exact) {
-    throw new Error('Los pagos deben cubrir exactamente el total');
-  }
   for (const p of payments) {
     if (p.amount < 0) throw new Error('Los montos de pago no pueden ser negativos');
+  }
+
+  if (partial) {
+    if (summary.paid <= 0) throw new Error('Una seña requiere al menos un pago');
+    if (summary.paid > summary.total) {
+      throw new Error('El pago de la seña no puede superar el total');
+    }
+  } else {
+    if (!summary.exact) {
+      throw new Error('Los pagos deben cubrir exactamente el total');
+    }
   }
 
   return {
@@ -82,5 +92,6 @@ export function buildSaleFromCart(args: BuildSaleArgs): SaleInput {
     })),
     payments,
     discount: globalDiscount,
+    partial: partial ?? false,
   };
 }

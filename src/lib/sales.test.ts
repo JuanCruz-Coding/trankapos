@@ -108,3 +108,49 @@ describe('buildSaleFromCart', () => {
     expect(r.payments).toHaveLength(2);
   });
 });
+
+describe('buildSaleFromCart — modo seña (partial)', () => {
+  const args = (overrides: Partial<Parameters<typeof buildSaleFromCart>[0]> = {}) => ({
+    branchId: 'b1',
+    registerId: 'r1',
+    lines: [line({ price: 100, qty: 1 })],
+    globalDiscount: 0,
+    payments: [{ method: 'cash' as const, amount: 100 }],
+    ...overrides,
+  });
+
+  it('partial=true acepta paid<total y devuelve partial=true', () => {
+    const r = buildSaleFromCart(
+      args({ partial: true, payments: [{ method: 'cash', amount: 30 }] }),
+    );
+    expect(r.partial).toBe(true);
+    expect(r.payments[0].amount).toBe(30);
+  });
+
+  it('partial=true rechaza paid=0', () => {
+    expect(() =>
+      buildSaleFromCart(args({ partial: true, payments: [{ method: 'cash', amount: 0 }] })),
+    ).toThrow(/seña/i);
+  });
+
+  it('partial=true rechaza paid>total', () => {
+    expect(() =>
+      buildSaleFromCart(args({ partial: true, payments: [{ method: 'cash', amount: 200 }] })),
+    ).toThrow(/superar el total/i);
+  });
+
+  it('partial=true acepta paid==total (se registra como paid normal)', () => {
+    const r = buildSaleFromCart(
+      args({ partial: true, payments: [{ method: 'cash', amount: 100 }] }),
+    );
+    // El builder igual devuelve partial=true; el SQL/Local resuelve que termine
+    // siendo status=paid si paid==total. Acá solo verificamos que no tira.
+    expect(r.partial).toBe(true);
+  });
+
+  it('partial=false (default) sigue exigiendo exact', () => {
+    expect(() =>
+      buildSaleFromCart(args({ payments: [{ method: 'cash', amount: 30 }] })),
+    ).toThrow(/exactamente/i);
+  });
+});

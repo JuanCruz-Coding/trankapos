@@ -37,6 +37,9 @@ interface FormState {
   posMaxDiscountPercent: string;
   posRoundTo: string;
   posRequireCustomer: boolean;
+  posPartialReservesStock: boolean;
+  skuAutoEnabled: boolean;
+  skuPrefix: string;
   stockAlertsEnabled: boolean;
   logoUrl: string | null;
 }
@@ -58,6 +61,9 @@ function tenantToForm(t: Tenant): FormState {
     posMaxDiscountPercent: String(t.posMaxDiscountPercent),
     posRoundTo: String(t.posRoundTo),
     posRequireCustomer: t.posRequireCustomer,
+    posPartialReservesStock: t.posPartialReservesStock,
+    skuAutoEnabled: t.skuAutoEnabled,
+    skuPrefix: t.skuPrefix,
     stockAlertsEnabled: t.stockAlertsEnabled,
     logoUrl: t.logoUrl,
   };
@@ -102,6 +108,10 @@ export default function Settings() {
       return toast.error('Redondeo debe ser mayor a 0');
     }
 
+    if (!/^[A-Za-z0-9_-]+$/.test(form.skuPrefix) || form.skuPrefix.length === 0) {
+      return toast.error('Prefijo SKU: solo letras, números, - o _');
+    }
+
     setSaving(true);
     try {
       const input: TenantSettingsInput = {
@@ -120,6 +130,9 @@ export default function Settings() {
         posMaxDiscountPercent: maxPct,
         posRoundTo: round,
         posRequireCustomer: form.posRequireCustomer,
+        posPartialReservesStock: form.posPartialReservesStock,
+        skuAutoEnabled: form.skuAutoEnabled,
+        skuPrefix: form.skuPrefix,
         stockAlertsEnabled: form.stockAlertsEnabled,
       };
       const updated = await data.updateTenantSettings(input);
@@ -415,6 +428,12 @@ function PosTab({ form, update }: TabProps) {
         label="Requerir cliente para registrar la venta"
         hint="Útil para comercios con cuenta corriente. Cuando se active la feature de Clientes."
       />
+      <CheckRow
+        checked={form.posPartialReservesStock}
+        onChange={(v) => update('posPartialReservesStock', v)}
+        label="Las señas reservan stock (no se descuenta hasta cobrar el saldo)"
+        hint="Si está apagado, al cobrar una seña el stock se descuenta al instante (modelo 'el cliente se lleva el producto'). Si está encendido, el stock queda apartado y se descuenta cuando se completa el pago."
+      />
       <div className="grid gap-4 md:grid-cols-2">
         <Field
           label="Descuento máximo (%)"
@@ -441,6 +460,25 @@ function PosTab({ form, update }: TabProps) {
             onChange={(e) => update('posRoundTo', e.target.value)}
           />
         </Field>
+      </div>
+
+      <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+        <div className="mb-2 text-xs font-semibold uppercase text-slate-500">SKU automático</div>
+        <CheckRow
+          checked={form.skuAutoEnabled}
+          onChange={(v) => update('skuAutoEnabled', v)}
+          label="Generar SKU automático para productos sin código de barras"
+          hint="Cuando creás un producto a granel o servicio (sin EAN), el sistema le asigna un código interno {prefijo}-{NNNNN}. Lo podés editar manualmente."
+        />
+        <div className="mt-3 max-w-xs">
+          <Field label="Prefijo del SKU" hint="Default 200 (rango GS1 reservado para uso interno).">
+            <Input
+              value={form.skuPrefix}
+              onChange={(e) => update('skuPrefix', e.target.value.toUpperCase())}
+              maxLength={10}
+            />
+          </Field>
+        </div>
       </div>
     </div>
   );

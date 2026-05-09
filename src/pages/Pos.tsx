@@ -158,7 +158,7 @@ export default function Pos() {
     const code = rawCode.trim();
     if (!code) return;
     try {
-      const product = await data.findProductByBarcode(code);
+      const product = await data.findProductByCode(code);
       if (!product) {
         beepError();
         toast.error(`Sin resultado para "${code}"`);
@@ -527,11 +527,13 @@ function PaymentModal({ open, onClose, total, onCompleted }: PayProps) {
   const [payments, setPayments] = useState<{ method: PaymentMethod; amount: number }[]>([
     { method: 'cash', amount: total },
   ]);
+  const [partial, setPartial] = useState(false);
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
     if (open) {
       setPayments([{ method: 'cash', amount: total }]);
+      setPartial(false);
     }
   }, [open, total]);
 
@@ -539,6 +541,10 @@ function PaymentModal({ open, onClose, total, onCompleted }: PayProps) {
   const paid = summary.paid;
   const diff = summary.diff;
   const exact = summary.exact;
+  // En modo seña, "OK para confirmar" es: paid > 0 y paid <= total.
+  const canConfirmPartial = paid > 0 && paid <= total;
+  const canConfirm = partial ? canConfirmPartial : exact;
+  const remaining = Math.max(total - paid, 0);
 
   function setRow(i: number, field: 'method' | 'amount', value: string) {
     setPayments((ps) =>
@@ -564,6 +570,7 @@ function PaymentModal({ open, onClose, total, onCompleted }: PayProps) {
         lines,
         globalDiscount: discount,
         payments,
+        partial,
       });
       const sale = await data.createSale(saleInput);
       onCompleted(sale);
@@ -623,24 +630,46 @@ function PaymentModal({ open, onClose, total, onCompleted }: PayProps) {
         </button>
       </div>
 
+      <label className="my-3 flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm">
+        <input
+          type="checkbox"
+          checked={partial}
+          onChange={(e) => setPartial(e.target.checked)}
+          className="h-4 w-4"
+        />
+        <span>
+          <strong>Es seña</strong>
+          <span className="block text-xs text-slate-500">
+            El cliente paga una parte ahora y el resto queda como saldo pendiente.
+          </span>
+        </span>
+      </label>
+
       <div className="my-4 rounded-lg bg-slate-50 p-3 text-sm">
         <div className="flex justify-between">
           <span>Pagado</span>
           <span className="font-semibold">{formatARS(paid)}</span>
         </div>
-        <div
-          className={
-            'flex justify-between ' +
-            (exact
-              ? 'text-emerald-700'
-              : diff > 0
-                ? 'text-red-700'
-                : 'text-amber-700')
-          }
-        >
-          <span>{exact ? 'Exacto' : diff > 0 ? 'Falta' : 'Vuelto'}</span>
-          <span className="font-semibold">{formatARS(Math.abs(diff))}</span>
-        </div>
+        {partial ? (
+          <div className="flex justify-between text-amber-700">
+            <span>Saldo pendiente</span>
+            <span className="font-semibold">{formatARS(remaining)}</span>
+          </div>
+        ) : (
+          <div
+            className={
+              'flex justify-between ' +
+              (exact
+                ? 'text-emerald-700'
+                : diff > 0
+                  ? 'text-red-700'
+                  : 'text-amber-700')
+            }
+          >
+            <span>{exact ? 'Exacto' : diff > 0 ? 'Falta' : 'Vuelto'}</span>
+            <span className="font-semibold">{formatARS(Math.abs(diff))}</span>
+          </div>
+        )}
       </div>
 
       <div className="flex gap-2">
@@ -650,9 +679,9 @@ function PaymentModal({ open, onClose, total, onCompleted }: PayProps) {
         <Button
           className="flex-1"
           onClick={handleConfirm}
-          disabled={loading || !exact}
+          disabled={loading || !canConfirm}
         >
-          {loading ? 'Procesando…' : 'Confirmar'}
+          {loading ? 'Procesando…' : partial ? `Cobrar seña ${formatARS(paid)}` : 'Confirmar'}
         </Button>
       </div>
     </Modal>

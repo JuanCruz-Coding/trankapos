@@ -44,6 +44,9 @@ export async function seedIfEmpty(): Promise<void> {
     posRoundTo: 1,
     posRequireCustomer: false,
     stockAlertsEnabled: true,
+    skuAutoEnabled: true,
+    skuPrefix: '200',
+    posPartialReservesStock: false,
     logoUrl: null,
   };
 
@@ -144,6 +147,7 @@ export async function seedIfEmpty(): Promise<void> {
     tenantId,
     name: p.name,
     barcode: p.barcode,
+    sku: null,
     price: p.price,
     cost: p.cost,
     categoryId: p.categoryId,
@@ -203,6 +207,8 @@ export async function seedIfEmpty(): Promise<void> {
         subtotal,
         discount,
         total,
+        status: 'paid',
+        stockReservedMode: false,
         createdAt: saleTime.toISOString(),
         voided: false,
       });
@@ -285,6 +291,7 @@ export async function seedIfEmpty(): Promise<void> {
       warehouseId,
       productId,
       qty: v.qty,
+      qtyReserved: 0,
       minQty: v.minQty,
       updatedAt: ts,
     });

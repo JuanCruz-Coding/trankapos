@@ -19,6 +19,7 @@ interface FormState {
   id?: string;
   name: string;
   barcode: string;
+  sku: string;
   price: string;
   cost: string;
   categoryId: string;
@@ -32,6 +33,7 @@ interface FormState {
 const emptyForm: FormState = {
   name: '',
   barcode: '',
+  sku: '',
   price: '',
   cost: '',
   categoryId: '',
@@ -108,6 +110,7 @@ export default function Products() {
       id: p.id,
       name: p.name,
       barcode: p.barcode ?? '',
+      sku: p.sku ?? '',
       price: String(p.price),
       cost: String(p.cost),
       categoryId: p.categoryId ?? '',
@@ -125,6 +128,7 @@ export default function Products() {
     const parsed = safeParse(productSchema, {
       name: form.name,
       barcode: form.barcode,
+      sku: form.sku,
       price: Number(form.price),
       cost: Number(form.cost),
       categoryId: form.categoryId || null,
@@ -229,7 +233,7 @@ export default function Products() {
           categoryId = cat.id;
         }
 
-        const existing = row.barcode ? await data.findProductByBarcode(row.barcode) : null;
+        const existing = row.barcode ? await data.findProductByCode(row.barcode) : null;
         if (existing) {
           await data.updateProduct(existing.id, {
             name: row.name,
@@ -247,6 +251,7 @@ export default function Products() {
           await data.createProduct({
             name: row.name,
             barcode: row.barcode,
+            sku: null,
             price: row.price,
             cost: row.cost,
             categoryId,
@@ -345,7 +350,15 @@ export default function Products() {
                         </div>
                       </div>
                     </td>
-                    <td className="px-4 py-3 text-slate-600">{p.barcode ?? '—'}</td>
+                    <td className="px-4 py-3 text-slate-600">
+                      {p.barcode ? (
+                        <span className="font-mono text-xs">{p.barcode}</span>
+                      ) : p.sku ? (
+                        <span className="font-mono text-xs text-cyan-700">{p.sku}</span>
+                      ) : (
+                        '—'
+                      )}
+                    </td>
                     <td className="px-4 py-3 text-right font-semibold">{formatARS(p.price)}</td>
                     <td className="px-4 py-3 text-right text-slate-500">{formatARS(p.cost)}</td>
                     <td className="px-4 py-3 text-right">
@@ -385,12 +398,28 @@ export default function Products() {
               onChange={(e) => setForm({ ...form, name: e.target.value })}
             />
           </div>
-          <div>
-            <label className="mb-1 block text-xs font-medium text-slate-700">Código de barras</label>
-            <Input
-              value={form.barcode}
-              onChange={(e) => setForm({ ...form, barcode: e.target.value })}
-            />
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="mb-1 block text-xs font-medium text-slate-700">Código de barras (EAN)</label>
+              <Input
+                value={form.barcode}
+                onChange={(e) => setForm({ ...form, barcode: e.target.value })}
+                placeholder="7790895..."
+              />
+            </div>
+            <div>
+              <label className="mb-1 block text-xs font-medium text-slate-700">SKU / código interno</label>
+              <Input
+                value={form.sku}
+                onChange={(e) => setForm({ ...form, sku: e.target.value })}
+                placeholder={!form.id && !form.barcode ? 'auto-generado al guardar' : 'opcional'}
+              />
+              {!form.id && !form.barcode && !form.sku && (
+                <p className="mt-1 text-[11px] text-slate-500">
+                  Sin EAN: el sistema asigna un SKU automático según la configuración.
+                </p>
+              )}
+            </div>
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div>

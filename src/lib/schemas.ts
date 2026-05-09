@@ -19,6 +19,12 @@ export const productSchema = z.object({
     .max(50, 'Máximo 50 caracteres')
     .nullable()
     .transform((v) => (v && v.length > 0 ? v : null)),
+  sku: z
+    .string()
+    .trim()
+    .max(50, 'Máximo 50 caracteres')
+    .nullable()
+    .transform((v) => (v && v.length > 0 ? v : null)),
   price: positiveNumber('Precio'),
   cost: positiveNumber('Costo'),
   taxRate: z
@@ -102,6 +108,15 @@ export const tenantSettingsSchema = z.object({
     .optional(),
   posRequireCustomer: z.boolean().optional(),
   stockAlertsEnabled: z.boolean().optional(),
+  skuAutoEnabled: z.boolean().optional(),
+  skuPrefix: z
+    .string()
+    .trim()
+    .min(1, 'Prefijo requerido')
+    .max(10, 'Máximo 10 caracteres')
+    .regex(/^[A-Za-z0-9_-]+$/, 'Solo letras, números, - o _')
+    .optional(),
+  posPartialReservesStock: z.boolean().optional(),
 });
 
 export const transferSchema = z

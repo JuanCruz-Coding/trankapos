@@ -34,6 +34,7 @@ export interface LoginInput {
 export interface ProductInput {
   name: string;
   barcode: string | null;
+  sku: string | null;
   price: number;
   cost: number;
   categoryId: string | null;
@@ -80,6 +81,13 @@ export interface SaleInput {
   items: { productId: string; qty: number; price: number; discount: number }[];
   payments: { method: Sale['payments'][number]['method']; amount: number }[];
   discount: number;
+  /** Si true, la venta es una seña: paid<total OK, status='partial'. */
+  partial?: boolean;
+}
+
+export interface AddPaymentInput {
+  saleId: string;
+  payments: { method: Sale['payments'][number]['method']; amount: number }[];
 }
 
 export interface OpenRegisterInput {
@@ -172,7 +180,8 @@ export interface DataDriver {
   // --- products ---
   listProducts(): Promise<Product[]>;
   getProduct(id: string): Promise<Product | null>;
-  findProductByBarcode(barcode: string): Promise<Product | null>;
+  /** Busca por barcode primero, después por sku. Útil para escanear/tipear código. */
+  findProductByCode(code: string): Promise<Product | null>;
   createProduct(input: ProductInput): Promise<Product>;
   updateProduct(id: string, input: Partial<ProductInput>): Promise<Product>;
   deleteProduct(id: string): Promise<void>;
@@ -185,6 +194,8 @@ export interface DataDriver {
   createSale(input: SaleInput): Promise<Sale>;
   voidSale(id: string): Promise<void>;
   listSales(q: SalesQuery): Promise<Sale[]>;
+  /** Agrega pagos a una venta con status=partial. Promueve a paid si cubren el saldo. */
+  addPaymentToSale(input: AddPaymentInput): Promise<Sale>;
 
   // --- cash register ---
   currentOpenRegister(branchId: string): Promise<CashRegister | null>;

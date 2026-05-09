@@ -24,6 +24,7 @@ import type {
   Warehouse,
 } from '@/types';
 import type {
+  AddPaymentInput,
   BranchInput,
   CashMovementInput,
   CategoryInput,
@@ -63,6 +64,9 @@ interface TenantRow {
   pos_round_to: string;
   pos_require_customer: boolean;
   stock_alerts_enabled: boolean;
+  sku_auto_enabled: boolean;
+  sku_prefix: string;
+  pos_partial_reserves_stock: boolean;
   logo_url: string | null;
 }
 
@@ -87,6 +91,9 @@ function mapTenant(r: TenantRow): Tenant {
     posRoundTo: Number(r.pos_round_to),
     posRequireCustomer: r.pos_require_customer,
     stockAlertsEnabled: r.stock_alerts_enabled,
+    skuAutoEnabled: r.sku_auto_enabled ?? true,
+    skuPrefix: r.sku_prefix ?? '200',
+    posPartialReservesStock: r.pos_partial_reserves_stock ?? false,
     logoUrl: r.logo_url ?? null,
   };
 }
@@ -132,6 +139,7 @@ function mapCategory(r: CategoryRow): Category {
 
 interface ProductRow {
   id: string; tenant_id: string; name: string; barcode: string | null;
+  sku: string | null;
   price: string; cost: string; category_id: string | null; tax_rate: string;
   track_stock: boolean; allow_sale_when_zero: boolean;
   active: boolean; created_at: string;
@@ -139,6 +147,7 @@ interface ProductRow {
 function mapProduct(r: ProductRow): Product {
   return {
     id: r.id, tenantId: r.tenant_id, name: r.name, barcode: r.barcode,
+    sku: r.sku ?? null,
     price: Number(r.price), cost: Number(r.cost),
     categoryId: r.category_id, taxRate: Number(r.tax_rate),
     trackStock: r.track_stock ?? true,
@@ -149,12 +158,14 @@ function mapProduct(r: ProductRow): Product {
 
 interface StockRow {
   id: string; tenant_id: string; warehouse_id: string; product_id: string;
-  qty: string; min_qty: string; updated_at: string;
+  qty: string; qty_reserved: string | null; min_qty: string; updated_at: string;
 }
 function mapStock(r: StockRow): StockItem {
   return {
     id: r.id, tenantId: r.tenant_id, warehouseId: r.warehouse_id, productId: r.product_id,
-    qty: Number(r.qty), minQty: Number(r.min_qty), updatedAt: r.updated_at,
+    qty: Number(r.qty),
+    qtyReserved: r.qty_reserved !== null && r.qty_reserved !== undefined ? Number(r.qty_reserved) : 0,
+    minQty: Number(r.min_qty), updatedAt: r.updated_at,
   };
 }
 
@@ -205,6 +216,8 @@ interface SaleRow {
   id: string; tenant_id: string; branch_id: string; register_id: string | null;
   cashier_id: string; subtotal: string; discount: string; total: string;
   voided: boolean; created_at: string;
+  status?: 'paid' | 'partial' | null;
+  stock_reserved_mode?: boolean | null;
   sale_items?: SaleItemRow[]; sale_payments?: SalePaymentRow[];
 }
 function mapSale(r: SaleRow): Sale {
@@ -214,6 +227,8 @@ function mapSale(r: SaleRow): Sale {
     items: (r.sale_items ?? []).map(mapSaleItem),
     payments: (r.sale_payments ?? []).map((p) => ({ method: p.method, amount: Number(p.amount) })),
     subtotal: Number(r.subtotal), discount: Number(r.discount), total: Number(r.total),
+    status: (r.status ?? 'paid') as Sale['status'],
+    stockReservedMode: r.stock_reserved_mode ?? false,
     voided: r.voided, createdAt: r.created_at,
   };
 }
@@ -525,6 +540,9 @@ class SupabaseDriver implements DataDriver {
     if (input.posRoundTo !== undefined) patch.pos_round_to = input.posRoundTo;
     if (input.posRequireCustomer !== undefined) patch.pos_require_customer = input.posRequireCustomer;
     if (input.stockAlertsEnabled !== undefined) patch.stock_alerts_enabled = input.stockAlertsEnabled;
+    if (input.skuAutoEnabled !== undefined) patch.sku_auto_enabled = input.skuAutoEnabled;
+    if (input.skuPrefix !== undefined) patch.sku_prefix = input.skuPrefix;
+    if (input.posPartialReservesStock !== undefined) patch.pos_partial_reserves_stock = input.posPartialReservesStock;
 
     const { data, error } = await this.sb
       .from('tenants')
@@ -786,15 +804,26 @@ class SupabaseDriver implements DataDriver {
     return data ? mapProduct(data) : null;
   }
 
-  async findProductByBarcode(barcode: string): Promise<Product | null> {
+  async findProductByCode(code: string): Promise<Product | null> {
     await this.requireSession();
-    const { data, error } = await this.sb
+    // Busca por barcode primero (más común), después por SKU. Dos queries
+    // separadas en lugar de un OR para evitar issues con el query builder
+    // de Supabase escapando comas/dots en valores con caracteres especiales.
+    const byBarcode = await this.sb
       .from('products')
       .select('*')
-      .eq('barcode', barcode)
+      .eq('barcode', code)
       .maybeSingle();
-    if (error) throw new Error(error.message);
-    return data ? mapProduct(data) : null;
+    if (byBarcode.error) throw new Error(byBarcode.error.message);
+    if (byBarcode.data) return mapProduct(byBarcode.data);
+
+    const bySku = await this.sb
+      .from('products')
+      .select('*')
+      .eq('sku', code)
+      .maybeSingle();
+    if (bySku.error) throw new Error(bySku.error.message);
+    return bySku.data ? mapProduct(bySku.data) : null;
   }
 
   async createProduct(input: ProductInput): Promise<Product> {
@@ -805,6 +834,7 @@ class SupabaseDriver implements DataDriver {
         tenant_id: s.tenantId,
         name: input.name,
         barcode: input.barcode,
+        sku: input.sku,
         price: input.price,
         cost: input.cost,
         category_id: input.categoryId,
@@ -840,6 +870,7 @@ class SupabaseDriver implements DataDriver {
     const patch: Record<string, unknown> = {};
     if (input.name !== undefined) patch.name = input.name;
     if (input.barcode !== undefined) patch.barcode = input.barcode;
+    if (input.sku !== undefined) patch.sku = input.sku;
     if (input.price !== undefined) patch.price = input.price;
     if (input.cost !== undefined) patch.cost = input.cost;
     if (input.categoryId !== undefined) patch.category_id = input.categoryId;
@@ -911,6 +942,7 @@ class SupabaseDriver implements DataDriver {
         method: p.method,
         amount: p.amount,
       })),
+      p_partial: input.partial ?? false,
     });
     if (rpcErr) throw new Error(rpcErr.message);
 
@@ -930,6 +962,24 @@ class SupabaseDriver implements DataDriver {
       p_sale_id: id,
     });
     if (error) throw new Error(error.message);
+  }
+
+  async addPaymentToSale(input: AddPaymentInput): Promise<Sale> {
+    const s = await this.requireSession();
+    const { error: rpcErr } = await this.sb.rpc('add_payment_to_sale_atomic', {
+      p_tenant_id: s.tenantId,
+      p_sale_id: input.saleId,
+      p_payments: input.payments.map((p) => ({ method: p.method, amount: p.amount })),
+    });
+    if (rpcErr) throw new Error(rpcErr.message);
+
+    const { data: full, error: fullErr } = await this.sb
+      .from('sales')
+      .select('*, sale_items(*), sale_payments(method, amount)')
+      .eq('id', input.saleId)
+      .single();
+    if (fullErr) throw new Error(fullErr.message);
+    return mapSale(full);
   }
 
   async listSales(q: SalesQuery): Promise<Sale[]> {
