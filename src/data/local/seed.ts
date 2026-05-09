@@ -44,6 +44,7 @@ export async function seedIfEmpty(): Promise<void> {
     posRoundTo: 1,
     posRequireCustomer: false,
     stockAlertsEnabled: true,
+    logoUrl: null,
   };
 
   // Demo: 1 sucursal con 2 depósitos (mostrador + trastienda) para que se

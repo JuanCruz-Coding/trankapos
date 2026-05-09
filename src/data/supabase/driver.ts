@@ -63,6 +63,7 @@ interface TenantRow {
   pos_round_to: string;
   pos_require_customer: boolean;
   stock_alerts_enabled: boolean;
+  logo_url: string | null;
 }
 
 function mapTenant(r: TenantRow): Tenant {
@@ -86,8 +87,11 @@ function mapTenant(r: TenantRow): Tenant {
     posRoundTo: Number(r.pos_round_to),
     posRequireCustomer: r.pos_require_customer,
     stockAlertsEnabled: r.stock_alerts_enabled,
+    logoUrl: r.logo_url ?? null,
   };
 }
+
+const LOGO_BUCKET = 'tenant-logos';
 
 // ============================================================
 // Mappers DB → TS. Postgres `numeric` viene como string en JSON.
@@ -530,6 +534,72 @@ class SupabaseDriver implements DataDriver {
       .single();
     if (error || !data) throw new Error(error?.message ?? 'No se pudo actualizar el tenant');
     return mapTenant(data as TenantRow);
+  }
+
+  async uploadTenantLogo(file: File): Promise<string> {
+    const s = await this.requireSession();
+    if (!file) throw new Error('No se eligió ningún archivo.');
+
+    // Path: {tenantId}/logo.{ext}. La extensión sale del MIME para evitar
+    // que extensiones falsas en el filename pasen el filtro client-side.
+    const ext = file.type === 'image/jpeg' ? 'jpg'
+              : file.type === 'image/webp' ? 'webp'
+              : 'png';
+    const path = `${s.tenantId}/logo.${ext}`;
+
+    // Si había un logo con otra extensión, lo borramos primero (sino quedan
+    // huérfanos en el bucket que cuentan como uso de Storage).
+    await this.cleanupStaleLogos(s.tenantId, ext).catch(() => {
+      // best-effort: si falla el cleanup no rompe el upload
+    });
+
+    const { error: upErr } = await this.sb.storage
+      .from(LOGO_BUCKET)
+      .upload(path, file, { upsert: true, contentType: file.type });
+    if (upErr) throw new Error(`No se pudo subir el logo: ${upErr.message}`);
+
+    // URL pública (el bucket es público)
+    const { data: urlData } = this.sb.storage.from(LOGO_BUCKET).getPublicUrl(path);
+    // Cache-buster para que el navegador no muestre el logo viejo cuando
+    // sobreescribimos en la misma URL.
+    const publicUrl = `${urlData.publicUrl}?v=${Date.now()}`;
+
+    const { error: updErr } = await this.sb
+      .from('tenants')
+      .update({ logo_url: publicUrl })
+      .eq('id', s.tenantId);
+    if (updErr) throw new Error(`Logo subido pero no se pudo guardar la URL: ${updErr.message}`);
+
+    return publicUrl;
+  }
+
+  async removeTenantLogo(): Promise<void> {
+    const s = await this.requireSession();
+
+    // Borramos cualquier extensión que pueda haber quedado.
+    await this.cleanupStaleLogos(s.tenantId, null).catch(() => {
+      // best-effort
+    });
+
+    const { error: updErr } = await this.sb
+      .from('tenants')
+      .update({ logo_url: null })
+      .eq('id', s.tenantId);
+    if (updErr) throw new Error(`No se pudo limpiar el logo: ${updErr.message}`);
+  }
+
+  /**
+   * Lista archivos en {tenantId}/ y borra los que no tengan la extensión que
+   * vamos a subir ahora. Si keepExt es null, borra todo (caso removeTenantLogo).
+   */
+  private async cleanupStaleLogos(tenantId: string, keepExt: string | null): Promise<void> {
+    const { data: list } = await this.sb.storage.from(LOGO_BUCKET).list(tenantId);
+    if (!list || list.length === 0) return;
+    const toRemove = list
+      .filter((f) => keepExt === null || !f.name.endsWith(`.${keepExt}`))
+      .map((f) => `${tenantId}/${f.name}`);
+    if (toRemove.length === 0) return;
+    await this.sb.storage.from(LOGO_BUCKET).remove(toRemove);
   }
 
   // ===== BRANCHES =====

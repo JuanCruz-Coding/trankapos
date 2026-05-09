@@ -59,6 +59,7 @@ function withTenantDefaults(t: Partial<Tenant> & Pick<Tenant, 'id' | 'name' | 'c
     posRoundTo: t.posRoundTo ?? 1,
     posRequireCustomer: t.posRequireCustomer ?? false,
     stockAlertsEnabled: t.stockAlertsEnabled ?? true,
+    logoUrl: t.logoUrl ?? null,
   };
 }
 import { hashPassword, verifyPassword } from '@/lib/hash';
@@ -271,6 +272,14 @@ export class LocalDriver implements DataDriver {
 
   async clearPendingPlan(): Promise<void> {
     // No aplica en LocalDriver.
+  }
+
+  async uploadTenantLogo(): Promise<string> {
+    throw new Error('Subir logo solo funciona con conexión online (driver de Supabase).');
+  }
+
+  async removeTenantLogo(): Promise<void> {
+    throw new Error('Eliminar logo solo funciona con conexión online (driver de Supabase).');
   }
 
   // --- branches ---

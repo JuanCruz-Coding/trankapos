@@ -47,6 +47,8 @@ export interface Tenant {
   posRequireCustomer: boolean;
   // Stock
   stockAlertsEnabled: boolean;
+  // Branding
+  logoUrl: string | null;
 }
 
 export interface TenantSettingsInput {

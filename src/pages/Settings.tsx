@@ -1,5 +1,5 @@
-import { useEffect, useState, type FormEvent } from 'react';
-import { Building2, Receipt, ShoppingCart, Boxes, Save } from 'lucide-react';
+import { useEffect, useRef, useState, type ChangeEvent, type FormEvent } from 'react';
+import { Building2, Receipt, ShoppingCart, Boxes, Save, Upload, Trash2, ImageOff } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import { Card, CardBody } from '@/components/ui/Card';
@@ -7,8 +7,10 @@ import { PageHeader } from '@/components/ui/PageHeader';
 import { data } from '@/data';
 import { useAuth } from '@/stores/auth';
 import { toast } from '@/stores/toast';
+import { confirmDialog } from '@/lib/dialog';
 import { TAX_CONDITIONS, type TaxCondition, type Tenant, type TenantSettingsInput } from '@/types';
 import { cn } from '@/lib/utils';
+import { LOGO_REQUIREMENTS_TEXT, validateLogoFile } from '@/lib/imageUpload';
 
 type Tab = 'empresa' | 'ticket' | 'pos' | 'stock';
 
@@ -36,6 +38,7 @@ interface FormState {
   posRoundTo: string;
   posRequireCustomer: boolean;
   stockAlertsEnabled: boolean;
+  logoUrl: string | null;
 }
 
 function tenantToForm(t: Tenant): FormState {
@@ -56,6 +59,7 @@ function tenantToForm(t: Tenant): FormState {
     posRoundTo: String(t.posRoundTo),
     posRequireCustomer: t.posRequireCustomer,
     stockAlertsEnabled: t.stockAlertsEnabled,
+    logoUrl: t.logoUrl,
   };
 }
 
@@ -173,7 +177,13 @@ export default function Settings() {
       <form onSubmit={handleSubmit}>
         <Card>
           <CardBody className="space-y-4">
-            {tab === 'empresa' && <EmpresaTab form={form} update={update} />}
+            {tab === 'empresa' && (
+              <EmpresaTab
+                form={form}
+                update={update}
+                onLogoChange={(url) => setForm((f) => (f ? { ...f, logoUrl: url } : f))}
+              />
+            )}
             {tab === 'ticket' && <TicketTab form={form} update={update} />}
             {tab === 'pos' && <PosTab form={form} update={update} />}
             {tab === 'stock' && <StockTab form={form} update={update} />}
@@ -189,9 +199,15 @@ interface TabProps {
   update: <K extends keyof FormState>(key: K, value: FormState[K]) => void;
 }
 
-function EmpresaTab({ form, update }: TabProps) {
+function EmpresaTab({
+  form,
+  update,
+  onLogoChange,
+}: TabProps & { onLogoChange: (url: string | null) => void }) {
   return (
-    <div className="grid gap-4 md:grid-cols-2">
+    <div className="space-y-4">
+      <LogoUploader logoUrl={form.logoUrl} onChange={onLogoChange} />
+      <div className="grid gap-4 md:grid-cols-2">
       <Field label="Razón social" hint="Nombre legal que aparece en comprobantes">
         <Input value={form.legalName} onChange={(e) => update('legalName', e.target.value)} />
       </Field>
@@ -231,6 +247,114 @@ function EmpresaTab({ form, update }: TabProps) {
           onChange={(e) => update('legalAddress', e.target.value)}
         />
       </Field>
+      </div>
+    </div>
+  );
+}
+
+function LogoUploader({
+  logoUrl,
+  onChange,
+}: {
+  logoUrl: string | null;
+  onChange: (url: string | null) => void;
+}) {
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [uploading, setUploading] = useState(false);
+
+  async function handleFile(e: ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    e.target.value = '';
+
+    const validation = await validateLogoFile(file);
+    if (!validation.ok) {
+      toast.error(validation.error);
+      return;
+    }
+
+    setUploading(true);
+    try {
+      const url = await data.uploadTenantLogo(file);
+      onChange(url);
+      toast.success('Logo actualizado');
+    } catch (err) {
+      toast.error((err as Error).message);
+    } finally {
+      setUploading(false);
+    }
+  }
+
+  async function handleRemove() {
+    const ok = await confirmDialog('¿Eliminar el logo del comercio?', {
+      text: 'Vas a volver a usar el logo por default en los tickets.',
+      confirmText: 'Eliminar',
+      danger: true,
+    });
+    if (!ok) return;
+    setUploading(true);
+    try {
+      await data.removeTenantLogo();
+      onChange(null);
+      toast.success('Logo eliminado');
+    } catch (err) {
+      toast.error((err as Error).message);
+    } finally {
+      setUploading(false);
+    }
+  }
+
+  return (
+    <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+      <div className="mb-2 text-xs font-medium text-slate-700">Logo del comercio</div>
+      <div className="flex items-start gap-4">
+        <div className="flex h-20 w-20 shrink-0 items-center justify-center rounded-lg border border-slate-200 bg-white">
+          {logoUrl ? (
+            <img
+              src={logoUrl}
+              alt="Logo"
+              className="h-full w-full rounded-lg object-contain p-1"
+            />
+          ) : (
+            <ImageOff className="h-8 w-8 text-slate-300" />
+          )}
+        </div>
+        <div className="min-w-0 flex-1">
+          <p className="mb-2 text-xs text-slate-500">{LOGO_REQUIREMENTS_TEXT}</p>
+          <div className="flex flex-wrap gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => fileInputRef.current?.click()}
+              disabled={uploading}
+            >
+              <Upload className="h-4 w-4" />
+              {logoUrl ? 'Cambiar' : 'Subir logo'}
+            </Button>
+            {logoUrl && (
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                onClick={handleRemove}
+                disabled={uploading}
+              >
+                <Trash2 className="h-4 w-4" />
+                Eliminar
+              </Button>
+            )}
+            {uploading && <span className="self-center text-xs text-slate-500">Procesando…</span>}
+          </div>
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="image/png,image/jpeg,image/webp"
+            className="hidden"
+            onChange={handleFile}
+          />
+        </div>
+      </div>
     </div>
   );
 }

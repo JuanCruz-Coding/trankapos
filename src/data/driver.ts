@@ -127,6 +127,10 @@ export interface DataDriver {
   // --- tenant ---
   getTenant(): Promise<Tenant>;
   updateTenantSettings(input: TenantSettingsInput): Promise<Tenant>;
+  /** Sube un logo (ya validado en cliente con validateLogoFile) y devuelve la URL pública. */
+  uploadTenantLogo(file: File): Promise<string>;
+  /** Elimina el logo del Storage y nullea logo_url en el tenant. */
+  removeTenantLogo(): Promise<void>;
 
   // --- plan / subscription ---
   getSubscription(): Promise<Subscription>;

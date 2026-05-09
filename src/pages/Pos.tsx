@@ -684,9 +684,16 @@ function ReceiptModal({
         <div className="text-center">
           {showLogo && (
             <img
-              src="/brand/isotipo.png"
+              src={tenant?.logoUrl || '/brand/isotipo.png'}
               alt="logo"
-              className="mx-auto mb-1 h-10 w-10 object-contain"
+              className="mx-auto mb-1 h-12 w-12 object-contain"
+              onError={(e) => {
+                // Si el logo del tenant falla (URL caída, CORS), caemos al isotipo.
+                const img = e.currentTarget;
+                if (img.src !== `${window.location.origin}/brand/isotipo.png`) {
+                  img.src = '/brand/isotipo.png';
+                }
+              }}
             />
           )}
           <div className="font-bold">{businessName}</div>
