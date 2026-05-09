@@ -1,6 +1,6 @@
 import { useState, type FormEvent } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
-import { Plus, Pencil, Trash2, Users as UsersIcon } from 'lucide-react';
+import { Plus, Pencil, Trash2 } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import { Modal } from '@/components/ui/Modal';
@@ -11,7 +11,19 @@ import { useAuth } from '@/stores/auth';
 import { toast } from '@/stores/toast';
 import { safeParse, userSchema } from '@/lib/schemas';
 import { confirmDialog } from '@/lib/dialog';
-import type { Role, User } from '@/types';
+import {
+  PERMISSION_DEFAULTS_BY_ROLE,
+  PERMISSION_DESCRIPTIONS,
+  PERMISSION_KEYS,
+  PERMISSION_LABELS,
+} from '@/lib/permissions';
+import type {
+  BranchAccess,
+  Permission,
+  PermissionsMap,
+  Role,
+  User,
+} from '@/types';
 
 const ROLES: { value: Role; label: string }[] = [
   { value: 'owner', label: 'Dueño' },
@@ -27,6 +39,10 @@ interface FormState {
   role: Role;
   branchId: string;
   active: boolean;
+  /** 'all' o array de branchIds */
+  branchAccessMode: 'all' | 'specific';
+  branchAccessIds: string[];
+  permissionOverrides: PermissionsMap;
 }
 
 const emptyForm: FormState = {
@@ -36,13 +52,13 @@ const emptyForm: FormState = {
   role: 'cashier',
   branchId: '',
   active: true,
+  branchAccessMode: 'specific',
+  branchAccessIds: [],
+  permissionOverrides: {},
 };
 
 export default function Users() {
   const { session } = useAuth();
-  // refreshKey: con drivers que no son Dexie (ej. Supabase), useLiveQuery no se
-  // entera de las escrituras. Bumpeamos este contador después de cada mutation
-  // para forzar el re-fetch.
   const [refreshKey, setRefreshKey] = useState(0);
   const users = useLiveQuery(() => data.listUsers(), [session?.tenantId, refreshKey]);
   const branches = useLiveQuery(() => data.listBranches(), [session?.tenantId, refreshKey]);
@@ -50,11 +66,20 @@ export default function Users() {
   const [form, setForm] = useState<FormState>(emptyForm);
 
   function openNew() {
-    setForm({ ...emptyForm, branchId: branches?.[0]?.id ?? '' });
+    const firstBranch = branches?.[0]?.id ?? '';
+    setForm({
+      ...emptyForm,
+      branchId: firstBranch,
+      branchAccessMode: 'specific',
+      branchAccessIds: firstBranch ? [firstBranch] : [],
+    });
     setModal(true);
   }
 
   function openEdit(u: User) {
+    const access = u.branchAccess;
+    const mode: 'all' | 'specific' = access === 'all' ? 'all' : 'specific';
+    const ids = Array.isArray(access) ? access : [];
     setForm({
       id: u.id,
       email: u.email,
@@ -63,8 +88,35 @@ export default function Users() {
       role: u.role,
       branchId: u.branchId ?? '',
       active: u.active,
+      branchAccessMode: mode,
+      branchAccessIds: ids,
+      permissionOverrides: u.permissionOverrides ?? {},
     });
     setModal(true);
+  }
+
+  function toggleBranchAccess(branchId: string) {
+    setForm((f) => {
+      const exists = f.branchAccessIds.includes(branchId);
+      return {
+        ...f,
+        branchAccessIds: exists
+          ? f.branchAccessIds.filter((id) => id !== branchId)
+          : [...f.branchAccessIds, branchId],
+      };
+    });
+  }
+
+  function setPermissionOverride(key: Permission, value: boolean | undefined) {
+    setForm((f) => {
+      const next: PermissionsMap = { ...f.permissionOverrides };
+      if (value === undefined) {
+        delete next[key];
+      } else {
+        next[key] = value;
+      }
+      return { ...f, permissionOverrides: next };
+    });
   }
 
   async function handleSubmit(e: FormEvent) {
@@ -81,12 +133,30 @@ export default function Users() {
     if (!form.id && !parsed.data.password) {
       return toast.error('La contraseña es obligatoria al crear un usuario');
     }
+
+    // Resolver branchAccess que se manda al driver
+    const branchAccess: BranchAccess =
+      form.branchAccessMode === 'all' ? 'all' : form.branchAccessIds;
+
+    if (form.branchAccessMode === 'specific' && branchAccess.length === 0 && form.role !== 'owner') {
+      return toast.error('El usuario debe tener acceso a al menos una sucursal');
+    }
+
     try {
       if (form.id) {
-        await data.updateUser(form.id, parsed.data);
+        await data.updateUser(form.id, {
+          ...parsed.data,
+          branchAccess,
+          permissionOverrides: form.permissionOverrides,
+        });
         toast.success('Usuario actualizado');
       } else {
-        await data.createUser({ ...parsed.data, password: parsed.data.password! });
+        await data.createUser({
+          ...parsed.data,
+          password: parsed.data.password!,
+          branchAccess,
+          permissionOverrides: form.permissionOverrides,
+        });
         toast.success('Usuario creado');
       }
       setModal(false);
@@ -134,14 +204,28 @@ export default function Users() {
                 <th className="px-4 py-3">Nombre</th>
                 <th className="px-4 py-3">Email</th>
                 <th className="px-4 py-3">Rol</th>
-                <th className="px-4 py-3">Sucursal</th>
+                <th className="px-4 py-3">Acceso</th>
                 <th className="px-4 py-3">Estado</th>
                 <th className="px-4 py-3" />
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
               {users!.map((u) => {
-                const branch = branches?.find((b) => b.id === u.branchId);
+                const access = u.branchAccess;
+                let accessLabel: string;
+                if (u.role === 'owner' || access === 'all') {
+                  accessLabel = 'Todas las sucursales';
+                } else if (Array.isArray(access) && access.length > 0) {
+                  const names = access
+                    .map((id) => branches?.find((b) => b.id === id)?.name)
+                    .filter(Boolean);
+                  accessLabel =
+                    names.length === 1
+                      ? (names[0] as string)
+                      : `${names.length} sucursales`;
+                } else {
+                  accessLabel = 'Sin acceso';
+                }
                 return (
                   <tr key={u.id} className="hover:bg-slate-50">
                     <td className="px-4 py-3">
@@ -154,7 +238,7 @@ export default function Users() {
                     </td>
                     <td className="px-4 py-3 text-slate-600">{u.email}</td>
                     <td className="px-4 py-3 capitalize">{u.role}</td>
-                    <td className="px-4 py-3 text-slate-600">{branch?.name ?? '—'}</td>
+                    <td className="px-4 py-3 text-slate-600">{accessLabel}</td>
                     <td className="px-4 py-3">
                       <span
                         className={
@@ -197,24 +281,27 @@ export default function Users() {
         open={modal}
         onClose={() => setModal(false)}
         title={form.id ? 'Editar usuario' : 'Nuevo usuario'}
+        widthClass="max-w-2xl"
       >
-        <form onSubmit={handleSubmit} className="space-y-3">
-          <div>
-            <label className="mb-1 block text-xs font-medium text-slate-700">Nombre</label>
-            <Input
-              required
-              value={form.name}
-              onChange={(e) => setForm({ ...form, name: e.target.value })}
-            />
-          </div>
-          <div>
-            <label className="mb-1 block text-xs font-medium text-slate-700">Email</label>
-            <Input
-              type="email"
-              required
-              value={form.email}
-              onChange={(e) => setForm({ ...form, email: e.target.value })}
-            />
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <div className="grid gap-3 md:grid-cols-2">
+            <div>
+              <label className="mb-1 block text-xs font-medium text-slate-700">Nombre</label>
+              <Input
+                required
+                value={form.name}
+                onChange={(e) => setForm({ ...form, name: e.target.value })}
+              />
+            </div>
+            <div>
+              <label className="mb-1 block text-xs font-medium text-slate-700">Email</label>
+              <Input
+                type="email"
+                required
+                value={form.email}
+                onChange={(e) => setForm({ ...form, email: e.target.value })}
+              />
+            </div>
           </div>
           <div>
             <label className="mb-1 block text-xs font-medium text-slate-700">
@@ -243,7 +330,9 @@ export default function Users() {
               </select>
             </div>
             <div>
-              <label className="mb-1 block text-xs font-medium text-slate-700">Sucursal</label>
+              <label className="mb-1 block text-xs font-medium text-slate-700">
+                Sucursal por defecto
+              </label>
               <select
                 className="h-10 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm"
                 value={form.branchId}
@@ -256,8 +345,136 @@ export default function Users() {
                   </option>
                 ))}
               </select>
+              <p className="mt-1 text-[11px] text-slate-500">
+                La sucursal con la que el user arranca al loguearse.
+              </p>
             </div>
           </div>
+
+          {/* ---- Acceso a sucursales ---- */}
+          <fieldset className="rounded-lg border border-slate-200 p-3">
+            <legend className="px-2 text-xs font-semibold uppercase text-slate-500">
+              Acceso a sucursales
+            </legend>
+            <div className="space-y-2 text-sm">
+              <label className="flex items-start gap-2">
+                <input
+                  type="radio"
+                  name="branchAccessMode"
+                  checked={form.branchAccessMode === 'all'}
+                  onChange={() => setForm({ ...form, branchAccessMode: 'all' })}
+                  className="mt-0.5 h-4 w-4"
+                />
+                <span>
+                  <strong>Todas las sucursales</strong>
+                  <span className="block text-xs text-slate-500">
+                    Incluye sucursales que se creen a futuro. Recomendado para owner / regional.
+                  </span>
+                </span>
+              </label>
+              <label className="flex items-start gap-2">
+                <input
+                  type="radio"
+                  name="branchAccessMode"
+                  checked={form.branchAccessMode === 'specific'}
+                  onChange={() => setForm({ ...form, branchAccessMode: 'specific' })}
+                  className="mt-0.5 h-4 w-4"
+                />
+                <span>
+                  <strong>Sucursales específicas</strong>
+                  <span className="block text-xs text-slate-500">
+                    Marcá abajo cuáles puede ver. No verá las que no estén marcadas.
+                  </span>
+                </span>
+              </label>
+              {form.branchAccessMode === 'specific' && (
+                <div className="ml-6 mt-2 grid gap-1 sm:grid-cols-2">
+                  {(branches ?? []).map((b) => (
+                    <label key={b.id} className="flex items-center gap-2 text-sm">
+                      <input
+                        type="checkbox"
+                        checked={form.branchAccessIds.includes(b.id)}
+                        onChange={() => toggleBranchAccess(b.id)}
+                        className="h-4 w-4"
+                      />
+                      {b.name}
+                    </label>
+                  ))}
+                  {(branches ?? []).length === 0 && (
+                    <span className="text-xs text-slate-400">No hay sucursales todavía.</span>
+                  )}
+                </div>
+              )}
+            </div>
+          </fieldset>
+
+          {/* ---- Permisos avanzados ---- */}
+          {form.role !== 'owner' && (
+            <fieldset className="rounded-lg border border-slate-200 p-3">
+              <legend className="px-2 text-xs font-semibold uppercase text-slate-500">
+                Permisos avanzados
+              </legend>
+              <p className="mb-2 text-xs text-slate-500">
+                Los permisos por default vienen del rol. Usá los toggles para hacer
+                excepciones a un usuario en particular. Owner siempre tiene todos los permisos.
+              </p>
+              <div className="space-y-1.5">
+                {PERMISSION_KEYS.map((key) => {
+                  const roleDefault = PERMISSION_DEFAULTS_BY_ROLE[form.role][key];
+                  const override = form.permissionOverrides[key];
+                  const effective = override !== undefined ? override : roleDefault;
+                  const isOverride = override !== undefined;
+                  return (
+                    <div
+                      key={key}
+                      className="flex items-start justify-between gap-3 rounded p-1.5 hover:bg-slate-50"
+                    >
+                      <div className="min-w-0 flex-1">
+                        <div className="text-sm font-medium text-slate-800">
+                          {PERMISSION_LABELS[key]}
+                          {isOverride && (
+                            <span className="ml-2 rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-700">
+                              override
+                            </span>
+                          )}
+                        </div>
+                        <div className="text-[11px] text-slate-500">
+                          {PERMISSION_DESCRIPTIONS[key]}{' '}
+                          <span className="text-slate-400">
+                            (Por rol {form.role}: {roleDefault ? 'sí' : 'no'})
+                          </span>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-1">
+                        <input
+                          type="checkbox"
+                          checked={effective}
+                          onChange={(e) =>
+                            setPermissionOverride(
+                              key,
+                              e.target.checked === roleDefault ? undefined : e.target.checked,
+                            )
+                          }
+                          className="h-4 w-4"
+                        />
+                        {isOverride && (
+                          <button
+                            type="button"
+                            className="text-[10px] text-slate-400 underline hover:text-slate-700"
+                            onClick={() => setPermissionOverride(key, undefined)}
+                            title="Volver al default del rol"
+                          >
+                            reset
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </fieldset>
+          )}
+
           <label className="flex items-center gap-2 text-sm">
             <input
               type="checkbox"
@@ -265,8 +482,9 @@ export default function Users() {
               onChange={(e) => setForm({ ...form, active: e.target.checked })}
               className="h-4 w-4"
             />
-            Activo
+            Usuario activo
           </label>
+
           <div className="flex justify-end gap-2 pt-2">
             <Button type="button" variant="outline" onClick={() => setModal(false)}>
               Cancelar

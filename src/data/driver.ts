@@ -1,9 +1,11 @@
 import type {
   AuthSession,
+  BranchAccess,
   Branch,
   CashMovement,
   CashRegister,
   Category,
+  PermissionsMap,
   Plan,
   PlanUsage,
   Product,
@@ -52,6 +54,10 @@ export interface UserInput {
   role: Role;
   branchId: string | null;
   active: boolean;
+  /** Set de sucursales accesibles. 'all' = todas. Si se omite, no se modifica. */
+  branchAccess?: BranchAccess;
+  /** Overrides de permisos. Si se omite, no se modifica (mantiene los actuales). */
+  permissionOverrides?: PermissionsMap;
 }
 
 export interface BranchInput {

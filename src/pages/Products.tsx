@@ -9,6 +9,8 @@ import { PageHeader } from '@/components/ui/PageHeader';
 import { data } from '@/data';
 import { useAuth } from '@/stores/auth';
 import { formatARS } from '@/lib/currency';
+import { cn } from '@/lib/utils';
+import { usePermission } from '@/lib/permissions';
 import { toast } from '@/stores/toast';
 import { CSV_TEMPLATE, parseCsv, type ParseError, type ParsedRow } from '@/lib/csvImport';
 import { productSchema, safeParse } from '@/lib/schemas';
@@ -55,6 +57,8 @@ interface ImportStats {
 
 export default function Products() {
   const { session, activeBranchId } = useAuth();
+  const canViewCosts = usePermission('view_costs');
+  const canManageProducts = usePermission('manage_products');
   const [refreshKey, setRefreshKey] = useState(0);
   const bumpRefresh = () => setRefreshKey((k) => k + 1);
   const products = useLiveQuery(async () => {
@@ -329,57 +333,119 @@ export default function Products() {
               <tr>
                 <th className="px-4 py-3">Producto</th>
                 <th className="px-4 py-3">Código</th>
+                <th className="hidden px-4 py-3 md:table-cell">Categoría</th>
                 <th className="px-4 py-3 text-right">Precio</th>
-                <th className="px-4 py-3 text-right">Costo</th>
-                <th className="px-4 py-3 text-right">Stock total</th>
+                {canViewCosts && (
+                  <th className="hidden px-4 py-3 text-right md:table-cell">Costo</th>
+                )}
+                {canViewCosts && (
+                  <th className="hidden px-4 py-3 text-right lg:table-cell">Margen</th>
+                )}
+                <th className="hidden px-4 py-3 text-right lg:table-cell">IVA</th>
+                <th className="px-4 py-3 text-right">Stock</th>
                 <th className="px-4 py-3" />
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
               {filtered.map((p) => {
                 const qty = stockByProduct.get(p.id) ?? 0;
+                const category = (categories ?? []).find((c) => c.id === p.categoryId);
+                const marginAbs = p.price - p.cost;
+                const marginPct = p.cost > 0 ? (marginAbs / p.cost) * 100 : null;
+                const marginColor =
+                  marginAbs < 0 ? 'text-red-600' : marginAbs === 0 ? 'text-slate-500' : 'text-emerald-700';
                 return (
                   <tr key={p.id} className="hover:bg-slate-50">
                     <td className="px-4 py-3">
-                      <div className="flex items-center gap-3">
+                      <div className="flex items-start gap-3">
                         <div className="rounded-md bg-slate-100 p-2 text-slate-500">
                           <Package className="h-4 w-4" />
                         </div>
-                        <div>
-                          <div className="font-medium text-slate-900">{p.name}</div>
-                          {!p.active && <div className="text-xs text-red-500">Inactivo</div>}
+                        <div className="min-w-0">
+                          <div className="truncate font-medium text-slate-900">{p.name}</div>
+                          <div className="mt-0.5 flex flex-wrap items-center gap-1 text-[10px]">
+                            {!p.active && (
+                              <span className="rounded bg-red-50 px-1.5 py-0.5 font-medium text-red-600">
+                                Inactivo
+                              </span>
+                            )}
+                            {!p.trackStock && (
+                              <span className="rounded bg-slate-100 px-1.5 py-0.5 text-slate-600">
+                                Sin stock
+                              </span>
+                            )}
+                            {p.allowSaleWhenZero && p.trackStock && (
+                              <span className="rounded bg-amber-50 px-1.5 py-0.5 text-amber-700">
+                                Vende en 0
+                              </span>
+                            )}
+                          </div>
                         </div>
                       </div>
                     </td>
                     <td className="px-4 py-3 text-slate-600">
-                      {p.barcode ? (
-                        <span className="font-mono text-xs">{p.barcode}</span>
-                      ) : p.sku ? (
-                        <span className="font-mono text-xs text-cyan-700">{p.sku}</span>
+                      <div className="flex flex-col gap-0.5 font-mono text-[11px]">
+                        {p.barcode && <span title="Código de barras">{p.barcode}</span>}
+                        {p.sku && (
+                          <span className="text-cyan-700" title="SKU interno">
+                            {p.sku}
+                          </span>
+                        )}
+                        {!p.barcode && !p.sku && <span className="text-slate-400">—</span>}
+                      </div>
+                    </td>
+                    <td className="hidden px-4 py-3 text-slate-600 md:table-cell">
+                      {category ? (
+                        <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs">
+                          {category.name}
+                        </span>
                       ) : (
-                        '—'
+                        <span className="text-slate-400">—</span>
                       )}
                     </td>
-                    <td className="px-4 py-3 text-right font-semibold">{formatARS(p.price)}</td>
-                    <td className="px-4 py-3 text-right text-slate-500">{formatARS(p.cost)}</td>
-                    <td className="px-4 py-3 text-right">
+                    <td className="px-4 py-3 text-right font-semibold tabular-nums">{formatARS(p.price)}</td>
+                    {canViewCosts && (
+                      <td className="hidden px-4 py-3 text-right tabular-nums text-slate-500 md:table-cell">
+                        {formatARS(p.cost)}
+                      </td>
+                    )}
+                    {canViewCosts && (
+                      <td className={cn('hidden px-4 py-3 text-right tabular-nums lg:table-cell', marginColor)}>
+                        {p.cost > 0 ? (
+                          <div className="flex flex-col items-end leading-tight">
+                            <span className="font-medium">{formatARS(marginAbs)}</span>
+                            <span className="text-[10px] opacity-80">
+                              {marginPct !== null ? `${marginPct.toFixed(0)}%` : '—'}
+                            </span>
+                          </div>
+                        ) : (
+                          <span className="text-slate-400">—</span>
+                        )}
+                      </td>
+                    )}
+                    <td className="hidden px-4 py-3 text-right tabular-nums text-slate-500 lg:table-cell">
+                      {p.taxRate}%
+                    </td>
+                    <td className="px-4 py-3 text-right tabular-nums">
                       <span className={qty <= 0 ? 'text-red-600' : ''}>{qty}</span>
                     </td>
                     <td className="px-4 py-3 text-right">
-                      <div className="flex justify-end gap-1">
-                        <button
-                          onClick={() => openEdit(p)}
-                          className="rounded-md p-2 text-slate-500 hover:bg-slate-100 hover:text-slate-900"
-                        >
-                          <Pencil className="h-4 w-4" />
-                        </button>
-                        <button
-                          onClick={() => handleDelete(p)}
-                          className="rounded-md p-2 text-slate-500 hover:bg-red-50 hover:text-red-600"
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </button>
-                      </div>
+                      {canManageProducts && (
+                        <div className="flex justify-end gap-1">
+                          <button
+                            onClick={() => openEdit(p)}
+                            className="rounded-md p-2 text-slate-500 hover:bg-slate-100 hover:text-slate-900"
+                          >
+                            <Pencil className="h-4 w-4" />
+                          </button>
+                          <button
+                            onClick={() => handleDelete(p)}
+                            className="rounded-md p-2 text-slate-500 hover:bg-red-50 hover:text-red-600"
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </button>
+                        </div>
+                      )}
                     </td>
                   </tr>
                 );

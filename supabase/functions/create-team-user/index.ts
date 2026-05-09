@@ -27,6 +27,10 @@ interface Body {
   role: 'owner' | 'manager' | 'cashier';
   branchId: string | null;
   active?: boolean;
+  /** 'all' = todas las sucursales (fila NULL); array = ids específicos. */
+  branchAccess?: 'all' | string[] | null;
+  /** Overrides de permisos finos. Va a memberships.permissions. */
+  permissionOverrides?: Record<string, boolean> | null;
 }
 
 Deno.serve(async (req) => {
@@ -52,8 +56,16 @@ Deno.serve(async (req) => {
   }
 
   try {
-    const { email, password, name, role, branchId, active = true } =
-      (await req.json()) as Body;
+    const {
+      email,
+      password,
+      name,
+      role,
+      branchId,
+      active = true,
+      branchAccess,
+      permissionOverrides,
+    } = (await req.json()) as Body;
 
     if (!email || !password || !name || !role) {
       return jsonResponse(
@@ -151,11 +163,43 @@ Deno.serve(async (req) => {
       role,
       branch_id: branchId,
       active,
+      permissions: permissionOverrides ?? {},
     });
     if (memInsErr) {
       await adminClient.from('profiles').delete().eq('id', newUserId);
       await adminClient.auth.admin.deleteUser(newUserId);
       return jsonResponse({ error: `Error creando membership: ${memInsErr.message}` }, 500);
+    }
+
+    // 7. user_branch_access según branchAccess solicitado.
+    // Defaults razonables si no se pasa: owner → fila NULL (todas); otros → branchId si tiene.
+    let accessRows: { user_id: string; tenant_id: string; branch_id: string | null }[] = [];
+    if (branchAccess === 'all') {
+      accessRows = [{ user_id: newUserId, tenant_id: tenantId, branch_id: null }];
+    } else if (Array.isArray(branchAccess) && branchAccess.length > 0) {
+      accessRows = branchAccess.map((bid) => ({
+        user_id: newUserId,
+        tenant_id: tenantId,
+        branch_id: bid,
+      }));
+    } else if (role === 'owner') {
+      accessRows = [{ user_id: newUserId, tenant_id: tenantId, branch_id: null }];
+    } else if (branchId) {
+      accessRows = [{ user_id: newUserId, tenant_id: tenantId, branch_id: branchId }];
+    }
+    if (accessRows.length > 0) {
+      const { error: accessErr } = await adminClient
+        .from('user_branch_access')
+        .insert(accessRows);
+      if (accessErr) {
+        await adminClient.from('memberships').delete().eq('user_id', newUserId);
+        await adminClient.from('profiles').delete().eq('id', newUserId);
+        await adminClient.auth.admin.deleteUser(newUserId);
+        return jsonResponse(
+          { error: `Error creando branch access: ${accessErr.message}` },
+          500,
+        );
+      }
     }
 
     return jsonResponse(

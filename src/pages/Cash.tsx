@@ -12,9 +12,11 @@ import { useAuth } from '@/stores/auth';
 import { formatARS } from '@/lib/currency';
 import { formatDateTime } from '@/lib/dates';
 import { toast } from '@/stores/toast';
+import { usePermission } from '@/lib/permissions';
 
 export default function Cash() {
   const { activeBranchId, session } = useAuth();
+  const canOpenClose = usePermission('cash_register_open_close');
   const [openModal, setOpenModal] = useState(false);
   const [closeModal, setCloseModal] = useState(false);
   const [mvModal, setMvModal] = useState<false | 'in' | 'out'>(false);
@@ -81,14 +83,20 @@ export default function Cash() {
               <Button variant="outline" onClick={() => setMvModal('out')}>
                 <ArrowUpCircle className="h-4 w-4" /> Egreso
               </Button>
-              <Button variant="danger" onClick={() => setCloseModal(true)}>
-                <Lock className="h-4 w-4" /> Cerrar caja
-              </Button>
+              {canOpenClose && (
+                <Button variant="danger" onClick={() => setCloseModal(true)}>
+                  <Lock className="h-4 w-4" /> Cerrar caja
+                </Button>
+              )}
             </>
-          ) : (
+          ) : canOpenClose ? (
             <Button onClick={() => setOpenModal(true)}>
               <Unlock className="h-4 w-4" /> Abrir caja
             </Button>
+          ) : (
+            <span className="text-xs text-slate-500">
+              Sin permiso para abrir caja
+            </span>
           )
         }
       />

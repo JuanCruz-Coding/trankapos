@@ -10,6 +10,7 @@ import type {
   Tenant,
   Transfer,
   User,
+  UserBranchAccess,
   Warehouse,
 } from '@/types';
 
@@ -43,6 +44,7 @@ export class TrankaPosDB extends Dexie {
   cashMovements!: Table<CashMovement, string>;
   transfers!: Table<Transfer, string>;
   session!: Table<SessionRow, string>;
+  userBranchAccess!: Table<UserBranchAccess, string>;
 
   constructor() {
     super('trankapos');
@@ -198,6 +200,27 @@ export class TrankaPosDB extends Dexie {
         const updated = { ...sess, branchId: sess.depotId ?? null };
         delete (updated as { depotId?: string | null }).depotId;
         await sessionTable.put(updated);
+      }
+    });
+
+    // v4: tabla userBranchAccess para permisos por sucursal
+    // Backfill: por cada user existente seedeamos su acceso según role/branchId.
+    this.version(4).stores({
+      userBranchAccess: 'id, userId, [userId+tenantId], branchId',
+    }).upgrade(async (tx) => {
+      const usersTable = tx.table<User>('users');
+      const allUsers = await usersTable.toArray();
+      const accessTable = tx.table<UserBranchAccess>('userBranchAccess');
+      for (const u of allUsers) {
+        // Owner o user sin branchId asignado → fila NULL (acceso a todas)
+        const branchId = u.role === 'owner' || !u.branchId ? null : u.branchId;
+        await accessTable.put({
+          id: crypto.randomUUID(),
+          userId: u.id,
+          tenantId: u.tenantId,
+          branchId,
+          createdAt: u.createdAt,
+        });
       }
     });
   }

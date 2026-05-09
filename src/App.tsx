@@ -51,13 +51,20 @@ export function App() {
         >
           <Route index element={<Navigate to="/pos" replace />} />
           <Route path="pos" element={<Pos />} />
-          <Route path="dashboard" element={<Dashboard />} />
+          <Route
+            path="dashboard"
+            element={
+              <ProtectedRoute permission="view_reports">
+                <Dashboard />
+              </ProtectedRoute>
+            }
+          />
           <Route path="products" element={<Products />} />
           <Route path="stock" element={<Stock />} />
           <Route
             path="transfers"
             element={
-              <ProtectedRoute roles={['owner', 'manager']}>
+              <ProtectedRoute permission="do_transfers">
                 <Transfers />
               </ProtectedRoute>
             }
@@ -67,7 +74,7 @@ export function App() {
           <Route
             path="reports"
             element={
-              <ProtectedRoute roles={['owner', 'manager']}>
+              <ProtectedRoute permission="view_reports">
                 <Reports />
               </ProtectedRoute>
             }
@@ -75,7 +82,7 @@ export function App() {
           <Route
             path="branches"
             element={
-              <ProtectedRoute roles={['owner', 'manager']}>
+              <ProtectedRoute permission="manage_branches">
                 <Branches />
               </ProtectedRoute>
             }
@@ -83,7 +90,7 @@ export function App() {
           <Route
             path="warehouses"
             element={
-              <ProtectedRoute roles={['owner', 'manager']}>
+              <ProtectedRoute permission="manage_branches">
                 <Warehouses />
               </ProtectedRoute>
             }
@@ -91,7 +98,7 @@ export function App() {
           <Route
             path="users"
             element={
-              <ProtectedRoute roles={['owner', 'manager']}>
+              <ProtectedRoute permission="manage_users">
                 <Users />
               </ProtectedRoute>
             }
@@ -116,7 +123,7 @@ export function App() {
           <Route
             path="settings"
             element={
-              <ProtectedRoute roles={['owner']}>
+              <ProtectedRoute permission="manage_settings">
                 <Settings />
               </ProtectedRoute>
             }

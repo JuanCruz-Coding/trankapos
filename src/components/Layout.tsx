@@ -22,28 +22,30 @@ import { useAuth } from '@/stores/auth';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { data } from '@/data';
 import { cn } from '@/lib/utils';
-import type { Role } from '@/types';
+import { hasPermission } from '@/lib/permissions';
+import type { Permission, Role } from '@/types';
 
 interface NavItem {
   to: string;
   label: string;
   icon: typeof LayoutDashboard;
   roles?: Role[];
+  permission?: Permission;
 }
 
 const nav: NavItem[] = [
   { to: '/pos', label: 'Vender', icon: ShoppingCart },
-  { to: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
+  { to: '/dashboard', label: 'Dashboard', icon: LayoutDashboard, permission: 'view_reports' },
   { to: '/products', label: 'Productos', icon: Package },
   { to: '/stock', label: 'Stock', icon: Boxes },
-  { to: '/transfers', label: 'Transferencias', icon: TrendingUp, roles: ['owner', 'manager'] },
+  { to: '/transfers', label: 'Transferencias', icon: TrendingUp, permission: 'do_transfers' },
   { to: '/cash', label: 'Caja', icon: Wallet },
   { to: '/sales', label: 'Ventas', icon: Receipt },
-  { to: '/reports', label: 'Reportes', icon: BarChart3, roles: ['owner', 'manager'] },
-  { to: '/branches', label: 'Sucursales', icon: Store, roles: ['owner', 'manager'] },
-  { to: '/warehouses', label: 'Depósitos', icon: Boxes, roles: ['owner', 'manager'] },
-  { to: '/users', label: 'Usuarios', icon: Users, roles: ['owner', 'manager'] },
-  { to: '/settings', label: 'Configuración', icon: Cog, roles: ['owner'] },
+  { to: '/reports', label: 'Reportes', icon: BarChart3, permission: 'view_reports' },
+  { to: '/branches', label: 'Sucursales', icon: Store, permission: 'manage_branches' },
+  { to: '/warehouses', label: 'Depósitos', icon: Boxes, permission: 'manage_branches' },
+  { to: '/users', label: 'Usuarios', icon: Users, permission: 'manage_users' },
+  { to: '/settings', label: 'Configuración', icon: Cog, permission: 'manage_settings' },
   { to: '/plan', label: 'Mi plan', icon: Crown, roles: ['owner'] },
   { to: '/help', label: 'Ayuda', icon: HelpCircle },
 ];
@@ -61,7 +63,22 @@ export function Layout({ children }: PropsWithChildren) {
 
   if (!session) return null;
 
-  const filteredNav = nav.filter((n) => !n.roles || n.roles.includes(session.role));
+  // Las branches que el switcher muestra: si tiene 'all' u owner, todas;
+  // sino, solo las accesibles. Las RLS ya filtran las branches que vienen de
+  // la query, pero por las dudas filtramos en cliente también.
+  const accessibleBranches =
+    session.role === 'owner' || session.branchAccess === 'all'
+      ? branches ?? []
+      : (branches ?? []).filter((b) =>
+          Array.isArray(session.branchAccess) && session.branchAccess.includes(b.id),
+        );
+  const showSwitcher = accessibleBranches.length > 1;
+
+  const filteredNav = nav.filter((n) => {
+    if (n.roles && !n.roles.includes(session.role)) return false;
+    if (n.permission && !hasPermission(session, n.permission)) return false;
+    return true;
+  });
 
   const sidebar = (
     <aside className="flex h-full w-60 shrink-0 flex-col border-r border-slate-200 bg-white">
@@ -96,18 +113,27 @@ export function Layout({ children }: PropsWithChildren) {
         })}
       </nav>
       <div className="border-t border-slate-200 p-3">
-        <div className="mb-2 text-xs text-slate-500">Sucursal activa</div>
-        <select
-          className="mb-3 h-9 w-full rounded-lg border border-slate-300 bg-white px-2 text-sm"
-          value={activeBranchId ?? ''}
-          onChange={(e) => setActiveBranch(e.target.value)}
-        >
-          {branches?.map((b) => (
-            <option key={b.id} value={b.id}>
-              {b.name}
-            </option>
-          ))}
-        </select>
+        {showSwitcher ? (
+          <>
+            <div className="mb-2 text-xs text-slate-500">Sucursal activa</div>
+            <select
+              className="mb-3 h-9 w-full rounded-lg border border-slate-300 bg-white px-2 text-sm"
+              value={activeBranchId ?? ''}
+              onChange={(e) => setActiveBranch(e.target.value)}
+            >
+              {accessibleBranches.map((b) => (
+                <option key={b.id} value={b.id}>
+                  {b.name}
+                </option>
+              ))}
+            </select>
+          </>
+        ) : accessibleBranches[0] ? (
+          <div className="mb-3 rounded-lg bg-ice px-3 py-1.5 text-xs text-navy">
+            <div className="text-[10px] uppercase tracking-wide text-slate-500">Sucursal</div>
+            <div className="font-semibold">{accessibleBranches[0].name}</div>
+          </div>
+        ) : null}
         <div className="mb-2 flex items-center gap-2">
           <div className="flex h-8 w-8 items-center justify-center rounded-full bg-slate-200 text-sm font-semibold text-slate-700">
             {session.name[0]?.toUpperCase()}

@@ -88,6 +88,10 @@ export interface User {
   branchId: string | null;
   active: boolean;
   createdAt: string;
+  /** Overrides en jsonb. hasPermission combina con defaults del rol. */
+  permissionOverrides?: PermissionsMap;
+  /** Resuelto al listar — qué sucursales puede operar este user. */
+  branchAccess?: BranchAccess;
 }
 
 export interface Branch {
@@ -219,6 +223,37 @@ export interface Transfer {
   items: { productId: string; qty: number }[];
 }
 
+export type Permission =
+  | 'view_costs'
+  | 'view_reports'
+  | 'view_other_branches_stock'
+  | 'void_sales'
+  | 'do_transfers'
+  | 'adjust_stock'
+  | 'manage_products'
+  | 'manage_branches'
+  | 'manage_users'
+  | 'manage_settings'
+  | 'apply_discount_above_default'
+  | 'cash_register_open_close';
+
+export type PermissionsMap = Partial<Record<Permission, boolean>>;
+
+export interface UserBranchAccess {
+  id: string;
+  userId: string;
+  tenantId: string;
+  /** null = acceso a todas las sucursales del tenant. */
+  branchId: string | null;
+  createdAt: string;
+}
+
+/**
+ * 'all' = acceso a todas las sucursales (fila NULL en user_branch_access);
+ * array = ids específicos.
+ */
+export type BranchAccess = 'all' | string[];
+
 export interface AuthSession {
   userId: string;
   tenantId: string;
@@ -226,6 +261,9 @@ export interface AuthSession {
   role: Role;
   email: string;
   name: string;
+  branchAccess: BranchAccess;
+  /** Overrides — los efectivos se calculan combinando con defaults del rol. */
+  permissionOverrides: PermissionsMap;
 }
 
 export interface Plan {

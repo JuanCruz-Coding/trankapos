@@ -3,9 +3,11 @@ import { db } from './db';
 import type {
   AuthSession,
   Branch,
+  BranchAccess,
   CashMovement,
   CashRegister,
   Category,
+  PermissionsMap,
   Plan,
   PlanUsage,
   Product,
@@ -17,6 +19,7 @@ import type {
   TenantSettingsInput,
   Transfer,
   User,
+  UserBranchAccess,
   Warehouse,
 } from '@/types';
 import type {
@@ -91,7 +94,19 @@ import { addMoney, eqMoney, gtMoney, lineSubtotal, subMoney } from '@/lib/money'
 
 const now = () => new Date().toISOString();
 
-function toSession(user: User): AuthSession {
+async function loadBranchAccessLocal(userId: string, tenantId: string): Promise<BranchAccess> {
+  const dbModule = await import('./db');
+  const rows = await dbModule.db.userBranchAccess
+    .where('[userId+tenantId]')
+    .equals([userId, tenantId])
+    .toArray();
+  const hasNull = rows.some((r) => r.branchId === null);
+  if (hasNull) return 'all';
+  return rows.map((r) => r.branchId).filter((b): b is string => b !== null);
+}
+
+async function toSession(user: User): Promise<AuthSession> {
+  const branchAccess = await loadBranchAccessLocal(user.id, user.tenantId);
   return {
     userId: user.id,
     tenantId: user.tenantId,
@@ -99,6 +114,8 @@ function toSession(user: User): AuthSession {
     role: user.role,
     email: user.email,
     name: user.name,
+    branchAccess,
+    permissionOverrides: user.permissionOverrides ?? {},
   };
 }
 
@@ -111,7 +128,7 @@ export class LocalDriver implements DataDriver {
     if (!row) throw new Error('No autenticado');
     const user = await db.users.get(row.userId);
     if (!user) throw new Error('Usuario no encontrado');
-    this._session = toSession(user);
+    this._session = await toSession(user);
     return this._session;
   }
 
@@ -168,17 +185,25 @@ export class LocalDriver implements DataDriver {
     // con 5 tablas pasamos un array para usar la sobrecarga de array.
     await db.transaction(
       'rw',
-      [db.tenants, db.branches, db.warehouses, db.users, db.session],
+      [db.tenants, db.branches, db.warehouses, db.users, db.userBranchAccess, db.session],
       async () => {
         await db.tenants.put(tenant);
         await db.branches.put(branch);
         await db.warehouses.put(warehouse);
         await db.users.put(user);
+        // Owner del tenant nuevo arranca con acceso a todas las sucursales (NULL).
+        await db.userBranchAccess.put({
+          id: uuid(),
+          userId,
+          tenantId,
+          branchId: null,
+          createdAt: ts,
+        });
         await db.session.put({ id: 'current', userId, tenantId, branchId });
       },
     );
 
-    this._session = toSession(user);
+    this._session = await toSession(user);
     return this._session;
   }
 
@@ -193,7 +218,7 @@ export class LocalDriver implements DataDriver {
       tenantId: user.tenantId,
       branchId: user.branchId,
     });
-    this._session = toSession(user);
+    this._session = await toSession(user);
     return this._session;
   }
 
@@ -207,7 +232,7 @@ export class LocalDriver implements DataDriver {
     if (!row) return null;
     const user = await db.users.get(row.userId);
     if (!user || !user.active) return null;
-    this._session = toSession(user);
+    this._session = await toSession(user);
     return this._session;
   }
 
@@ -403,7 +428,18 @@ export class LocalDriver implements DataDriver {
   // --- users ---
   async listUsers(): Promise<User[]> {
     const s = await this.requireSession();
-    return db.users.where('tenantId').equals(s.tenantId).toArray();
+    const users = await db.users.where('tenantId').equals(s.tenantId).toArray();
+    // Hidratamos branchAccess de cada user.
+    return Promise.all(
+      users.map(async (u) => {
+        const access = await loadBranchAccessLocal(u.id, s.tenantId);
+        return {
+          ...u,
+          permissionOverrides: u.permissionOverrides ?? {},
+          branchAccess: access,
+        };
+      }),
+    );
   }
 
   async createUser(input: UserInput): Promise<User> {
@@ -411,8 +447,10 @@ export class LocalDriver implements DataDriver {
     if (!input.password) throw new Error('Password requerido');
     const existing = await db.users.where('email').equals(input.email.toLowerCase()).first();
     if (existing) throw new Error('Email ya registrado');
+    const userId = uuid();
+    const ts = now();
     const user: User = {
-      id: uuid(),
+      id: userId,
       tenantId: s.tenantId,
       email: input.email.toLowerCase(),
       passwordHash: await hashPassword(input.password),
@@ -420,10 +458,30 @@ export class LocalDriver implements DataDriver {
       role: input.role,
       branchId: input.branchId,
       active: input.active,
-      createdAt: now(),
+      createdAt: ts,
+      permissionOverrides: input.permissionOverrides ?? {},
     };
-    await db.users.put(user);
-    return user;
+
+    // Resolver branchAccess: si vino explícito, usarlo. Sino owner→null, otro→branchId.
+    const accessRows: UserBranchAccess[] = [];
+    if (input.branchAccess === 'all') {
+      accessRows.push({ id: uuid(), userId, tenantId: s.tenantId, branchId: null, createdAt: ts });
+    } else if (Array.isArray(input.branchAccess) && input.branchAccess.length > 0) {
+      for (const bid of input.branchAccess) {
+        accessRows.push({ id: uuid(), userId, tenantId: s.tenantId, branchId: bid, createdAt: ts });
+      }
+    } else if (input.role === 'owner') {
+      accessRows.push({ id: uuid(), userId, tenantId: s.tenantId, branchId: null, createdAt: ts });
+    } else if (input.branchId) {
+      accessRows.push({ id: uuid(), userId, tenantId: s.tenantId, branchId: input.branchId, createdAt: ts });
+    }
+
+    await db.transaction('rw', db.users, db.userBranchAccess, async () => {
+      await db.users.put(user);
+      for (const r of accessRows) await db.userBranchAccess.put(r);
+    });
+
+    return { ...user, branchAccess: input.branchAccess ?? (input.branchId ? [input.branchId] : []) };
   }
 
   async updateUser(id: string, input: Partial<UserInput>): Promise<User> {
@@ -438,9 +496,48 @@ export class LocalDriver implements DataDriver {
       active: input.active ?? existing.active,
       email: input.email ? input.email.toLowerCase() : existing.email,
       passwordHash: input.password ? await hashPassword(input.password) : existing.passwordHash,
+      permissionOverrides:
+        input.permissionOverrides !== undefined
+          ? input.permissionOverrides
+          : (existing.permissionOverrides ?? {}),
     };
-    await db.users.put(updated);
-    return updated;
+
+    await db.transaction('rw', db.users, db.userBranchAccess, async () => {
+      await db.users.put(updated);
+
+      // Si vino branchAccess, reemplazamos las filas
+      if (input.branchAccess !== undefined) {
+        const oldRows = await db.userBranchAccess
+          .where('[userId+tenantId]')
+          .equals([id, s.tenantId])
+          .toArray();
+        await Promise.all(oldRows.map((r) => db.userBranchAccess.delete(r.id)));
+
+        const ts = now();
+        if (input.branchAccess === 'all') {
+          await db.userBranchAccess.put({
+            id: uuid(),
+            userId: id,
+            tenantId: s.tenantId,
+            branchId: null,
+            createdAt: ts,
+          });
+        } else if (Array.isArray(input.branchAccess)) {
+          for (const bid of input.branchAccess) {
+            await db.userBranchAccess.put({
+              id: uuid(),
+              userId: id,
+              tenantId: s.tenantId,
+              branchId: bid,
+              createdAt: ts,
+            });
+          }
+        }
+      }
+    });
+
+    const access = await loadBranchAccessLocal(id, s.tenantId);
+    return { ...updated, branchAccess: access };
   }
 
   async deleteUser(id: string): Promise<void> {
@@ -448,7 +545,11 @@ export class LocalDriver implements DataDriver {
     if (s.userId === id) throw new Error('No podés eliminar tu propio usuario');
     const existing = await db.users.get(id);
     if (!existing || existing.tenantId !== s.tenantId) return;
-    await db.users.delete(id);
+    await db.transaction('rw', db.users, db.userBranchAccess, async () => {
+      await db.users.delete(id);
+      const accessRows = await db.userBranchAccess.where('userId').equals(id).toArray();
+      await Promise.all(accessRows.map((r) => db.userBranchAccess.delete(r.id)));
+    });
   }
 
   // --- categories ---

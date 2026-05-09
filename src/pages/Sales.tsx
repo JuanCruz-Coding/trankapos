@@ -12,11 +12,13 @@ import { addMoney, subMoney } from '@/lib/money';
 import { toast } from '@/stores/toast';
 import { confirmDialog } from '@/lib/dialog';
 import { PAYMENT_METHODS, type PaymentMethod, type Sale } from '@/types';
+import { usePermission } from '@/lib/permissions';
 
 const PAGE_SIZE = 50;
 
 export default function Sales() {
   const { session, activeBranchId } = useAuth();
+  const canVoidSales = usePermission('void_sales');
   const [refreshKey, setRefreshKey] = useState(0);
   const [limit, setLimit] = useState(PAGE_SIZE);
   const sales = useLiveQuery(
@@ -120,7 +122,7 @@ export default function Sales() {
                         >
                           <Eye className="h-4 w-4" />
                         </button>
-                        {!s.voided && (
+                        {!s.voided && canVoidSales && (
                           <button
                             onClick={() => handleVoid(s)}
                             className="rounded-md p-2 text-slate-500 hover:bg-red-50 hover:text-red-600"

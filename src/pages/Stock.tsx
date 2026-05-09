@@ -9,9 +9,11 @@ import { data } from '@/data';
 import { useAuth } from '@/stores/auth';
 import { toast } from '@/stores/toast';
 import type { Product } from '@/types';
+import { usePermission } from '@/lib/permissions';
 
 export default function Stock() {
   const { session } = useAuth();
+  const canAdjustStock = usePermission('adjust_stock');
   const [refreshKey, setRefreshKey] = useState(0);
   const products = useLiveQuery(() => data.listProducts(), [session?.tenantId]);
   const branches = useLiveQuery(() => data.listBranches(), [session?.tenantId]);
@@ -112,12 +114,14 @@ export default function Stock() {
                     </td>
                     <td className="px-4 py-3 text-right text-slate-500">{minQty}</td>
                     <td className="px-4 py-3 text-right">
-                      <button
-                        onClick={() => setEdit({ product, warehouseId: warehouse.id })}
-                        className="rounded-md p-2 text-slate-500 hover:bg-slate-100"
-                      >
-                        <Pencil className="h-4 w-4" />
-                      </button>
+                      {canAdjustStock && (
+                        <button
+                          onClick={() => setEdit({ product, warehouseId: warehouse.id })}
+                          className="rounded-md p-2 text-slate-500 hover:bg-slate-100"
+                        >
+                          <Pencil className="h-4 w-4" />
+                        </button>
+                      )}
                     </td>
                   </tr>
                 );

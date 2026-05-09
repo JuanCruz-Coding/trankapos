@@ -4,10 +4,12 @@ import { addMoney, subMoney } from '@/lib/money';
 import type {
   AuthSession,
   Branch,
+  BranchAccess,
   CashMovement,
   CashRegister,
   Category,
   PaymentMethod,
+  PermissionsMap,
   Plan,
   PlanUsage,
   Product,
@@ -338,12 +340,27 @@ class SupabaseDriver implements DataDriver {
 
     const { data: mem, error: memErr } = await this.sb
       .from('memberships')
-      .select('tenant_id, role, branch_id')
+      .select('tenant_id, role, branch_id, permissions')
       .eq('user_id', userId)
       .eq('active', true)
       .limit(1)
       .maybeSingle();
     if (memErr || !mem) throw new Error('El usuario no tiene un tenant activo');
+
+    // Resolver branchAccess desde user_branch_access. Una fila NULL = 'all'.
+    const { data: accessRows, error: accessErr } = await this.sb
+      .from('user_branch_access')
+      .select('branch_id')
+      .eq('user_id', userId)
+      .eq('tenant_id', mem.tenant_id);
+    if (accessErr) throw new Error(accessErr.message);
+
+    const hasNullRow = (accessRows ?? []).some((r) => r.branch_id === null);
+    const branchAccess: BranchAccess = hasNullRow
+      ? 'all'
+      : (accessRows ?? [])
+          .map((r) => r.branch_id as string | null)
+          .filter((id): id is string => id !== null);
 
     const session: AuthSession = {
       userId,
@@ -352,6 +369,8 @@ class SupabaseDriver implements DataDriver {
       role: mem.role,
       email: prof.email,
       name: prof.name,
+      branchAccess,
+      permissionOverrides: (mem.permissions as PermissionsMap) ?? {},
     };
     this.cached = session;
     return session;
@@ -1168,18 +1187,35 @@ class SupabaseDriver implements DataDriver {
     const s = await this.requireSession();
     const { data: mems, error: memErr } = await this.sb
       .from('memberships')
-      .select('user_id, role, branch_id, active, created_at, tenant_id')
+      .select('user_id, role, branch_id, active, created_at, tenant_id, permissions')
       .order('created_at', { ascending: true });
     if (memErr) throw new Error(memErr.message);
     if (!mems || mems.length === 0) return [];
 
     const userIds = mems.map((m) => m.user_id);
-    const { data: profs, error: profErr } = await this.sb
-      .from('profiles')
-      .select('id, name, email')
-      .in('id', userIds);
-    if (profErr) throw new Error(profErr.message);
-    const byId = new Map((profs ?? []).map((p) => [p.id, p]));
+    const [profsRes, accessRes] = await Promise.all([
+      this.sb.from('profiles').select('id, name, email').in('id', userIds),
+      this.sb
+        .from('user_branch_access')
+        .select('user_id, branch_id')
+        .in('user_id', userIds)
+        .eq('tenant_id', s.tenantId),
+    ]);
+    if (profsRes.error) throw new Error(profsRes.error.message);
+    if (accessRes.error) throw new Error(accessRes.error.message);
+
+    const byId = new Map((profsRes.data ?? []).map((p) => [p.id, p]));
+    const accessByUser = new Map<string, BranchAccess>();
+    for (const row of accessRes.data ?? []) {
+      const userId = row.user_id;
+      const existing = accessByUser.get(userId);
+      if (row.branch_id === null) {
+        accessByUser.set(userId, 'all');
+      } else if (existing !== 'all') {
+        const arr = (existing as string[]) ?? [];
+        accessByUser.set(userId, [...arr, row.branch_id]);
+      }
+    }
 
     return mems.map((m) => {
       const p = byId.get(m.user_id);
@@ -1193,6 +1229,8 @@ class SupabaseDriver implements DataDriver {
         branchId: m.branch_id,
         active: m.active,
         createdAt: m.created_at,
+        permissionOverrides: (m.permissions as PermissionsMap) ?? {},
+        branchAccess: accessByUser.get(m.user_id) ?? [],
       };
     });
   }
@@ -1220,6 +1258,8 @@ class SupabaseDriver implements DataDriver {
         role: input.role,
         branchId: input.branchId,
         active: input.active,
+        branchAccess: input.branchAccess ?? null,
+        permissionOverrides: input.permissionOverrides ?? null,
       }),
     });
 
@@ -1246,11 +1286,13 @@ class SupabaseDriver implements DataDriver {
       branchId: created.branchId,
       active: created.active,
       createdAt: new Date().toISOString(),
+      permissionOverrides: input.permissionOverrides ?? {},
+      branchAccess: input.branchAccess ?? [],
     };
   }
 
   async updateUser(id: string, input: Partial<UserInput>): Promise<User> {
-    await this.requireSession();
+    const s = await this.requireSession();
 
     if (input.name !== undefined) {
       const { error } = await this.sb
@@ -1264,12 +1306,37 @@ class SupabaseDriver implements DataDriver {
     if (input.role !== undefined) memPatch.role = input.role;
     if (input.branchId !== undefined) memPatch.branch_id = input.branchId;
     if (input.active !== undefined) memPatch.active = input.active;
+    if (input.permissionOverrides !== undefined) memPatch.permissions = input.permissionOverrides;
     if (Object.keys(memPatch).length > 0) {
       const { error } = await this.sb
         .from('memberships')
         .update(memPatch)
         .eq('user_id', id);
       if (error) throw new Error(error.message);
+    }
+
+    // Si el caller pasa branchAccess, reemplazamos las filas: borrar todo y
+    // re-insertar el set nuevo. Es idempotente y mantiene la tabla en sync.
+    if (input.branchAccess !== undefined) {
+      const { error: delErr } = await this.sb
+        .from('user_branch_access')
+        .delete()
+        .eq('user_id', id)
+        .eq('tenant_id', s.tenantId);
+      if (delErr) throw new Error(delErr.message);
+
+      const rows =
+        input.branchAccess === 'all'
+          ? [{ user_id: id, tenant_id: s.tenantId, branch_id: null }]
+          : input.branchAccess.map((bid) => ({
+              user_id: id,
+              tenant_id: s.tenantId,
+              branch_id: bid,
+            }));
+      if (rows.length > 0) {
+        const { error: insErr } = await this.sb.from('user_branch_access').insert(rows);
+        if (insErr) throw new Error(insErr.message);
+      }
     }
 
     const all = await this.listUsers();
