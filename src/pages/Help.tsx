@@ -217,21 +217,26 @@ const sections: Section[] = [
     ],
   },
   {
-    id: 'depots',
-    title: 'Depósitos',
+    id: 'branches',
+    title: 'Sucursales y depósitos',
     icon: Store,
     roles: 'Solo dueño y encargado',
-    summary: 'Alta y baja de los puntos de venta o depósitos del comercio.',
+    summary: 'Sucursales (puntos de venta) y depósitos (donde vive el stock).',
     steps: [
       {
-        title: 'Nuevo depósito',
+        title: 'Nueva sucursal',
         detail:
-          'Tocá "Nuevo" y completá nombre y dirección. Cada depósito maneja su propio stock y caja.',
+          'Cada sucursal tiene cajas, ventas y al menos un depósito principal. Al crearla se genera automáticamente su depósito principal con el mismo nombre.',
+      },
+      {
+        title: 'Múltiples depósitos por sucursal',
+        detail:
+          'En planes Pro y Empresa podés agregar más depósitos por sucursal (ej. mostrador + trastienda). El POS resta del depósito principal; los otros se mueven con transferencias.',
       },
       {
         title: 'Asignar usuarios',
         detail:
-          'Desde Usuarios podés vincular cada operador a uno o más depósitos habilitados.',
+          'Desde Usuarios podés vincular cada operador a una sucursal específica.',
       },
     ],
   },

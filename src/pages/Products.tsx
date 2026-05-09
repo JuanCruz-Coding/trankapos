@@ -48,7 +48,7 @@ interface ImportStats {
 }
 
 export default function Products() {
-  const { session, activeDepotId } = useAuth();
+  const { session, activeBranchId } = useAuth();
   const [refreshKey, setRefreshKey] = useState(0);
   const bumpRefresh = () => setRefreshKey((k) => k + 1);
   const products = useLiveQuery(async () => {
@@ -56,8 +56,17 @@ export default function Products() {
     return data.listProducts();
   }, [session?.tenantId, refreshKey]);
   const categories = useLiveQuery(() => data.listCategories(), [session?.tenantId, refreshKey]);
-  const depots = useLiveQuery(() => data.listDepots(), [session?.tenantId]);
+  const branches = useLiveQuery(() => data.listBranches(), [session?.tenantId]);
+  const warehouses = useLiveQuery(() => data.listWarehouses(), [session?.tenantId]);
   const stock = useLiveQuery(() => data.listStock(), [session?.tenantId, refreshKey]);
+
+  // Para el modal de import CSV: el stock inicial va al warehouse default de la branch activa.
+  const activeDefaultWarehouse = useMemo(() => {
+    if (!activeBranchId) return null;
+    return (warehouses ?? []).find(
+      (w) => w.branchId === activeBranchId && w.isDefault && w.active,
+    ) ?? null;
+  }, [warehouses, activeBranchId]);
 
   const [search, setSearch] = useState('');
   const [modal, setModal] = useState(false);
@@ -84,7 +93,7 @@ export default function Products() {
     setForm({
       ...emptyForm,
       initialStock: Object.fromEntries(
-        (depots ?? []).map((d) => [d.id, { qty: '0', minQty: '5' }]),
+        (warehouses ?? []).map((w) => [w.id, { qty: '0', minQty: '5' }]),
       ),
     });
     setModal(true);
@@ -123,8 +132,8 @@ export default function Products() {
         toast.success('Producto actualizado');
       } else {
         const initialStock = Object.entries(form.initialStock)
-          .map(([depotId, v]) => ({
-            depotId,
+          .map(([warehouseId, v]) => ({
+            warehouseId,
             qty: Number(v.qty) || 0,
             minQty: Number(v.minQty) || 0,
           }))
@@ -224,8 +233,8 @@ export default function Products() {
           updated++;
         } else {
           const initialStock =
-            activeDepotId && row.stock > 0
-              ? [{ depotId: activeDepotId, qty: row.stock, minQty: 0 }]
+            activeDefaultWarehouse && row.stock > 0
+              ? [{ warehouseId: activeDefaultWarehouse.id, qty: row.stock, minQty: 0 }]
               : [];
           await data.createProduct({
             name: row.name,
@@ -424,15 +433,17 @@ export default function Products() {
             </div>
           </div>
 
-          {!form.id && depots && depots.length > 0 && (
+          {!form.id && warehouses && warehouses.length > 0 && (
             <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
               <div className="mb-2 text-xs font-medium text-slate-700">Stock inicial por depósito</div>
               <div className="space-y-2">
-                {depots.map((d) => {
-                  const v = form.initialStock[d.id] ?? { qty: '0', minQty: '5' };
+                {warehouses.map((w) => {
+                  const v = form.initialStock[w.id] ?? { qty: '0', minQty: '5' };
+                  const branch = w.branchId ? (branches ?? []).find((b) => b.id === w.branchId) : null;
+                  const label = branch ? `${branch.name} · ${w.name}` : `Central · ${w.name}`;
                   return (
-                    <div key={d.id} className="flex items-center gap-2">
-                      <div className="flex-1 text-sm">{d.name}</div>
+                    <div key={w.id} className="flex items-center gap-2">
+                      <div className="flex-1 text-sm">{label}</div>
                       <Input
                         type="number"
                         min="0"
@@ -444,7 +455,7 @@ export default function Products() {
                             ...form,
                             initialStock: {
                               ...form.initialStock,
-                              [d.id]: { ...v, qty: e.target.value },
+                              [w.id]: { ...v, qty: e.target.value },
                             },
                           })
                         }
@@ -460,7 +471,7 @@ export default function Products() {
                             ...form,
                             initialStock: {
                               ...form.initialStock,
-                              [d.id]: { ...v, minQty: e.target.value },
+                              [w.id]: { ...v, minQty: e.target.value },
                             },
                           })
                         }
@@ -557,7 +568,7 @@ export default function Products() {
               </div>
               <div className="mt-1">
                 Si el <code>codigo_barras</code> ya existe, se actualiza el producto (sin tocar
-                stock). Si no, se crea. El stock inicial se carga en el depósito activo.
+                stock). Si no, se crea. El stock inicial se carga en el depósito principal de la sucursal activa.
               </div>
             </div>
             <div className="flex items-center gap-2">
@@ -635,9 +646,9 @@ export default function Products() {
               </div>
             )}
 
-            {importRows.length > 0 && !activeDepotId && (
+            {importRows.length > 0 && !activeDefaultWarehouse && (
               <div className="rounded-lg border border-amber-200 bg-amber-50 p-2 text-xs text-amber-800">
-                No hay depósito activo: el stock inicial se ignorará.
+                No hay sucursal activa con depósito principal: el stock inicial se ignorará.
               </div>
             )}
 

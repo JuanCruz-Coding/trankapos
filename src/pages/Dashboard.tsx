@@ -12,10 +12,22 @@ import { format, subDays, startOfDay } from 'date-fns';
 import { es } from 'date-fns/locale';
 
 export default function Dashboard() {
-  const { session, activeDepotId } = useAuth();
+  const { session, activeBranchId } = useAuth();
   const sales = useLiveQuery(() => data.listSales({}), [session?.tenantId]);
   const products = useLiveQuery(() => data.listProducts(), [session?.tenantId]);
   const stock = useLiveQuery(() => data.listStock(), [session?.tenantId]);
+  const warehouses = useLiveQuery(() => data.listWarehouses(), [session?.tenantId]);
+
+  // Set de warehouse ids que pertenecen a la branch activa (para filtrar stock).
+  // Si no hay branch activa, no filtramos: mostramos todo el stock del tenant.
+  const branchWarehouseIds = useMemo(() => {
+    if (!activeBranchId) return null;
+    return new Set(
+      (warehouses ?? [])
+        .filter((w) => w.branchId === activeBranchId)
+        .map((w) => w.id),
+    );
+  }, [warehouses, activeBranchId]);
 
   const todayRange = rangeFromPreset('today');
   const salesToday = useMemo(
@@ -25,9 +37,9 @@ export default function Dashboard() {
           !s.voided &&
           new Date(s.createdAt) >= todayRange.from &&
           new Date(s.createdAt) <= todayRange.to &&
-          (!activeDepotId || s.depotId === activeDepotId),
+          (!activeBranchId || s.branchId === activeBranchId),
       ),
-    [sales, activeDepotId, todayRange.from, todayRange.to],
+    [sales, activeBranchId, todayRange.from, todayRange.to],
   );
 
   const todayTotal = salesToday.reduce((a, s) => a + s.total, 0);
@@ -43,20 +55,20 @@ export default function Dashboard() {
     }
     for (const s of sales ?? []) {
       if (s.voided) continue;
-      if (activeDepotId && s.depotId !== activeDepotId) continue;
+      if (activeBranchId && s.branchId !== activeBranchId) continue;
       const k = dayKey(s.createdAt);
       const bucket = out.find((x) => x.day === k);
       if (bucket) bucket.total += s.total;
     }
     return out;
-  }, [sales, activeDepotId]);
+  }, [sales, activeBranchId]);
 
   const topProducts = useMemo(() => {
     const agg = new Map<string, { name: string; qty: number; total: number }>();
     const last7 = startOfDay(subDays(new Date(), 6));
     for (const s of sales ?? []) {
       if (s.voided) continue;
-      if (activeDepotId && s.depotId !== activeDepotId) continue;
+      if (activeBranchId && s.branchId !== activeBranchId) continue;
       if (new Date(s.createdAt) < last7) continue;
       for (const it of s.items) {
         const cur = agg.get(it.productId) ?? { name: it.name, qty: 0, total: 0 };
@@ -68,17 +80,20 @@ export default function Dashboard() {
     return Array.from(agg.values())
       .sort((a, b) => b.qty - a.qty)
       .slice(0, 5);
-  }, [sales, activeDepotId]);
+  }, [sales, activeBranchId]);
 
   const lowStock = useMemo(() => {
     if (!stock || !products) return [];
     const byProduct = new Map(products.map((p) => [p.id, p]));
     return stock
-      .filter((s) => (!activeDepotId || s.depotId === activeDepotId) && s.qty <= s.minQty)
+      .filter((s) => {
+        if (branchWarehouseIds && !branchWarehouseIds.has(s.warehouseId)) return false;
+        return s.qty <= s.minQty;
+      })
       .map((s) => ({ stock: s, product: byProduct.get(s.productId) }))
       .filter((x) => x.product)
       .slice(0, 10);
-  }, [stock, products, activeDepotId]);
+  }, [stock, products, branchWarehouseIds]);
 
   return (
     <div>

@@ -1,9 +1,9 @@
 import type {
   AuthSession,
+  Branch,
   CashMovement,
   CashRegister,
   Category,
-  Depot,
   Plan,
   PlanUsage,
   Product,
@@ -14,11 +14,12 @@ import type {
   Tenant,
   Transfer,
   User,
+  Warehouse,
 } from '@/types';
 
 export interface SignupInput {
   tenantName: string;
-  depotName: string;
+  branchName: string;
   ownerName: string;
   email: string;
   password: string;
@@ -37,7 +38,7 @@ export interface ProductInput {
   categoryId: string | null;
   taxRate: number;
   active: boolean;
-  initialStock?: { depotId: string; qty: number; minQty: number }[];
+  initialStock?: { warehouseId: string; qty: number; minQty: number }[];
 }
 
 export interface UserInput {
@@ -45,13 +46,20 @@ export interface UserInput {
   password?: string;
   name: string;
   role: Role;
-  depotId: string | null;
+  branchId: string | null;
   active: boolean;
 }
 
-export interface DepotInput {
+export interface BranchInput {
   name: string;
   address: string;
+  active: boolean;
+}
+
+export interface WarehouseInput {
+  name: string;
+  branchId: string | null;
+  isDefault: boolean;
   active: boolean;
 }
 
@@ -60,7 +68,7 @@ export interface CategoryInput {
 }
 
 export interface SaleInput {
-  depotId: string;
+  branchId: string;
   registerId: string | null;
   items: { productId: string; qty: number; price: number; discount: number }[];
   payments: { method: Sale['payments'][number]['method']; amount: number }[];
@@ -68,7 +76,7 @@ export interface SaleInput {
 }
 
 export interface OpenRegisterInput {
-  depotId: string;
+  branchId: string;
   openingAmount: number;
 }
 
@@ -86,8 +94,8 @@ export interface CashMovementInput {
 }
 
 export interface TransferInput {
-  fromDepotId: string;
-  toDepotId: string;
+  fromWarehouseId: string;
+  toWarehouseId: string;
   notes: string;
   items: { productId: string; qty: number }[];
 }
@@ -95,7 +103,7 @@ export interface TransferInput {
 export interface SalesQuery {
   from?: string;
   to?: string;
-  depotId?: string;
+  branchId?: string;
   cashierId?: string;
   registerId?: string;
   limit?: number;
@@ -124,11 +132,19 @@ export interface DataDriver {
   cancelSubscription(): Promise<void>;
   clearPendingPlan(): Promise<void>;
 
-  // --- depots ---
-  listDepots(): Promise<Depot[]>;
-  createDepot(input: DepotInput): Promise<Depot>;
-  updateDepot(id: string, input: Partial<DepotInput>): Promise<Depot>;
-  deleteDepot(id: string): Promise<void>;
+  // --- branches ---
+  listBranches(): Promise<Branch[]>;
+  createBranch(input: BranchInput): Promise<Branch>;
+  updateBranch(id: string, input: Partial<BranchInput>): Promise<Branch>;
+  deleteBranch(id: string): Promise<void>;
+
+  // --- warehouses ---
+  listWarehouses(): Promise<Warehouse[]>;
+  createWarehouse(input: WarehouseInput): Promise<Warehouse>;
+  updateWarehouse(id: string, input: Partial<WarehouseInput>): Promise<Warehouse>;
+  deleteWarehouse(id: string): Promise<void>;
+  /** Resuelve el warehouse default activo de una branch. Util para POS. */
+  getDefaultWarehouse(branchId: string): Promise<Warehouse | null>;
 
   // --- users ---
   listUsers(): Promise<User[]>;
@@ -150,8 +166,8 @@ export interface DataDriver {
   deleteProduct(id: string): Promise<void>;
 
   // --- stock ---
-  listStock(depotId?: string): Promise<StockItem[]>;
-  adjustStock(productId: string, depotId: string, deltaQty: number, minQty?: number): Promise<void>;
+  listStock(warehouseId?: string): Promise<StockItem[]>;
+  adjustStock(productId: string, warehouseId: string, deltaQty: number, minQty?: number): Promise<void>;
 
   // --- sales / pos ---
   createSale(input: SaleInput): Promise<Sale>;
@@ -159,12 +175,12 @@ export interface DataDriver {
   listSales(q: SalesQuery): Promise<Sale[]>;
 
   // --- cash register ---
-  currentOpenRegister(depotId: string): Promise<CashRegister | null>;
+  currentOpenRegister(branchId: string): Promise<CashRegister | null>;
   openRegister(input: OpenRegisterInput): Promise<CashRegister>;
   closeRegister(input: CloseRegisterInput): Promise<CashRegister>;
   addCashMovement(input: CashMovementInput): Promise<CashMovement>;
   listCashMovements(registerId: string): Promise<CashMovement[]>;
-  listRegisters(depotId?: string): Promise<CashRegister[]>;
+  listRegisters(branchId?: string): Promise<CashRegister[]>;
 
   // --- transfers ---
   createTransfer(input: TransferInput): Promise<Transfer>;

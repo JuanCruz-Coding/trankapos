@@ -2,7 +2,8 @@ import { describe, it, expect } from 'vitest';
 import {
   productSchema,
   userSchema,
-  depotSchema,
+  branchSchema,
+  warehouseSchema,
   transferSchema,
   safeParse,
 } from './schemas';
@@ -51,7 +52,7 @@ describe('userSchema', () => {
     password: 'secret123',
     name: 'Foo',
     role: 'cashier' as const,
-    depotId: 'd1',
+    branchId: 'b1',
     active: true,
   };
 
@@ -68,7 +69,7 @@ describe('userSchema', () => {
   });
 
   it('permite omitir password (edición)', () => {
-    const { password, ...rest } = valid;
+    const { password: _password, ...rest } = valid;
     expect(safeParse(userSchema, rest).ok).toBe(true);
   });
 
@@ -83,22 +84,52 @@ describe('userSchema', () => {
   });
 });
 
-describe('depotSchema', () => {
-  it('acepta depósito válido', () => {
+describe('branchSchema', () => {
+  it('acepta sucursal válida', () => {
     expect(
-      safeParse(depotSchema, { name: 'Sucursal Centro', address: '', active: true }).ok,
+      safeParse(branchSchema, { name: 'Sucursal Centro', address: '', active: true }).ok,
     ).toBe(true);
   });
 
   it('rechaza nombre vacío', () => {
-    expect(safeParse(depotSchema, { name: '', address: '', active: true }).ok).toBe(false);
+    expect(safeParse(branchSchema, { name: '', address: '', active: true }).ok).toBe(false);
+  });
+});
+
+describe('warehouseSchema', () => {
+  it('acepta depósito válido', () => {
+    expect(
+      safeParse(warehouseSchema, {
+        name: 'Mostrador',
+        branchId: 'b1',
+        isDefault: true,
+        active: true,
+      }).ok,
+    ).toBe(true);
+  });
+
+  it('acepta depósito central (branchId null)', () => {
+    expect(
+      safeParse(warehouseSchema, {
+        name: 'Central',
+        branchId: null,
+        isDefault: false,
+        active: true,
+      }).ok,
+    ).toBe(true);
+  });
+
+  it('rechaza nombre vacío', () => {
+    expect(
+      safeParse(warehouseSchema, { name: '', branchId: 'b1', isDefault: true, active: true }).ok,
+    ).toBe(false);
   });
 });
 
 describe('transferSchema', () => {
   const valid = {
-    fromDepotId: 'a',
-    toDepotId: 'b',
+    fromWarehouseId: 'a',
+    toWarehouseId: 'b',
     notes: '',
     items: [{ productId: 'p1', qty: 5 }],
   };
@@ -108,7 +139,7 @@ describe('transferSchema', () => {
   });
 
   it('rechaza origen igual a destino', () => {
-    expect(safeParse(transferSchema, { ...valid, toDepotId: 'a' }).ok).toBe(false);
+    expect(safeParse(transferSchema, { ...valid, toWarehouseId: 'a' }).ok).toBe(false);
   });
 
   it('rechaza items vacíos', () => {

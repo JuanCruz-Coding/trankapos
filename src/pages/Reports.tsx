@@ -23,14 +23,14 @@ const PRESETS: { value: RangePreset; label: string }[] = [
 ];
 
 export default function Reports() {
-  const { session, activeDepotId } = useAuth();
+  const { session, activeBranchId } = useAuth();
   const [preset, setPreset] = useState<RangePreset>('7d');
   const [categoryId, setCategoryId] = useState<string>('');
   const [status, setStatus] = useState<StatusFilter>('active');
 
   const sales = useLiveQuery(() => data.listSales({}), [session?.tenantId]);
   const users = useLiveQuery(() => data.listUsers(), [session?.tenantId]);
-  const depots = useLiveQuery(() => data.listDepots(), [session?.tenantId]);
+  const branches = useLiveQuery(() => data.listBranches(), [session?.tenantId]);
   const products = useLiveQuery(() => data.listProducts(), [session?.tenantId]);
   const categories = useLiveQuery(() => data.listCategories(), [session?.tenantId]);
 
@@ -50,7 +50,7 @@ export default function Reports() {
           if (status === 'voided' && !s.voided) return false;
           if (new Date(s.createdAt) < range.from) return false;
           if (new Date(s.createdAt) > range.to) return false;
-          if (activeDepotId && s.depotId !== activeDepotId) return false;
+          if (activeBranchId && s.branchId !== activeBranchId) return false;
           if (categoryId) {
             const hasCategory = s.items.some(
               (it) => productCategory.get(it.productId) === categoryId,
@@ -59,7 +59,7 @@ export default function Reports() {
           }
           return true;
         }),
-    [sales, range.from, range.to, activeDepotId, status, categoryId, productCategory],
+    [sales, range.from, range.to, activeBranchId, status, categoryId, productCategory],
   );
 
   const total = addMoney(...filtered.map((s) => s.total));
@@ -130,10 +130,10 @@ export default function Reports() {
 
   function exportCSV() {
     const rows = [
-      ['fecha', 'depósito', 'cajero', 'items', 'subtotal', 'descuento', 'total'],
+      ['fecha', 'sucursal', 'cajero', 'items', 'subtotal', 'descuento', 'total'],
       ...filtered.map((s) => [
         s.createdAt,
-        depots?.find((d) => d.id === s.depotId)?.name ?? '',
+        branches?.find((b) => b.id === s.branchId)?.name ?? '',
         users?.find((u) => u.id === s.cashierId)?.name ?? '',
         String(s.items.reduce((a, i) => a + i.qty, 0)),
         s.subtotal.toFixed(2),

@@ -15,12 +15,12 @@ import type { Sale } from '@/types';
 const PAGE_SIZE = 50;
 
 export default function Sales() {
-  const { session, activeDepotId } = useAuth();
+  const { session, activeBranchId } = useAuth();
   const [refreshKey, setRefreshKey] = useState(0);
   const [limit, setLimit] = useState(PAGE_SIZE);
   const sales = useLiveQuery(
-    () => data.listSales({ depotId: activeDepotId ?? undefined, limit }),
-    [session?.tenantId, activeDepotId, refreshKey, limit],
+    () => data.listSales({ branchId: activeBranchId ?? undefined, limit }),
+    [session?.tenantId, activeBranchId, refreshKey, limit],
   );
   const users = useLiveQuery(() => data.listUsers(), [session?.tenantId]);
   const [view, setView] = useState<Sale | null>(null);

@@ -9,9 +9,9 @@ import { PageHeader } from '@/components/ui/PageHeader';
 import { data } from '@/data';
 import { useAuth } from '@/stores/auth';
 import { toast } from '@/stores/toast';
-import { depotSchema, safeParse } from '@/lib/schemas';
+import { branchSchema, safeParse } from '@/lib/schemas';
 import { confirmDialog } from '@/lib/dialog';
-import type { Depot } from '@/types';
+import type { Branch } from '@/types';
 
 interface FormState {
   id?: string;
@@ -20,10 +20,10 @@ interface FormState {
   active: boolean;
 }
 
-export default function Depots() {
-  const { session } = useAuth();
+export default function Branches() {
+  const { session, refreshSubscription } = useAuth();
   const [refreshKey, setRefreshKey] = useState(0);
-  const depots = useLiveQuery(() => data.listDepots(), [session?.tenantId, refreshKey]);
+  const branches = useLiveQuery(() => data.listBranches(), [session?.tenantId, refreshKey]);
   const [modal, setModal] = useState(false);
   const [form, setForm] = useState<FormState>({ name: '', address: '', active: true });
 
@@ -32,14 +32,14 @@ export default function Depots() {
     setModal(true);
   }
 
-  function openEdit(d: Depot) {
-    setForm({ id: d.id, name: d.name, address: d.address, active: d.active });
+  function openEdit(b: Branch) {
+    setForm({ id: b.id, name: b.name, address: b.address, active: b.active });
     setModal(true);
   }
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
-    const parsed = safeParse(depotSchema, {
+    const parsed = safeParse(branchSchema, {
       name: form.name,
       address: form.address,
       active: form.active,
@@ -47,50 +47,56 @@ export default function Depots() {
     if (!parsed.ok) return toast.error(parsed.error);
     try {
       if (form.id) {
-        await data.updateDepot(form.id, parsed.data);
-        toast.success('Depósito actualizado');
+        await data.updateBranch(form.id, parsed.data);
+        toast.success('Sucursal actualizada');
       } else {
-        await data.createDepot(parsed.data);
-        toast.success('Depósito creado');
+        await data.createBranch(parsed.data);
+        toast.success('Sucursal creada');
       }
       setModal(false);
       setRefreshKey((k) => k + 1);
+      void refreshSubscription();
     } catch (err) {
       toast.error((err as Error).message);
     }
   }
 
-  async function handleDelete(d: Depot) {
-    const ok = await confirmDialog(`¿Eliminar depósito "${d.name}"?`, {
-      text: 'Se va a eliminar junto con su stock asociado.',
+  async function handleDelete(b: Branch) {
+    const ok = await confirmDialog(`¿Eliminar sucursal "${b.name}"?`, {
+      text: 'Se va a eliminar junto con sus depósitos y stock asociado.',
       confirmText: 'Eliminar',
       danger: true,
     });
     if (!ok) return;
-    await data.deleteDepot(d.id);
-    toast.success('Depósito eliminado');
-    setRefreshKey((k) => k + 1);
+    try {
+      await data.deleteBranch(b.id);
+      toast.success('Sucursal eliminada');
+      setRefreshKey((k) => k + 1);
+      void refreshSubscription();
+    } catch (err) {
+      toast.error((err as Error).message);
+    }
   }
 
   return (
     <div>
       <PageHeader
-        title="Depósitos"
-        subtitle="Cada depósito maneja su propio stock y caja"
+        title="Sucursales"
+        subtitle="Cada sucursal tiene sus propias cajas, ventas y depósitos"
         actions={
           <Button onClick={openNew}>
-            <Plus className="h-4 w-4" /> Nuevo depósito
+            <Plus className="h-4 w-4" /> Nueva sucursal
           </Button>
         }
       />
 
-      {(depots ?? []).length === 0 ? (
-        <Empty title="Sin depósitos" />
+      {(branches ?? []).length === 0 ? (
+        <Empty title="Sin sucursales" />
       ) : (
         <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
-          {depots!.map((d) => (
+          {branches!.map((b) => (
             <div
-              key={d.id}
+              key={b.id}
               className="flex items-start justify-between rounded-xl border border-slate-200 bg-white p-4 shadow-sm"
             >
               <div className="flex gap-3">
@@ -98,20 +104,20 @@ export default function Depots() {
                   <Store className="h-5 w-5" />
                 </div>
                 <div>
-                  <div className="font-semibold text-slate-900">{d.name}</div>
-                  <div className="text-xs text-slate-500">{d.address || 'Sin dirección'}</div>
-                  {!d.active && <div className="mt-1 text-xs text-red-500">Inactivo</div>}
+                  <div className="font-semibold text-slate-900">{b.name}</div>
+                  <div className="text-xs text-slate-500">{b.address || 'Sin dirección'}</div>
+                  {!b.active && <div className="mt-1 text-xs text-red-500">Inactiva</div>}
                 </div>
               </div>
               <div className="flex gap-1">
                 <button
-                  onClick={() => openEdit(d)}
+                  onClick={() => openEdit(b)}
                   className="rounded-md p-1.5 text-slate-500 hover:bg-slate-100"
                 >
                   <Pencil className="h-4 w-4" />
                 </button>
                 <button
-                  onClick={() => handleDelete(d)}
+                  onClick={() => handleDelete(b)}
                   className="rounded-md p-1.5 text-slate-500 hover:bg-red-50 hover:text-red-600"
                 >
                   <Trash2 className="h-4 w-4" />
@@ -125,7 +131,7 @@ export default function Depots() {
       <Modal
         open={modal}
         onClose={() => setModal(false)}
-        title={form.id ? 'Editar depósito' : 'Nuevo depósito'}
+        title={form.id ? 'Editar sucursal' : 'Nueva sucursal'}
       >
         <form onSubmit={handleSubmit} className="space-y-3">
           <div>
@@ -150,8 +156,13 @@ export default function Depots() {
               onChange={(e) => setForm({ ...form, active: e.target.checked })}
               className="h-4 w-4"
             />
-            Activo
+            Activa
           </label>
+          {!form.id && (
+            <p className="rounded-lg bg-slate-50 p-2 text-xs text-slate-600">
+              Al crear la sucursal se genera automáticamente su depósito principal con el mismo nombre.
+            </p>
+          )}
           <div className="flex justify-end gap-2 pt-2">
             <Button type="button" variant="outline" onClick={() => setModal(false)}>
               Cancelar

@@ -39,7 +39,8 @@ const nav: NavItem[] = [
   { to: '/cash', label: 'Caja', icon: Wallet },
   { to: '/sales', label: 'Ventas', icon: Receipt },
   { to: '/reports', label: 'Reportes', icon: BarChart3, roles: ['owner', 'manager'] },
-  { to: '/depots', label: 'Depósitos', icon: Store, roles: ['owner', 'manager'] },
+  { to: '/branches', label: 'Sucursales', icon: Store, roles: ['owner', 'manager'] },
+  { to: '/warehouses', label: 'Depósitos', icon: Boxes, roles: ['owner', 'manager'] },
   { to: '/users', label: 'Usuarios', icon: Users, roles: ['owner', 'manager'] },
   { to: '/plan', label: 'Mi plan', icon: Crown, roles: ['owner'] },
   { to: '/help', label: 'Ayuda', icon: HelpCircle },
@@ -47,13 +48,13 @@ const nav: NavItem[] = [
 
 export function Layout({ children }: PropsWithChildren) {
   const [open, setOpen] = useState(false);
-  const { session, signOut, activeDepotId, setActiveDepot } = useAuth();
+  const { session, signOut, activeBranchId, setActiveBranch } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
 
-  const depots = useLiveQuery(async () => {
+  const branches = useLiveQuery(async () => {
     if (!session) return [];
-    return data.listDepots();
+    return data.listBranches();
   }, [session?.tenantId]);
 
   if (!session) return null;
@@ -93,15 +94,15 @@ export function Layout({ children }: PropsWithChildren) {
         })}
       </nav>
       <div className="border-t border-slate-200 p-3">
-        <div className="mb-2 text-xs text-slate-500">Depósito activo</div>
+        <div className="mb-2 text-xs text-slate-500">Sucursal activa</div>
         <select
           className="mb-3 h-9 w-full rounded-lg border border-slate-300 bg-white px-2 text-sm"
-          value={activeDepotId ?? ''}
-          onChange={(e) => setActiveDepot(e.target.value)}
+          value={activeBranchId ?? ''}
+          onChange={(e) => setActiveBranch(e.target.value)}
         >
-          {depots?.map((d) => (
-            <option key={d.id} value={d.id}>
-              {d.name}
+          {branches?.map((b) => (
+            <option key={b.id} value={b.id}>
+              {b.name}
             </option>
           ))}
         </select>

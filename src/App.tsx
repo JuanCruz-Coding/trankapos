@@ -9,7 +9,8 @@ import Login from '@/pages/Login';
 import Signup from '@/pages/Signup';
 import Pos from '@/pages/Pos';
 import Products from '@/pages/Products';
-import Depots from '@/pages/Depots';
+import Branches from '@/pages/Branches';
+import Warehouses from '@/pages/Warehouses';
 import Users from '@/pages/Users';
 import Cash from '@/pages/Cash';
 import Dashboard from '@/pages/Dashboard';
@@ -71,10 +72,18 @@ export function App() {
             }
           />
           <Route
-            path="depots"
+            path="branches"
             element={
               <ProtectedRoute roles={['owner', 'manager']}>
-                <Depots />
+                <Branches />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="warehouses"
+            element={
+              <ProtectedRoute roles={['owner', 'manager']}>
+                <Warehouses />
               </ProtectedRoute>
             }
           />

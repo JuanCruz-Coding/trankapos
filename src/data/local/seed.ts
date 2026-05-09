@@ -3,10 +3,10 @@ import { subDays } from 'date-fns';
 import { db } from './db';
 import { hashPassword } from '@/lib/hash';
 import type {
+  Branch,
   CashMovement,
   CashRegister,
   Category,
-  Depot,
   PaymentMethod,
   Product,
   Sale,
@@ -14,6 +14,7 @@ import type {
   StockItem,
   Tenant,
   User,
+  Warehouse,
 } from '@/types';
 
 // Idempotente: si ya hay tenants, no hace nada.
@@ -25,11 +26,41 @@ export async function seedIfEmpty(): Promise<void> {
   const ts = new Date().toISOString();
   const tenant: Tenant = { id: tenantId, name: 'Kiosko Demo', createdAt: ts };
 
-  const depot1Id = uuid();
-  const depot2Id = uuid();
-  const depots: Depot[] = [
-    { id: depot1Id, tenantId, name: 'Sucursal Centro', address: 'Av. Corrientes 1234', active: true, createdAt: ts },
-    { id: depot2Id, tenantId, name: 'Depósito', address: 'Galpón', active: true, createdAt: ts },
+  // Demo: 1 sucursal con 2 depósitos (mostrador + trastienda) para que se
+  // vea cómo funcionan las transferencias.
+  const branchId = uuid();
+  const branches: Branch[] = [
+    {
+      id: branchId,
+      tenantId,
+      name: 'Sucursal Centro',
+      address: 'Av. Corrientes 1234',
+      active: true,
+      createdAt: ts,
+    },
+  ];
+
+  const whMostradorId = uuid();
+  const whTrastiendaId = uuid();
+  const warehouses: Warehouse[] = [
+    {
+      id: whMostradorId,
+      tenantId,
+      branchId,
+      name: 'Mostrador',
+      isDefault: true,
+      active: true,
+      createdAt: ts,
+    },
+    {
+      id: whTrastiendaId,
+      tenantId,
+      branchId,
+      name: 'Trastienda',
+      isDefault: false,
+      active: true,
+      createdAt: ts,
+    },
   ];
 
   const ownerId = uuid();
@@ -42,7 +73,7 @@ export async function seedIfEmpty(): Promise<void> {
       passwordHash: await hashPassword('demo1234'),
       name: 'Dueño Demo',
       role: 'owner',
-      depotId: depot1Id,
+      branchId,
       active: true,
       createdAt: ts,
     },
@@ -53,7 +84,7 @@ export async function seedIfEmpty(): Promise<void> {
       passwordHash: await hashPassword('demo1234'),
       name: 'Cajero 1',
       role: 'cashier',
-      depotId: depot1Id,
+      branchId,
       active: true,
       createdAt: ts,
     },
@@ -94,25 +125,17 @@ export async function seedIfEmpty(): Promise<void> {
     createdAt: ts,
   }));
 
-  // Stock inicial "grande" en mapa mutable — lo vamos bajando a medida que
-  // generamos ventas para que los saldos finales queden realistas.
+  // Stock inicial mutable — lo decrementamos a medida que generamos ventas.
   const stockMap = new Map<string, { qty: number; minQty: number }>();
   for (const p of products) {
-    stockMap.set(`${p.id}:${depot1Id}`, {
-      qty: rand(80, 160),
-      minQty: 10,
-    });
-    stockMap.set(`${p.id}:${depot2Id}`, {
-      qty: rand(150, 300),
-      minQty: 20,
-    });
+    stockMap.set(`${p.id}:${whMostradorId}`, { qty: rand(80, 160), minQty: 10 });
+    stockMap.set(`${p.id}:${whTrastiendaId}`, { qty: rand(150, 300), minQty: 20 });
   }
 
   const sales: Sale[] = [];
   const registers: CashRegister[] = [];
   const movements: CashMovement[] = [];
 
-  // Generamos 14 días de historia para la sucursal principal.
   for (let daysAgo = 13; daysAgo >= 0; daysAgo--) {
     const isToday = daysAgo === 0;
     const dayBase = subDays(new Date(), daysAgo);
@@ -121,8 +144,7 @@ export async function seedIfEmpty(): Promise<void> {
     const registerId = uuid();
     const openingAmount = 20000;
 
-    // Cantidad de ventas por día: más los días hábiles, menos los fines de semana
-    const weekday = dayBase.getDay(); // 0 dom, 6 sab
+    const weekday = dayBase.getDay();
     const weekendMul = weekday === 0 || weekday === 6 ? 0.7 : 1;
     const numSales = Math.round(rand(8, 18) * weekendMul);
 
@@ -132,8 +154,7 @@ export async function seedIfEmpty(): Promise<void> {
       const hour = rand(9, 21);
       const minute = rand(0, 59);
       const saleTime = atHour(dayBase, hour, minute);
-      // El sistema valida paid === total, así que lo armamos clavado.
-      const { items, subtotal } = buildRandomCart(products, stockMap, depot1Id);
+      const { items, subtotal } = buildRandomCart(products, stockMap, whMostradorId);
       if (items.length === 0) continue;
 
       const discount = Math.random() < 0.12 ? roundDown(subtotal * 0.1) : 0;
@@ -145,7 +166,7 @@ export async function seedIfEmpty(): Promise<void> {
       sales.push({
         id: uuid(),
         tenantId,
-        depotId: depot1Id,
+        branchId,
         registerId,
         cashierId: Math.random() < 0.65 ? cashierId : ownerId,
         items,
@@ -158,7 +179,6 @@ export async function seedIfEmpty(): Promise<void> {
       });
     }
 
-    // Movimientos de caja ocasionales
     if (Math.random() < 0.35) {
       const mvAmount = rand(1000, 4000);
       movements.push({
@@ -193,11 +213,10 @@ export async function seedIfEmpty(): Promise<void> {
     const expectedCash = openingAmount + cashSum + mvNet;
 
     if (isToday) {
-      // La caja de hoy queda abierta para que se pueda vender inmediatamente.
       registers.push({
         id: registerId,
         tenantId,
-        depotId: depot1Id,
+        branchId,
         openedBy: ownerId,
         openedAt: openedAt.toISOString(),
         openingAmount,
@@ -209,13 +228,12 @@ export async function seedIfEmpty(): Promise<void> {
         notes: null,
       });
     } else {
-      // Diferencia de arqueo chica (±200) para que se vea realista
       const diff = rand(-200, 200);
       const closedAt = atHour(dayBase, 21, rand(30, 59));
       registers.push({
         id: registerId,
         tenantId,
-        depotId: depot1Id,
+        branchId,
         openedBy: ownerId,
         openedAt: openedAt.toISOString(),
         openingAmount,
@@ -229,14 +247,13 @@ export async function seedIfEmpty(): Promise<void> {
     }
   }
 
-  // Armar el array final de stock con los saldos ya decrementados.
   const stock: StockItem[] = [];
   for (const [key, v] of stockMap.entries()) {
-    const [productId, depotId] = key.split(':');
+    const [productId, warehouseId] = key.split(':');
     stock.push({
       id: uuid(),
       tenantId,
-      depotId,
+      warehouseId,
       productId,
       qty: v.qty,
       minQty: v.minQty,
@@ -244,19 +261,19 @@ export async function seedIfEmpty(): Promise<void> {
     });
   }
 
-  // Forzamos un par de productos en stock crítico para que se vean en Dashboard
   const critical = sample(products, 2);
   for (const p of critical) {
-    const row = stock.find((s) => s.productId === p.id && s.depotId === depot1Id);
+    const row = stock.find((s) => s.productId === p.id && s.warehouseId === whMostradorId);
     if (row) row.qty = rand(0, 3);
   }
 
   await db.transaction(
     'rw',
-    [db.tenants, db.depots, db.users, db.categories, db.products, db.stock],
+    [db.tenants, db.branches, db.warehouses, db.users, db.categories, db.products, db.stock],
     async () => {
       await db.tenants.put(tenant);
-      await db.depots.bulkPut(depots);
+      await db.branches.bulkPut(branches);
+      await db.warehouses.bulkPut(warehouses);
       await db.users.bulkPut(users);
       await db.categories.bulkPut(categories);
       await db.products.bulkPut(products);
@@ -304,7 +321,7 @@ function roundDown(n: number): number {
 function buildRandomCart(
   products: Product[],
   stockMap: Map<string, { qty: number; minQty: number }>,
-  depotId: string,
+  warehouseId: string,
 ): { items: SaleItem[]; subtotal: number } {
   const numDistinct = rand(1, 4);
   const picked = sample(products, numDistinct);
@@ -312,7 +329,7 @@ function buildRandomCart(
   let subtotal = 0;
 
   for (const p of picked) {
-    const key = `${p.id}:${depotId}`;
+    const key = `${p.id}:${warehouseId}`;
     const stock = stockMap.get(key);
     if (!stock || stock.qty <= 0) continue;
     const qty = Math.min(rand(1, 3), stock.qty);
@@ -336,7 +353,6 @@ function buildRandomCart(
 }
 
 function randomPayments(total: number): { method: PaymentMethod; amount: number }[] {
-  // 75% cash, 10% debit, 8% credit, 5% qr, 2% transfer
   const r = Math.random();
   let method: PaymentMethod = 'cash';
   if (r < 0.75) method = 'cash';
@@ -345,7 +361,6 @@ function randomPayments(total: number): { method: PaymentMethod; amount: number 
   else if (r < 0.98) method = 'qr';
   else method = 'transfer';
 
-  // 10% de chance de pago mixto (parte efectivo + parte tarjeta)
   if (Math.random() < 0.1 && total > 3000 && method !== 'cash') {
     const cashPart = roundDown(total * (0.3 + Math.random() * 0.4));
     return [

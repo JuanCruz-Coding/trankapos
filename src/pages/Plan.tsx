@@ -29,10 +29,21 @@ const STATUS_LABEL: Record<
 };
 
 const FEATURE_LABELS: Record<string, string> = {
-  transfers: 'Transferencias entre sucursales',
+  scanner_camera: 'Scanner por cámara (mobile)',
+  csv_import: 'Importar CSV de productos',
+  csv_export: 'Exportar CSV (ventas/stock)',
   advanced_reports: 'Reportes avanzados',
-  csv_export: 'Exportar a CSV',
+  transfers: 'Transferencias entre depósitos',
+  customers: 'Clientes / cuenta corriente',
+  multi_cash: 'Múltiples cajas simultáneas',
+  variants: 'Variantes (talle/color) y combos',
+  purchases: 'Compras a proveedores',
+  audit_log: 'Auditoría / log de cambios',
+  granular_perms: 'Permisos granulares por rol',
   api: 'Acceso a API',
+  webhooks: 'Webhooks',
+  custom_branding: 'Branding propio en ticket',
+  central_warehouse: 'Depósito central',
 };
 
 export default function Plan() {
@@ -203,7 +214,8 @@ export default function Plan() {
               </div>
             )}
 
-            <UsageBar label="Sucursales" used={usage.depots} max={sub.plan.maxDepots} />
+            <UsageBar label="Sucursales" used={usage.branches} max={sub.plan.maxBranches} />
+            <UsageBar label="Depósitos" used={usage.warehouses} max={null} />
             <UsageBar label="Usuarios" used={usage.users} max={sub.plan.maxUsers} />
             <UsageBar label="Productos" used={usage.products} max={sub.plan.maxProducts} />
 
@@ -323,7 +335,10 @@ function PlanCard({
 
       <ul className="space-y-1 text-sm text-slate-600">
         <li>
-          <strong>{plan.maxDepots ?? 'Ilimitadas'}</strong> sucursal(es)
+          <strong>{plan.maxBranches ?? 'Ilimitadas'}</strong> sucursal(es)
+        </li>
+        <li>
+          <strong>{plan.maxWarehousesPerBranch ?? 'Ilimitados'}</strong> depósito(s) por sucursal
         </li>
         <li>
           <strong>{plan.maxUsers ?? 'Ilimitados'}</strong> usuario(s)
@@ -331,9 +346,14 @@ function PlanCard({
         <li>
           <strong>{plan.maxProducts ?? 'Ilimitados'}</strong> producto(s)
         </li>
-        {plan.features.transfers && <li>Transferencias entre sucursales</li>}
+        {plan.features.scanner_camera && <li>Scanner por cámara</li>}
+        {plan.features.transfers && <li>Transferencias entre depósitos</li>}
         {plan.features.advanced_reports && <li>Reportes avanzados</li>}
-        {plan.features.api && <li>Acceso a API</li>}
+        {plan.features.customers && <li>Clientes / cuenta corriente</li>}
+        {plan.features.variants && <li>Variantes y combos</li>}
+        {plan.features.purchases && <li>Compras a proveedores</li>}
+        {plan.features.api && <li>API + webhooks</li>}
+        {plan.features.central_warehouse && <li>Depósito central</li>}
       </ul>
 
       <div className="mt-auto pt-2">

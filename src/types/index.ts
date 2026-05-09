@@ -23,16 +23,26 @@ export interface User {
   passwordHash: string;
   name: string;
   role: Role;
-  depotId: string | null;
+  branchId: string | null;
   active: boolean;
   createdAt: string;
 }
 
-export interface Depot {
+export interface Branch {
   id: string;
   tenantId: string;
   name: string;
   address: string;
+  active: boolean;
+  createdAt: string;
+}
+
+export interface Warehouse {
+  id: string;
+  tenantId: string;
+  branchId: string | null;
+  name: string;
+  isDefault: boolean;
   active: boolean;
   createdAt: string;
 }
@@ -60,7 +70,7 @@ export interface Product {
 export interface StockItem {
   id: string;
   tenantId: string;
-  depotId: string;
+  warehouseId: string;
   productId: string;
   qty: number;
   minQty: number;
@@ -70,7 +80,7 @@ export interface StockItem {
 export interface CashRegister {
   id: string;
   tenantId: string;
-  depotId: string;
+  branchId: string;
   openedBy: string;
   openedAt: string;
   openingAmount: number;
@@ -112,7 +122,7 @@ export interface SalePayment {
 export interface Sale {
   id: string;
   tenantId: string;
-  depotId: string;
+  branchId: string;
   registerId: string | null;
   cashierId: string;
   items: SaleItem[];
@@ -127,8 +137,8 @@ export interface Sale {
 export interface Transfer {
   id: string;
   tenantId: string;
-  fromDepotId: string;
-  toDepotId: string;
+  fromWarehouseId: string;
+  toWarehouseId: string;
   createdBy: string;
   createdAt: string;
   notes: string;
@@ -138,7 +148,7 @@ export interface Transfer {
 export interface AuthSession {
   userId: string;
   tenantId: string;
-  depotId: string | null;
+  branchId: string | null;
   role: Role;
   email: string;
   name: string;
@@ -149,7 +159,8 @@ export interface Plan {
   code: string;
   name: string;
   priceMonthly: number;
-  maxDepots: number | null;
+  maxBranches: number | null;
+  maxWarehousesPerBranch: number | null;
   maxUsers: number | null;
   maxProducts: number | null;
   features: Record<string, boolean>;
@@ -168,7 +179,8 @@ export interface Subscription {
 }
 
 export interface PlanUsage {
-  depots: number;
+  branches: number;
+  warehouses: number;
   users: number;
   products: number;
 }

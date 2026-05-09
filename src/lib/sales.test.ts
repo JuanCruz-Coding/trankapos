@@ -43,7 +43,7 @@ describe('summarizeSale', () => {
 
 describe('buildSaleFromCart', () => {
   const args = (overrides: Partial<Parameters<typeof buildSaleFromCart>[0]> = {}) => ({
-    depotId: 'd1',
+    branchId: 'b1',
     registerId: 'r1',
     lines: [line({ price: 100, qty: 1 })],
     globalDiscount: 0,
@@ -53,15 +53,15 @@ describe('buildSaleFromCart', () => {
 
   it('feliz: retorna SaleInput correcto', () => {
     const r = buildSaleFromCart(args());
-    expect(r.depotId).toBe('d1');
+    expect(r.branchId).toBe('b1');
     expect(r.registerId).toBe('r1');
     expect(r.items).toHaveLength(1);
     expect(r.payments).toEqual([{ method: 'cash', amount: 100 }]);
     expect(r.discount).toBe(0);
   });
 
-  it('falla si no hay depósito', () => {
-    expect(() => buildSaleFromCart(args({ depotId: '' }))).toThrow(/depósito/i);
+  it('falla si no hay sucursal', () => {
+    expect(() => buildSaleFromCart(args({ branchId: '' }))).toThrow(/sucursal/i);
   });
 
   it('falla si el carrito está vacío', () => {

@@ -17,7 +17,8 @@ export default function Transfers() {
   const { session } = useAuth();
   const [refreshKey, setRefreshKey] = useState(0);
   const transfers = useLiveQuery(() => data.listTransfers(), [session?.tenantId, refreshKey]);
-  const depots = useLiveQuery(() => data.listDepots(), [session?.tenantId]);
+  const branches = useLiveQuery(() => data.listBranches(), [session?.tenantId]);
+  const warehouses = useLiveQuery(() => data.listWarehouses(), [session?.tenantId]);
   const products = useLiveQuery(() => data.listProducts(), [session?.tenantId]);
 
   const [modal, setModal] = useState(false);
@@ -31,9 +32,26 @@ export default function Transfers() {
     [products],
   );
 
+  const branchById = useMemo(
+    () => new Map((branches ?? []).map((b) => [b.id, b])),
+    [branches],
+  );
+
+  const warehouseById = useMemo(
+    () => new Map((warehouses ?? []).map((w) => [w.id, w])),
+    [warehouses],
+  );
+
+  function warehouseLabel(warehouseId: string): string {
+    const wh = warehouseById.get(warehouseId);
+    if (!wh) return '—';
+    const branch = wh.branchId ? branchById.get(wh.branchId) : null;
+    return branch ? `${branch.name} · ${wh.name}` : `Central · ${wh.name}`;
+  }
+
   function openNew() {
-    setFromId(depots?.[0]?.id ?? '');
-    setToId(depots?.[1]?.id ?? '');
+    setFromId(warehouses?.[0]?.id ?? '');
+    setToId(warehouses?.[1]?.id ?? '');
     setNotes('');
     setItems([]);
     setModal(true);
@@ -42,8 +60,8 @@ export default function Transfers() {
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
     const parsed = safeParse(transferSchema, {
-      fromDepotId: fromId,
-      toDepotId: toId,
+      fromWarehouseId: fromId,
+      toWarehouseId: toId,
       notes,
       items: items.filter((i) => i.productId && i.qty > 0),
     });
@@ -75,14 +93,14 @@ export default function Transfers() {
       ) : (
         <div className="space-y-3">
           {transfers!.map((t) => {
-            const from = depots?.find((d) => d.id === t.fromDepotId);
-            const to = depots?.find((d) => d.id === t.toDepotId);
             return (
               <Card key={t.id}>
                 <CardHeader>
                   <div className="flex items-center justify-between">
                     <CardTitle>
-                      {from?.name} <ArrowRight className="inline h-4 w-4" /> {to?.name}
+                      {warehouseLabel(t.fromWarehouseId)}{' '}
+                      <ArrowRight className="inline h-4 w-4" />{' '}
+                      {warehouseLabel(t.toWarehouseId)}
                     </CardTitle>
                     <span className="text-xs text-slate-500">{formatDateTime(t.createdAt)}</span>
                   </div>
@@ -114,9 +132,9 @@ export default function Transfers() {
                 value={fromId}
                 onChange={(e) => setFromId(e.target.value)}
               >
-                {(depots ?? []).map((d) => (
-                  <option key={d.id} value={d.id}>
-                    {d.name}
+                {(warehouses ?? []).map((w) => (
+                  <option key={w.id} value={w.id}>
+                    {warehouseLabel(w.id)}
                   </option>
                 ))}
               </select>
@@ -128,9 +146,9 @@ export default function Transfers() {
                 value={toId}
                 onChange={(e) => setToId(e.target.value)}
               >
-                {(depots ?? []).map((d) => (
-                  <option key={d.id} value={d.id}>
-                    {d.name}
+                {(warehouses ?? []).map((w) => (
+                  <option key={w.id} value={w.id}>
+                    {warehouseLabel(w.id)}
                   </option>
                 ))}
               </select>

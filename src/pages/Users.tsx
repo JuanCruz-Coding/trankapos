@@ -25,7 +25,7 @@ interface FormState {
   name: string;
   password: string;
   role: Role;
-  depotId: string;
+  branchId: string;
   active: boolean;
 }
 
@@ -34,7 +34,7 @@ const emptyForm: FormState = {
   name: '',
   password: '',
   role: 'cashier',
-  depotId: '',
+  branchId: '',
   active: true,
 };
 
@@ -45,12 +45,12 @@ export default function Users() {
   // para forzar el re-fetch.
   const [refreshKey, setRefreshKey] = useState(0);
   const users = useLiveQuery(() => data.listUsers(), [session?.tenantId, refreshKey]);
-  const depots = useLiveQuery(() => data.listDepots(), [session?.tenantId, refreshKey]);
+  const branches = useLiveQuery(() => data.listBranches(), [session?.tenantId, refreshKey]);
   const [modal, setModal] = useState(false);
   const [form, setForm] = useState<FormState>(emptyForm);
 
   function openNew() {
-    setForm({ ...emptyForm, depotId: depots?.[0]?.id ?? '' });
+    setForm({ ...emptyForm, branchId: branches?.[0]?.id ?? '' });
     setModal(true);
   }
 
@@ -61,7 +61,7 @@ export default function Users() {
       name: u.name,
       password: '',
       role: u.role,
-      depotId: u.depotId ?? '',
+      branchId: u.branchId ?? '',
       active: u.active,
     });
     setModal(true);
@@ -74,7 +74,7 @@ export default function Users() {
       name: form.name,
       password: form.password || undefined,
       role: form.role,
-      depotId: form.depotId || null,
+      branchId: form.branchId || null,
       active: form.active,
     });
     if (!parsed.ok) return toast.error(parsed.error);
@@ -134,14 +134,14 @@ export default function Users() {
                 <th className="px-4 py-3">Nombre</th>
                 <th className="px-4 py-3">Email</th>
                 <th className="px-4 py-3">Rol</th>
-                <th className="px-4 py-3">Depósito</th>
+                <th className="px-4 py-3">Sucursal</th>
                 <th className="px-4 py-3">Estado</th>
                 <th className="px-4 py-3" />
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
               {users!.map((u) => {
-                const depot = depots?.find((d) => d.id === u.depotId);
+                const branch = branches?.find((b) => b.id === u.branchId);
                 return (
                   <tr key={u.id} className="hover:bg-slate-50">
                     <td className="px-4 py-3">
@@ -154,7 +154,7 @@ export default function Users() {
                     </td>
                     <td className="px-4 py-3 text-slate-600">{u.email}</td>
                     <td className="px-4 py-3 capitalize">{u.role}</td>
-                    <td className="px-4 py-3 text-slate-600">{depot?.name ?? '—'}</td>
+                    <td className="px-4 py-3 text-slate-600">{branch?.name ?? '—'}</td>
                     <td className="px-4 py-3">
                       <span
                         className={
@@ -243,16 +243,16 @@ export default function Users() {
               </select>
             </div>
             <div>
-              <label className="mb-1 block text-xs font-medium text-slate-700">Depósito</label>
+              <label className="mb-1 block text-xs font-medium text-slate-700">Sucursal</label>
               <select
                 className="h-10 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm"
-                value={form.depotId}
-                onChange={(e) => setForm({ ...form, depotId: e.target.value })}
+                value={form.branchId}
+                onChange={(e) => setForm({ ...form, branchId: e.target.value })}
               >
                 <option value="">Sin asignar</option>
-                {(depots ?? []).map((d) => (
-                  <option key={d.id} value={d.id}>
-                    {d.name}
+                {(branches ?? []).map((b) => (
+                  <option key={b.id} value={b.id}>
+                    {b.name}
                   </option>
                 ))}
               </select>

@@ -4,7 +4,7 @@
 // Crea un nuevo usuario (manager o cashier) dentro del tenant del caller.
 // La invoca el frontend con:
 //   supabase.functions.invoke('create-team-user', {
-//     body: { email, password, name, role, depotId, active }
+//     body: { email, password, name, role, branchId, active }
 //   });
 //
 // Por qué esto vive en una Edge Function y no en el frontend:
@@ -25,7 +25,7 @@ interface Body {
   password: string;
   name: string;
   role: 'owner' | 'manager' | 'cashier';
-  depotId: string | null;
+  branchId: string | null;
   active?: boolean;
 }
 
@@ -52,7 +52,7 @@ Deno.serve(async (req) => {
   }
 
   try {
-    const { email, password, name, role, depotId, active = true } =
+    const { email, password, name, role, branchId, active = true } =
       (await req.json()) as Body;
 
     if (!email || !password || !name || !role) {
@@ -149,7 +149,7 @@ Deno.serve(async (req) => {
       user_id: newUserId,
       tenant_id: tenantId,
       role,
-      depot_id: depotId,
+      branch_id: branchId,
       active,
     });
     if (memInsErr) {
@@ -160,7 +160,7 @@ Deno.serve(async (req) => {
 
     return jsonResponse(
       {
-        user: { id: newUserId, email, name, role, depotId, active },
+        user: { id: newUserId, email, name, role, branchId, active },
       },
       200,
     );

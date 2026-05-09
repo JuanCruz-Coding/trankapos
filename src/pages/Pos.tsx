@@ -27,7 +27,7 @@ import { toast } from '@/stores/toast';
 import { PAYMENT_METHODS, type PaymentMethod, type Sale } from '@/types';
 
 export default function Pos() {
-  const { session, activeDepotId } = useAuth();
+  const { session, activeBranchId } = useAuth();
   const {
     lines,
     discount,
@@ -51,15 +51,21 @@ export default function Pos() {
     return data.listProducts();
   }, [session?.tenantId]);
 
+  // El POS resta del warehouse default de la branch activa.
+  const defaultWarehouse = useLiveQuery(async () => {
+    if (!activeBranchId) return null;
+    return data.getDefaultWarehouse(activeBranchId);
+  }, [activeBranchId]);
+
   const stock = useLiveQuery(async () => {
-    if (!activeDepotId) return [];
-    return data.listStock(activeDepotId);
-  }, [activeDepotId]);
+    if (!defaultWarehouse) return [];
+    return data.listStock(defaultWarehouse.id);
+  }, [defaultWarehouse?.id]);
 
   const openRegister = useLiveQuery(async () => {
-    if (!activeDepotId) return null;
-    return data.currentOpenRegister(activeDepotId);
-  }, [activeDepotId, lines.length]);
+    if (!activeBranchId) return null;
+    return data.currentOpenRegister(activeBranchId);
+  }, [activeBranchId, lines.length]);
 
   const stockByProduct = useMemo(() => {
     const map = new Map<string, number>();
@@ -131,10 +137,10 @@ export default function Pos() {
     await processCode(code);
   }
 
-  if (!session || !activeDepotId) {
+  if (!session || !activeBranchId) {
     return (
       <div className="flex h-full items-center justify-center p-6 text-sm text-slate-500">
-        Seleccioná un depósito activo en la barra lateral.
+        Seleccioná una sucursal activa en la barra lateral.
       </div>
     );
   }
@@ -404,7 +410,7 @@ interface PayProps {
 }
 
 function PaymentModal({ open, onClose, total, onCompleted }: PayProps) {
-  const { session, activeDepotId } = useAuth();
+  const { session, activeBranchId } = useAuth();
   const { lines, discount } = useCart();
   const [payments, setPayments] = useState<{ method: PaymentMethod; amount: number }[]>([
     { method: 'cash', amount: total },
@@ -436,12 +442,12 @@ function PaymentModal({ open, onClose, total, onCompleted }: PayProps) {
   }
 
   async function handleConfirm() {
-    if (!session || !activeDepotId) return;
+    if (!session || !activeBranchId) return;
     setLoading(true);
     try {
-      const reg = await data.currentOpenRegister(activeDepotId);
+      const reg = await data.currentOpenRegister(activeBranchId);
       const saleInput = buildSaleFromCart({
-        depotId: activeDepotId,
+        branchId: activeBranchId,
         registerId: reg?.id ?? null,
         lines,
         globalDiscount: discount,

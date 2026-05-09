@@ -1,12 +1,12 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { getSupabase } from '@/lib/supabase';
-import { addMoney, lineSubtotal, subMoney, eqMoney } from '@/lib/money';
+import { addMoney, subMoney } from '@/lib/money';
 import type {
   AuthSession,
+  Branch,
   CashMovement,
   CashRegister,
   Category,
-  Depot,
   PaymentMethod,
   Plan,
   PlanUsage,
@@ -19,13 +19,14 @@ import type {
   Tenant,
   Transfer,
   User,
+  Warehouse,
 } from '@/types';
 import type {
+  BranchInput,
   CashMovementInput,
   CategoryInput,
   CloseRegisterInput,
   DataDriver,
-  DepotInput,
   LoginInput,
   OpenRegisterInput,
   ProductInput,
@@ -34,18 +35,27 @@ import type {
   SignupInput,
   TransferInput,
   UserInput,
+  WarehouseInput,
 } from '../driver';
-
-const NOT_IMPL = (name: string) =>
-  new Error(`SupabaseDriver.${name}() todavía no está implementado.`);
 
 // ============================================================
 // Mappers DB → TS. Postgres `numeric` viene como string en JSON.
 // ============================================================
 
-interface DepotRow { id: string; tenant_id: string; name: string; address: string; active: boolean; created_at: string; }
-function mapDepot(r: DepotRow): Depot {
+interface BranchRow { id: string; tenant_id: string; name: string; address: string; active: boolean; created_at: string; }
+function mapBranch(r: BranchRow): Branch {
   return { id: r.id, tenantId: r.tenant_id, name: r.name, address: r.address, active: r.active, createdAt: r.created_at };
+}
+
+interface WarehouseRow {
+  id: string; tenant_id: string; branch_id: string | null;
+  name: string; is_default: boolean; active: boolean; created_at: string;
+}
+function mapWarehouse(r: WarehouseRow): Warehouse {
+  return {
+    id: r.id, tenantId: r.tenant_id, branchId: r.branch_id,
+    name: r.name, isDefault: r.is_default, active: r.active, createdAt: r.created_at,
+  };
 }
 
 interface CategoryRow { id: string; tenant_id: string; name: string; created_at: string; }
@@ -68,25 +78,25 @@ function mapProduct(r: ProductRow): Product {
 }
 
 interface StockRow {
-  id: string; tenant_id: string; depot_id: string; product_id: string;
+  id: string; tenant_id: string; warehouse_id: string; product_id: string;
   qty: string; min_qty: string; updated_at: string;
 }
 function mapStock(r: StockRow): StockItem {
   return {
-    id: r.id, tenantId: r.tenant_id, depotId: r.depot_id, productId: r.product_id,
+    id: r.id, tenantId: r.tenant_id, warehouseId: r.warehouse_id, productId: r.product_id,
     qty: Number(r.qty), minQty: Number(r.min_qty), updatedAt: r.updated_at,
   };
 }
 
 interface RegisterRow {
-  id: string; tenant_id: string; depot_id: string; opened_by: string; opened_at: string;
+  id: string; tenant_id: string; branch_id: string; opened_by: string; opened_at: string;
   opening_amount: string; closed_at: string | null; closed_by: string | null;
   closing_amount: string | null; expected_cash: string | null; difference: string | null;
   notes: string | null;
 }
 function mapRegister(r: RegisterRow): CashRegister {
   return {
-    id: r.id, tenantId: r.tenant_id, depotId: r.depot_id,
+    id: r.id, tenantId: r.tenant_id, branchId: r.branch_id,
     openedBy: r.opened_by, openedAt: r.opened_at, openingAmount: Number(r.opening_amount),
     closedAt: r.closed_at, closedBy: r.closed_by,
     closingAmount: r.closing_amount !== null ? Number(r.closing_amount) : null,
@@ -122,14 +132,14 @@ function mapSaleItem(r: SaleItemRow): SaleItem {
 
 interface SalePaymentRow { method: PaymentMethod; amount: string; }
 interface SaleRow {
-  id: string; tenant_id: string; depot_id: string; register_id: string | null;
+  id: string; tenant_id: string; branch_id: string; register_id: string | null;
   cashier_id: string; subtotal: string; discount: string; total: string;
   voided: boolean; created_at: string;
   sale_items?: SaleItemRow[]; sale_payments?: SalePaymentRow[];
 }
 function mapSale(r: SaleRow): Sale {
   return {
-    id: r.id, tenantId: r.tenant_id, depotId: r.depot_id,
+    id: r.id, tenantId: r.tenant_id, branchId: r.branch_id,
     registerId: r.register_id, cashierId: r.cashier_id,
     items: (r.sale_items ?? []).map(mapSaleItem),
     payments: (r.sale_payments ?? []).map((p) => ({ method: p.method, amount: Number(p.amount) })),
@@ -167,14 +177,16 @@ class SupabaseDriver implements DataDriver {
       );
     }
 
+    // La RPC mantiene el parámetro p_depot_name por compat con la signature
+    // existente en el SQL (la migration 012 no lo renombra para no romper
+    // backwards-compat). Conceptualmente ahora crea branch + warehouse default.
     const { error: rpcErr } = await this.sb.rpc('create_tenant_for_owner', {
       p_tenant_name: input.tenantName,
-      p_depot_name: input.depotName,
+      p_depot_name: input.branchName,
       p_owner_name: input.ownerName,
     });
     if (rpcErr) throw new Error(`Error creando tenant: ${rpcErr.message}`);
 
-    // Mandamos email de bienvenida (best-effort, no bloquea el signup)
     void this.sendWelcomeEmail();
 
     return this.loadSession();
@@ -196,7 +208,6 @@ class SupabaseDriver implements DataDriver {
         },
       });
     } catch (err) {
-      // Si falla el email, no rompe el signup
       console.warn('No se pudo mandar email de bienvenida:', err);
     }
   }
@@ -242,7 +253,7 @@ class SupabaseDriver implements DataDriver {
 
     const { data: mem, error: memErr } = await this.sb
       .from('memberships')
-      .select('tenant_id, role, depot_id')
+      .select('tenant_id, role, branch_id')
       .eq('user_id', userId)
       .eq('active', true)
       .limit(1)
@@ -252,7 +263,7 @@ class SupabaseDriver implements DataDriver {
     const session: AuthSession = {
       userId,
       tenantId: mem.tenant_id,
-      depotId: mem.depot_id,
+      branchId: mem.branch_id,
       role: mem.role,
       email: prof.email,
       name: prof.name,
@@ -276,7 +287,7 @@ class SupabaseDriver implements DataDriver {
       .from('subscriptions')
       .select(`
         id, tenant_id, status, trial_ends_at, current_period_start, current_period_end,
-        plans:plan_id ( id, code, name, price_monthly, max_depots, max_users, max_products, features )
+        plans:plan_id ( id, code, name, price_monthly, max_branches, max_warehouses_per_branch, max_users, max_products, features )
       `)
       .eq('tenant_id', s.tenantId)
       .single();
@@ -285,12 +296,12 @@ class SupabaseDriver implements DataDriver {
     type PlanRow = {
       id: string; code: string; name: string;
       price_monthly: string;
-      max_depots: number | null;
+      max_branches: number | null;
+      max_warehouses_per_branch: number | null;
       max_users: number | null;
       max_products: number | null;
       features: Record<string, boolean>;
     };
-    // Supabase devuelve los joins many-to-one como array. Tomamos el primero.
     const raw = data as unknown as { plans: PlanRow | PlanRow[] };
     const planRow = Array.isArray(raw.plans) ? raw.plans[0] : raw.plans;
     if (!planRow) throw new Error('Plan no encontrado en la suscripción');
@@ -300,7 +311,8 @@ class SupabaseDriver implements DataDriver {
       code: planRow.code,
       name: planRow.name,
       priceMonthly: Number(planRow.price_monthly),
-      maxDepots: planRow.max_depots,
+      maxBranches: planRow.max_branches,
+      maxWarehousesPerBranch: planRow.max_warehouses_per_branch,
       maxUsers: planRow.max_users,
       maxProducts: planRow.max_products,
       features: planRow.features ?? {},
@@ -321,7 +333,7 @@ class SupabaseDriver implements DataDriver {
     await this.requireSession();
     const { data, error } = await this.sb
       .from('plans')
-      .select('id, code, name, price_monthly, max_depots, max_users, max_products, features')
+      .select('id, code, name, price_monthly, max_branches, max_warehouses_per_branch, max_users, max_products, features')
       .order('price_monthly', { ascending: true });
     if (error) throw new Error(error.message);
     return (data ?? []).map((r) => ({
@@ -329,7 +341,8 @@ class SupabaseDriver implements DataDriver {
       code: r.code,
       name: r.name,
       priceMonthly: Number(r.price_monthly),
-      maxDepots: r.max_depots,
+      maxBranches: r.max_branches,
+      maxWarehousesPerBranch: r.max_warehouses_per_branch,
       maxUsers: r.max_users,
       maxProducts: r.max_products,
       features: r.features ?? {},
@@ -355,10 +368,6 @@ class SupabaseDriver implements DataDriver {
     if (!res.ok) throw new Error(body?.error ?? `Error HTTP ${res.status}`);
   }
 
-  // Limpia pending_plan_id del tenant. Se usa cuando MP rechaza el pago
-  // o el user abandona el checkout — sin esto el campo queda con un plan
-  // que nunca se confirmó y puede llevar a promociones incorrectas si
-  // un webhook tardío llega con authorized.
   async clearPendingPlan(): Promise<void> {
     const s = await this.requireSession();
     const { error } = await this.sb
@@ -395,19 +404,20 @@ class SupabaseDriver implements DataDriver {
 
   async getUsage(): Promise<PlanUsage> {
     await this.requireSession();
-    // 3 counts en paralelo. Usamos `head: true` para que Supabase no traiga
-    // las filas — solo pide el header con el count, mucho más liviano.
-    const [depotsRes, usersRes, productsRes] = await Promise.all([
-      this.sb.from('depots').select('*', { count: 'exact', head: true }),
+    const [branchesRes, warehousesRes, usersRes, productsRes] = await Promise.all([
+      this.sb.from('branches').select('*', { count: 'exact', head: true }),
+      this.sb.from('warehouses').select('*', { count: 'exact', head: true }),
       this.sb.from('memberships').select('*', { count: 'exact', head: true }).eq('active', true),
       this.sb.from('products').select('*', { count: 'exact', head: true }),
     ]);
-    if (depotsRes.error) throw new Error(depotsRes.error.message);
+    if (branchesRes.error) throw new Error(branchesRes.error.message);
+    if (warehousesRes.error) throw new Error(warehousesRes.error.message);
     if (usersRes.error) throw new Error(usersRes.error.message);
     if (productsRes.error) throw new Error(productsRes.error.message);
 
     return {
-      depots: depotsRes.count ?? 0,
+      branches: branchesRes.count ?? 0,
+      warehouses: warehousesRes.count ?? 0,
       users: usersRes.count ?? 0,
       products: productsRes.count ?? 0,
     };
@@ -426,22 +436,22 @@ class SupabaseDriver implements DataDriver {
     return { id: data.id, name: data.name, createdAt: data.created_at };
   }
 
-  // ===== DEPOTS =====
+  // ===== BRANCHES =====
 
-  async listDepots(): Promise<Depot[]> {
+  async listBranches(): Promise<Branch[]> {
     await this.requireSession();
     const { data, error } = await this.sb
-      .from('depots')
+      .from('branches')
       .select('*')
       .order('created_at', { ascending: true });
     if (error) throw new Error(error.message);
-    return (data ?? []).map(mapDepot);
+    return (data ?? []).map(mapBranch);
   }
 
-  async createDepot(input: DepotInput): Promise<Depot> {
+  async createBranch(input: BranchInput): Promise<Branch> {
     const s = await this.requireSession();
     const { data, error } = await this.sb
-      .from('depots')
+      .from('branches')
       .insert({
         tenant_id: s.tenantId,
         name: input.name,
@@ -451,29 +461,111 @@ class SupabaseDriver implements DataDriver {
       .select()
       .single();
     if (error) throw new Error(error.message);
-    return mapDepot(data);
+    const branch = mapBranch(data);
+
+    // Cada branch nueva arranca con 1 warehouse default (mismo nombre).
+    // Si el plan tiene max_warehouses_per_branch >= 1 (todos lo tienen),
+    // el trigger lo permite.
+    const { error: whErr } = await this.sb.from('warehouses').insert({
+      tenant_id: s.tenantId,
+      branch_id: branch.id,
+      name: input.name,
+      is_default: true,
+      active: true,
+    });
+    if (whErr) {
+      // Rollback de la branch para no dejar un huérfano sin warehouse default.
+      await this.sb.from('branches').delete().eq('id', branch.id);
+      throw new Error(`Branch creada pero falló warehouse default: ${whErr.message}`);
+    }
+    return branch;
   }
 
-  async updateDepot(id: string, input: Partial<DepotInput>): Promise<Depot> {
+  async updateBranch(id: string, input: Partial<BranchInput>): Promise<Branch> {
     await this.requireSession();
     const patch: Record<string, unknown> = {};
     if (input.name !== undefined) patch.name = input.name;
     if (input.address !== undefined) patch.address = input.address;
     if (input.active !== undefined) patch.active = input.active;
     const { data, error } = await this.sb
-      .from('depots')
+      .from('branches')
       .update(patch)
       .eq('id', id)
       .select()
       .single();
     if (error) throw new Error(error.message);
-    return mapDepot(data);
+    return mapBranch(data);
   }
 
-  async deleteDepot(id: string): Promise<void> {
+  async deleteBranch(id: string): Promise<void> {
     await this.requireSession();
-    const { error } = await this.sb.from('depots').delete().eq('id', id);
+    const { error } = await this.sb.from('branches').delete().eq('id', id);
     if (error) throw new Error(error.message);
+  }
+
+  // ===== WAREHOUSES =====
+
+  async listWarehouses(): Promise<Warehouse[]> {
+    await this.requireSession();
+    const { data, error } = await this.sb
+      .from('warehouses')
+      .select('*')
+      .order('created_at', { ascending: true });
+    if (error) throw new Error(error.message);
+    return (data ?? []).map(mapWarehouse);
+  }
+
+  async createWarehouse(input: WarehouseInput): Promise<Warehouse> {
+    const s = await this.requireSession();
+    const { data, error } = await this.sb
+      .from('warehouses')
+      .insert({
+        tenant_id: s.tenantId,
+        branch_id: input.branchId,
+        name: input.name,
+        is_default: input.isDefault,
+        active: input.active,
+      })
+      .select()
+      .single();
+    if (error) throw new Error(error.message);
+    return mapWarehouse(data);
+  }
+
+  async updateWarehouse(id: string, input: Partial<WarehouseInput>): Promise<Warehouse> {
+    await this.requireSession();
+    const patch: Record<string, unknown> = {};
+    if (input.name !== undefined) patch.name = input.name;
+    if (input.branchId !== undefined) patch.branch_id = input.branchId;
+    if (input.isDefault !== undefined) patch.is_default = input.isDefault;
+    if (input.active !== undefined) patch.active = input.active;
+    const { data, error } = await this.sb
+      .from('warehouses')
+      .update(patch)
+      .eq('id', id)
+      .select()
+      .single();
+    if (error) throw new Error(error.message);
+    return mapWarehouse(data);
+  }
+
+  async deleteWarehouse(id: string): Promise<void> {
+    await this.requireSession();
+    const { error } = await this.sb.from('warehouses').delete().eq('id', id);
+    if (error) throw new Error(error.message);
+  }
+
+  async getDefaultWarehouse(branchId: string): Promise<Warehouse | null> {
+    await this.requireSession();
+    const { data, error } = await this.sb
+      .from('warehouses')
+      .select('*')
+      .eq('branch_id', branchId)
+      .eq('is_default', true)
+      .eq('active', true)
+      .maybeSingle();
+    if (error) throw new Error(error.message);
+    return data ? mapWarehouse(data) : null;
   }
 
   // ===== CATEGORIES =====
@@ -555,7 +647,7 @@ class SupabaseDriver implements DataDriver {
     if (input.initialStock && input.initialStock.length > 0) {
       const rows = input.initialStock.map((row) => ({
         tenant_id: s.tenantId,
-        depot_id: row.depotId,
+        warehouse_id: row.warehouseId,
         product_id: product.id,
         qty: row.qty,
         min_qty: row.minQty,
@@ -598,10 +690,10 @@ class SupabaseDriver implements DataDriver {
 
   // ===== STOCK =====
 
-  async listStock(depotId?: string): Promise<StockItem[]> {
+  async listStock(warehouseId?: string): Promise<StockItem[]> {
     await this.requireSession();
     let q = this.sb.from('stock_items').select('*');
-    if (depotId) q = q.eq('depot_id', depotId);
+    if (warehouseId) q = q.eq('warehouse_id', warehouseId);
     const { data, error } = await q;
     if (error) throw new Error(error.message);
     return (data ?? []).map(mapStock);
@@ -609,16 +701,14 @@ class SupabaseDriver implements DataDriver {
 
   async adjustStock(
     productId: string,
-    depotId: string,
+    warehouseId: string,
     deltaQty: number,
     minQty?: number,
   ): Promise<void> {
     await this.requireSession();
-    // Usa RPC SQL con SELECT ... FOR UPDATE para evitar races read-modify-write
-    // cuando dos cajeros tocan el mismo producto al mismo tiempo. Ver migration 005.
     const { error } = await this.sb.rpc('adjust_stock_atomic', {
       p_product_id: productId,
-      p_depot_id: depotId,
+      p_warehouse_id: warehouseId,
       p_delta: deltaQty,
       p_min_qty: minQty ?? null,
     });
@@ -626,17 +716,13 @@ class SupabaseDriver implements DataDriver {
   }
 
   // ===== SALES =====
-  // createSale ahora delega a la RPC SQL public.create_sale_atomic (migration 005),
-  // que hace todo en una sola transacción con SELECT FOR UPDATE de stock_items.
-  // Si cualquier paso falla, el rollback automático de Postgres revierte todo.
-  // La RPC también valida stock disponible — NO permite vender en negativo.
 
   async createSale(input: SaleInput): Promise<Sale> {
     const s = await this.requireSession();
 
     const { data: saleId, error: rpcErr } = await this.sb.rpc('create_sale_atomic', {
       p_tenant_id: s.tenantId,
-      p_depot_id: input.depotId,
+      p_branch_id: input.branchId,
       p_register_id: input.registerId ?? null,
       p_discount: input.discount,
       p_items: input.items.map((it) => ({
@@ -652,7 +738,6 @@ class SupabaseDriver implements DataDriver {
     });
     if (rpcErr) throw new Error(rpcErr.message);
 
-    // Re-leer la sale completa para devolver el objeto al cliente
     const { data: full, error: fullErr } = await this.sb
       .from('sales')
       .select('*, sale_items(*), sale_payments(method, amount)')
@@ -679,7 +764,7 @@ class SupabaseDriver implements DataDriver {
       .order('created_at', { ascending: false });
     if (q.from) query = query.gte('created_at', q.from);
     if (q.to) query = query.lte('created_at', q.to);
-    if (q.depotId) query = query.eq('depot_id', q.depotId);
+    if (q.branchId) query = query.eq('branch_id', q.branchId);
     if (q.cashierId) query = query.eq('cashier_id', q.cashierId);
     if (q.registerId) query = query.eq('register_id', q.registerId);
     if (q.limit !== undefined) {
@@ -694,12 +779,12 @@ class SupabaseDriver implements DataDriver {
 
   // ===== CASH REGISTER =====
 
-  async currentOpenRegister(depotId: string): Promise<CashRegister | null> {
+  async currentOpenRegister(branchId: string): Promise<CashRegister | null> {
     await this.requireSession();
     const { data, error } = await this.sb
       .from('cash_registers')
       .select('*')
-      .eq('depot_id', depotId)
+      .eq('branch_id', branchId)
       .is('closed_at', null)
       .limit(1)
       .maybeSingle();
@@ -709,13 +794,13 @@ class SupabaseDriver implements DataDriver {
 
   async openRegister(input: OpenRegisterInput): Promise<CashRegister> {
     const s = await this.requireSession();
-    const existing = await this.currentOpenRegister(input.depotId);
-    if (existing) throw new Error('Ya hay una caja abierta en este depósito');
+    const existing = await this.currentOpenRegister(input.branchId);
+    if (existing) throw new Error('Ya hay una caja abierta en esta sucursal');
     const { data, error } = await this.sb
       .from('cash_registers')
       .insert({
         tenant_id: s.tenantId,
-        depot_id: input.depotId,
+        branch_id: input.branchId,
         opened_by: s.userId,
         opening_amount: input.openingAmount,
       })
@@ -737,7 +822,6 @@ class SupabaseDriver implements DataDriver {
     const reg = mapRegister(regRow);
     if (reg.closedAt) throw new Error('Caja ya cerrada');
 
-    // Sumamos cobros en cash de las ventas no anuladas asociadas a este register
     const { data: salesRows, error: salesErr } = await this.sb
       .from('sales')
       .select('voided, sale_payments(method, amount)')
@@ -752,7 +836,6 @@ class SupabaseDriver implements DataDriver {
       }
     }
 
-    // Movimientos manuales de caja
     const { data: movs, error: movErr } = await this.sb
       .from('cash_movements')
       .select('kind, amount')
@@ -814,33 +897,25 @@ class SupabaseDriver implements DataDriver {
     return (data ?? []).map(mapMovement);
   }
 
-  async listRegisters(depotId?: string): Promise<CashRegister[]> {
+  async listRegisters(branchId?: string): Promise<CashRegister[]> {
     await this.requireSession();
     let q = this.sb
       .from('cash_registers')
       .select('*')
       .order('opened_at', { ascending: false });
-    if (depotId) q = q.eq('depot_id', depotId);
+    if (branchId) q = q.eq('branch_id', branchId);
     const { data, error } = await q;
     if (error) throw new Error(error.message);
     return (data ?? []).map(mapRegister);
   }
 
   // ===== USERS =====
-  // En Supabase los users viven en auth.users. Para la app construimos
-  // el shape `User` combinando memberships (rol, depot, active del tenant)
-  // + profiles (nombre, email globales).
-  //
-  // LIMITACIÓN: createUser() requiere crear en auth.users, lo cual solo se
-  // puede hacer con service_role key (nunca debe ir al frontend). Para
-  // habilitarlo, hay que crear una Edge Function en Supabase que reciba
-  // las creds y use admin.createUser(). Por ahora lanza error explícito.
 
   async listUsers(): Promise<User[]> {
     const s = await this.requireSession();
     const { data: mems, error: memErr } = await this.sb
       .from('memberships')
-      .select('user_id, role, depot_id, active, created_at, tenant_id')
+      .select('user_id, role, branch_id, active, created_at, tenant_id')
       .order('created_at', { ascending: true });
     if (memErr) throw new Error(memErr.message);
     if (!mems || mems.length === 0) return [];
@@ -859,12 +934,10 @@ class SupabaseDriver implements DataDriver {
         id: m.user_id,
         tenantId: s.tenantId,
         email: p?.email ?? '',
-        // El modelo TS pide passwordHash, pero acá Supabase Auth maneja
-        // las creds. Devolvemos string vacío para cumplir el tipo.
         passwordHash: '',
         name: p?.name ?? '',
         role: m.role,
-        depotId: m.depot_id,
+        branchId: m.branch_id,
         active: m.active,
         createdAt: m.created_at,
       };
@@ -875,10 +948,6 @@ class SupabaseDriver implements DataDriver {
     const s = await this.requireSession();
     if (!input.password) throw new Error('Password requerido para crear usuario');
 
-    // Llamamos a la Edge Function vía fetch directo (no functions.invoke):
-    // el SDK envuelve los errores 4xx/5xx en un mensaje genérico que pierde
-    // el motivo real (ej. "Llegaste al límite de tu plan"). Con fetch tenemos
-    // acceso al body de la respuesta independientemente del status.
     const { data: sessionData } = await this.sb.auth.getSession();
     const token = sessionData.session?.access_token;
     if (!token) throw new Error('No autenticado');
@@ -896,7 +965,7 @@ class SupabaseDriver implements DataDriver {
         password: input.password,
         name: input.name,
         role: input.role,
-        depotId: input.depotId,
+        branchId: input.branchId,
         active: input.active,
       }),
     });
@@ -911,7 +980,7 @@ class SupabaseDriver implements DataDriver {
       email: string;
       name: string;
       role: typeof input.role;
-      depotId: string | null;
+      branchId: string | null;
       active: boolean;
     };
     return {
@@ -921,7 +990,7 @@ class SupabaseDriver implements DataDriver {
       passwordHash: '',
       name: created.name,
       role: created.role,
-      depotId: created.depotId,
+      branchId: created.branchId,
       active: created.active,
       createdAt: new Date().toISOString(),
     };
@@ -940,7 +1009,7 @@ class SupabaseDriver implements DataDriver {
 
     const memPatch: Record<string, unknown> = {};
     if (input.role !== undefined) memPatch.role = input.role;
-    if (input.depotId !== undefined) memPatch.depot_id = input.depotId;
+    if (input.branchId !== undefined) memPatch.branch_id = input.branchId;
     if (input.active !== undefined) memPatch.active = input.active;
     if (Object.keys(memPatch).length > 0) {
       const { error } = await this.sb
@@ -949,9 +1018,6 @@ class SupabaseDriver implements DataDriver {
         .eq('user_id', id);
       if (error) throw new Error(error.message);
     }
-
-    // input.email e input.password se ignoran: requieren llamadas a
-    // supabase.auth.admin.updateUserById, que necesita service_role.
 
     const all = await this.listUsers();
     const user = all.find((u) => u.id === id);
@@ -962,9 +1028,6 @@ class SupabaseDriver implements DataDriver {
   async deleteUser(id: string): Promise<void> {
     const s = await this.requireSession();
     if (s.userId === id) throw new Error('No podés eliminar tu propio usuario');
-    // Soft delete: desactivamos la membership. El registro en auth.users queda
-    // (eliminarlo requiere service_role). Si el user no tiene otras memberships
-    // en otros tenants, queda como user huérfano sin acceso a nada.
     const { error } = await this.sb
       .from('memberships')
       .update({ active: false })
@@ -973,9 +1036,6 @@ class SupabaseDriver implements DataDriver {
   }
 
   // ===== TRANSFERS =====
-  // createTransfer delega a la RPC SQL public.create_transfer_atomic
-  // (migration 010), que hace todo en una sola transacción con SELECT FOR
-  // UPDATE en stock origen. Si cualquier paso falla, rollback automático.
 
   async createTransfer(input: TransferInput): Promise<Transfer> {
     const s = await this.requireSession();
@@ -984,8 +1044,8 @@ class SupabaseDriver implements DataDriver {
       'create_transfer_atomic',
       {
         p_tenant_id: s.tenantId,
-        p_from_depot_id: input.fromDepotId,
-        p_to_depot_id: input.toDepotId,
+        p_from_warehouse_id: input.fromWarehouseId,
+        p_to_warehouse_id: input.toWarehouseId,
         p_notes: input.notes ?? '',
         p_items: input.items.map((it) => ({
           product_id: it.productId,
@@ -995,7 +1055,6 @@ class SupabaseDriver implements DataDriver {
     );
     if (rpcErr) throw new Error(rpcErr.message);
 
-    // Re-fetch del header para obtener created_at server-side.
     const { data: header, error: headerErr } = await this.sb
       .from('transfers')
       .select('created_at')
@@ -1006,8 +1065,8 @@ class SupabaseDriver implements DataDriver {
     return {
       id: transferId as string,
       tenantId: s.tenantId,
-      fromDepotId: input.fromDepotId,
-      toDepotId: input.toDepotId,
+      fromWarehouseId: input.fromWarehouseId,
+      toWarehouseId: input.toWarehouseId,
       createdBy: s.userId,
       notes: input.notes,
       items: input.items,
@@ -1026,8 +1085,8 @@ class SupabaseDriver implements DataDriver {
     return (data ?? []).map((r) => ({
       id: r.id,
       tenantId: s.tenantId,
-      fromDepotId: r.from_depot_id,
-      toDepotId: r.to_depot_id,
+      fromWarehouseId: r.from_warehouse_id,
+      toWarehouseId: r.to_warehouse_id,
       createdBy: r.created_by,
       notes: r.notes,
       createdAt: r.created_at,

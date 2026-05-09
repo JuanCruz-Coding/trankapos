@@ -14,7 +14,7 @@ import { formatDateTime } from '@/lib/dates';
 import { toast } from '@/stores/toast';
 
 export default function Cash() {
-  const { activeDepotId, session } = useAuth();
+  const { activeBranchId, session } = useAuth();
   const [openModal, setOpenModal] = useState(false);
   const [closeModal, setCloseModal] = useState(false);
   const [mvModal, setMvModal] = useState<false | 'in' | 'out'>(false);
@@ -22,14 +22,14 @@ export default function Cash() {
   const bumpRefresh = () => setRefreshKey((k) => k + 1);
 
   const openReg = useLiveQuery(async () => {
-    if (!activeDepotId) return null;
-    return data.currentOpenRegister(activeDepotId);
-  }, [activeDepotId, refreshKey]);
+    if (!activeBranchId) return null;
+    return data.currentOpenRegister(activeBranchId);
+  }, [activeBranchId, refreshKey]);
 
   const regs = useLiveQuery(async () => {
-    if (!activeDepotId) return [];
-    return data.listRegisters(activeDepotId);
-  }, [activeDepotId, refreshKey]);
+    if (!activeBranchId) return [];
+    return data.listRegisters(activeBranchId);
+  }, [activeBranchId, refreshKey]);
 
   const sales = useLiveQuery(async () => {
     if (!openReg) return [];
@@ -63,8 +63,8 @@ export default function Cash() {
 
   const expectedCash = (openReg?.openingAmount ?? 0) + cashIn + mvNet;
 
-  if (!activeDepotId) {
-    return <div className="p-6 text-slate-500">Seleccioná un depósito</div>;
+  if (!activeBranchId) {
+    return <div className="p-6 text-slate-500">Seleccioná una sucursal</div>;
   }
 
   return (
@@ -225,7 +225,7 @@ export default function Cash() {
       <OpenModal
         open={openModal}
         onClose={() => setOpenModal(false)}
-        depotId={activeDepotId}
+        branchId={activeBranchId}
         onSuccess={bumpRefresh}
       />
       <CloseModal
@@ -268,12 +268,12 @@ function Stat({ label, value, highlight }: { label: string; value: string; highl
 function OpenModal({
   open,
   onClose,
-  depotId,
+  branchId,
   onSuccess,
 }: {
   open: boolean;
   onClose: () => void;
-  depotId: string;
+  branchId: string;
   onSuccess: () => void;
 }) {
   const [amount, setAmount] = useState('');
@@ -281,7 +281,7 @@ function OpenModal({
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
     try {
-      await data.openRegister({ depotId, openingAmount: Number(amount) || 0 });
+      await data.openRegister({ branchId, openingAmount: Number(amount) || 0 });
       toast.success('Caja abierta');
       onSuccess();
       onClose();

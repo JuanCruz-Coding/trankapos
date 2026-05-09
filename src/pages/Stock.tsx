@@ -11,37 +11,43 @@ import { toast } from '@/stores/toast';
 import type { Product } from '@/types';
 
 export default function Stock() {
-  const { session, activeDepotId } = useAuth();
+  const { session } = useAuth();
   const [refreshKey, setRefreshKey] = useState(0);
   const products = useLiveQuery(() => data.listProducts(), [session?.tenantId]);
-  const depots = useLiveQuery(() => data.listDepots(), [session?.tenantId]);
+  const branches = useLiveQuery(() => data.listBranches(), [session?.tenantId]);
+  const warehouses = useLiveQuery(() => data.listWarehouses(), [session?.tenantId]);
   const stock = useLiveQuery(() => data.listStock(), [session?.tenantId, refreshKey]);
   const [search, setSearch] = useState('');
-  const [depotFilter, setDepotFilter] = useState<string>('all');
-  const [edit, setEdit] = useState<{ product: Product; depotId: string } | null>(null);
+  const [warehouseFilter, setWarehouseFilter] = useState<string>('all');
+  const [edit, setEdit] = useState<{ product: Product; warehouseId: string } | null>(null);
+
+  const branchById = useMemo(
+    () => new Map((branches ?? []).map((b) => [b.id, b])),
+    [branches],
+  );
 
   const rows = useMemo(() => {
-    if (!products || !stock || !depots) return [];
+    if (!products || !stock || !warehouses) return [];
     const byKey = new Map<string, number>();
     const minByKey = new Map<string, number>();
     for (const s of stock) {
-      byKey.set(`${s.productId}:${s.depotId}`, s.qty);
-      minByKey.set(`${s.productId}:${s.depotId}`, s.minQty);
+      byKey.set(`${s.productId}:${s.warehouseId}`, s.qty);
+      minByKey.set(`${s.productId}:${s.warehouseId}`, s.minQty);
     }
     const q = search.toLowerCase();
     return products
       .filter((p) => (q ? p.name.toLowerCase().includes(q) || (p.barcode ?? '').includes(q) : true))
       .map((p) => ({
         product: p,
-        rows: depots
-          .filter((d) => depotFilter === 'all' || d.id === depotFilter)
-          .map((d) => ({
-            depot: d,
-            qty: byKey.get(`${p.id}:${d.id}`) ?? 0,
-            minQty: minByKey.get(`${p.id}:${d.id}`) ?? 0,
+        rows: warehouses
+          .filter((w) => warehouseFilter === 'all' || w.id === warehouseFilter)
+          .map((w) => ({
+            warehouse: w,
+            qty: byKey.get(`${p.id}:${w.id}`) ?? 0,
+            minQty: minByKey.get(`${p.id}:${w.id}`) ?? 0,
           })),
       }));
-  }, [products, stock, depots, search, depotFilter]);
+  }, [products, stock, warehouses, search, warehouseFilter]);
 
   return (
     <div>
@@ -59,15 +65,19 @@ export default function Stock() {
         </div>
         <select
           className="h-10 rounded-lg border border-slate-300 bg-white px-3 text-sm"
-          value={depotFilter}
-          onChange={(e) => setDepotFilter(e.target.value)}
+          value={warehouseFilter}
+          onChange={(e) => setWarehouseFilter(e.target.value)}
         >
           <option value="all">Todos los depósitos</option>
-          {(depots ?? []).map((d) => (
-            <option key={d.id} value={d.id}>
-              {d.name}
-            </option>
-          ))}
+          {(warehouses ?? []).map((w) => {
+            const branch = w.branchId ? branchById.get(w.branchId) : null;
+            const label = branch ? `${branch.name} → ${w.name}` : `Central · ${w.name}`;
+            return (
+              <option key={w.id} value={w.id}>
+                {label}
+              </option>
+            );
+          })}
         </select>
       </div>
 
@@ -84,29 +94,34 @@ export default function Stock() {
           </thead>
           <tbody className="divide-y divide-slate-100">
             {rows.flatMap(({ product, rows: r }) =>
-              r.map(({ depot, qty, minQty }) => (
-                <tr key={`${product.id}:${depot.id}`} className="hover:bg-slate-50">
-                  <td className="px-4 py-3">{product.name}</td>
-                  <td className="px-4 py-3 text-slate-600">{depot.name}</td>
-                  <td
-                    className={
-                      'px-4 py-3 text-right font-semibold ' +
-                      (qty <= 0 ? 'text-red-600' : qty <= minQty ? 'text-amber-600' : '')
-                    }
-                  >
-                    {qty}
-                  </td>
-                  <td className="px-4 py-3 text-right text-slate-500">{minQty}</td>
-                  <td className="px-4 py-3 text-right">
-                    <button
-                      onClick={() => setEdit({ product, depotId: depot.id })}
-                      className="rounded-md p-2 text-slate-500 hover:bg-slate-100"
+              r.map(({ warehouse, qty, minQty }) => {
+                const branch = warehouse.branchId ? branchById.get(warehouse.branchId) : null;
+                return (
+                  <tr key={`${product.id}:${warehouse.id}`} className="hover:bg-slate-50">
+                    <td className="px-4 py-3">{product.name}</td>
+                    <td className="px-4 py-3 text-slate-600">
+                      {branch ? `${branch.name} · ${warehouse.name}` : `Central · ${warehouse.name}`}
+                    </td>
+                    <td
+                      className={
+                        'px-4 py-3 text-right font-semibold ' +
+                        (qty <= 0 ? 'text-red-600' : qty <= minQty ? 'text-amber-600' : '')
+                      }
                     >
-                      <Pencil className="h-4 w-4" />
-                    </button>
-                  </td>
-                </tr>
-              )),
+                      {qty}
+                    </td>
+                    <td className="px-4 py-3 text-right text-slate-500">{minQty}</td>
+                    <td className="px-4 py-3 text-right">
+                      <button
+                        onClick={() => setEdit({ product, warehouseId: warehouse.id })}
+                        className="rounded-md p-2 text-slate-500 hover:bg-slate-100"
+                      >
+                        <Pencil className="h-4 w-4" />
+                      </button>
+                    </td>
+                  </tr>
+                );
+              }),
             )}
           </tbody>
         </table>
@@ -115,13 +130,13 @@ export default function Stock() {
       {edit && (
         <AdjustModal
           product={edit.product}
-          depotId={edit.depotId}
+          warehouseId={edit.warehouseId}
           currentQty={
-            stock?.find((s) => s.productId === edit.product.id && s.depotId === edit.depotId)
+            stock?.find((s) => s.productId === edit.product.id && s.warehouseId === edit.warehouseId)
               ?.qty ?? 0
           }
           currentMin={
-            stock?.find((s) => s.productId === edit.product.id && s.depotId === edit.depotId)
+            stock?.find((s) => s.productId === edit.product.id && s.warehouseId === edit.warehouseId)
               ?.minQty ?? 0
           }
           onClose={() => setEdit(null)}
@@ -134,14 +149,14 @@ export default function Stock() {
 
 function AdjustModal({
   product,
-  depotId,
+  warehouseId,
   currentQty,
   currentMin,
   onClose,
   onSuccess,
 }: {
   product: Product;
-  depotId: string;
+  warehouseId: string;
   currentQty: number;
   currentMin: number;
   onClose: () => void;
@@ -156,7 +171,7 @@ function AdjustModal({
     try {
       const val = Number(qty) || 0;
       const delta = mode === 'delta' ? val : val - currentQty;
-      await data.adjustStock(product.id, depotId, delta, Number(minQty) || 0);
+      await data.adjustStock(product.id, warehouseId, delta, Number(minQty) || 0);
       toast.success('Stock actualizado');
       onSuccess();
       onClose();

@@ -44,20 +44,27 @@ export const userSchema = z.object({
   role: z.enum(['owner', 'manager', 'cashier'], {
     errorMap: () => ({ message: 'Rol inválido' }),
   }),
-  depotId: z.string().nullable(),
+  branchId: z.string().nullable(),
   active: z.boolean(),
 });
 
-export const depotSchema = z.object({
-  name: nonEmpty('Nombre del depósito'),
+export const branchSchema = z.object({
+  name: nonEmpty('Nombre de la sucursal'),
   address: z.string().trim().max(200, 'Máximo 200 caracteres'),
+  active: z.boolean(),
+});
+
+export const warehouseSchema = z.object({
+  name: nonEmpty('Nombre del depósito'),
+  branchId: z.string().nullable(),
+  isDefault: z.boolean(),
   active: z.boolean(),
 });
 
 export const transferSchema = z
   .object({
-    fromDepotId: nonEmpty('Depósito origen'),
-    toDepotId: nonEmpty('Depósito destino'),
+    fromWarehouseId: nonEmpty('Depósito origen'),
+    toWarehouseId: nonEmpty('Depósito destino'),
     notes: z.string().max(300, 'Máximo 300 caracteres'),
     items: z
       .array(
@@ -71,14 +78,15 @@ export const transferSchema = z
       )
       .min(1, 'Agregá al menos un item'),
   })
-  .refine((d) => d.fromDepotId !== d.toDepotId, {
+  .refine((d) => d.fromWarehouseId !== d.toWarehouseId, {
     message: 'Origen y destino deben ser distintos',
-    path: ['toDepotId'],
+    path: ['toWarehouseId'],
   });
 
 export type ProductFormValues = z.infer<typeof productSchema>;
 export type UserFormValues = z.infer<typeof userSchema>;
-export type DepotFormValues = z.infer<typeof depotSchema>;
+export type BranchFormValues = z.infer<typeof branchSchema>;
+export type WarehouseFormValues = z.infer<typeof warehouseSchema>;
 export type TransferFormValues = z.infer<typeof transferSchema>;
 
 /**

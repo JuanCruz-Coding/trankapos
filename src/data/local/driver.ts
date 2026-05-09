@@ -2,10 +2,10 @@ import { v4 as uuid } from 'uuid';
 import { db } from './db';
 import type {
   AuthSession,
+  Branch,
   CashMovement,
   CashRegister,
   Category,
-  Depot,
   Plan,
   PlanUsage,
   Product,
@@ -16,13 +16,14 @@ import type {
   Tenant,
   Transfer,
   User,
+  Warehouse,
 } from '@/types';
 import type {
+  BranchInput,
   CashMovementInput,
   CategoryInput,
   CloseRegisterInput,
   DataDriver,
-  DepotInput,
   LoginInput,
   OpenRegisterInput,
   ProductInput,
@@ -31,6 +32,7 @@ import type {
   SignupInput,
   TransferInput,
   UserInput,
+  WarehouseInput,
 } from '../driver';
 import { hashPassword, verifyPassword } from '@/lib/hash';
 import { addMoney, eqMoney, lineSubtotal, subMoney } from '@/lib/money';
@@ -41,7 +43,7 @@ function toSession(user: User): AuthSession {
   return {
     userId: user.id,
     tenantId: user.tenantId,
-    depotId: user.depotId,
+    branchId: user.branchId,
     role: user.role,
     email: user.email,
     name: user.name,
@@ -61,27 +63,31 @@ export class LocalDriver implements DataDriver {
     return this._session;
   }
 
-  private tenantScope<T extends { tenantId: string }>(collection: T[]): T[] {
-    const tid = this._session?.tenantId;
-    if (!tid) return [];
-    return collection.filter((c) => c.tenantId === tid);
-  }
-
   async signup(input: SignupInput): Promise<AuthSession> {
     const existing = await db.users.where('email').equals(input.email.toLowerCase()).first();
     if (existing) throw new Error('Ya existe una cuenta con ese email');
 
     const tenantId = uuid();
     const userId = uuid();
-    const depotId = uuid();
+    const branchId = uuid();
+    const warehouseId = uuid();
     const ts = now();
 
     const tenant: Tenant = { id: tenantId, name: input.tenantName, createdAt: ts };
-    const depot: Depot = {
-      id: depotId,
+    const branch: Branch = {
+      id: branchId,
       tenantId,
-      name: input.depotName,
+      name: input.branchName,
       address: '',
+      active: true,
+      createdAt: ts,
+    };
+    const warehouse: Warehouse = {
+      id: warehouseId,
+      tenantId,
+      branchId,
+      name: input.branchName,
+      isDefault: true,
       active: true,
       createdAt: ts,
     };
@@ -92,17 +98,24 @@ export class LocalDriver implements DataDriver {
       passwordHash: await hashPassword(input.password),
       name: input.ownerName,
       role: 'owner',
-      depotId,
+      branchId,
       active: true,
       createdAt: ts,
     };
 
-    await db.transaction('rw', db.tenants, db.depots, db.users, db.session, async () => {
-      await db.tenants.put(tenant);
-      await db.depots.put(depot);
-      await db.users.put(user);
-      await db.session.put({ id: 'current', userId, tenantId, depotId });
-    });
+    // Dexie permite hasta 5 tablas como args posicionales antes del callback;
+    // con 5 tablas pasamos un array para usar la sobrecarga de array.
+    await db.transaction(
+      'rw',
+      [db.tenants, db.branches, db.warehouses, db.users, db.session],
+      async () => {
+        await db.tenants.put(tenant);
+        await db.branches.put(branch);
+        await db.warehouses.put(warehouse);
+        await db.users.put(user);
+        await db.session.put({ id: 'current', userId, tenantId, branchId });
+      },
+    );
 
     this._session = toSession(user);
     return this._session;
@@ -117,7 +130,7 @@ export class LocalDriver implements DataDriver {
       id: 'current',
       userId: user.id,
       tenantId: user.tenantId,
-      depotId: user.depotId,
+      branchId: user.branchId,
     });
     this._session = toSession(user);
     return this._session;
@@ -160,26 +173,43 @@ export class LocalDriver implements DataDriver {
         code: 'local',
         name: 'Local (sin límites)',
         priceMonthly: 0,
-        maxDepots: null,
+        maxBranches: null,
+        maxWarehousesPerBranch: null,
         maxUsers: null,
         maxProducts: null,
-        features: { transfers: true, advanced_reports: true, csv_export: true, api: true },
+        features: {
+          scanner_camera: true,
+          csv_import: true,
+          csv_export: true,
+          advanced_reports: true,
+          transfers: true,
+          customers: true,
+          multi_cash: true,
+          variants: true,
+          purchases: true,
+          audit_log: true,
+          granular_perms: true,
+          api: true,
+          webhooks: true,
+          custom_branding: true,
+          central_warehouse: true,
+        },
       },
     };
   }
 
   async getUsage(): Promise<PlanUsage> {
     const s = await this.requireSession();
-    const [depots, users, products] = await Promise.all([
-      db.depots.where('tenantId').equals(s.tenantId).count(),
+    const [branches, warehouses, users, products] = await Promise.all([
+      db.branches.where('tenantId').equals(s.tenantId).count(),
+      db.warehouses.where('tenantId').equals(s.tenantId).count(),
       db.users.where('tenantId').equals(s.tenantId).filter((u) => u.active).count(),
       db.products.where('tenantId').equals(s.tenantId).count(),
     ]);
-    return { depots, users, products };
+    return { branches, warehouses, users, products };
   }
 
   async listPlans(): Promise<Plan[]> {
-    // En modo local devolvemos un array vacío — los planes solo aplican en Supabase.
     return [];
   }
 
@@ -192,36 +222,99 @@ export class LocalDriver implements DataDriver {
   }
 
   async clearPendingPlan(): Promise<void> {
-    // No aplica en LocalDriver: no hay flow de subscripción real.
+    // No aplica en LocalDriver.
   }
 
-  // --- depots ---
-  async listDepots(): Promise<Depot[]> {
+  // --- branches ---
+  async listBranches(): Promise<Branch[]> {
     const s = await this.requireSession();
-    return db.depots.where('tenantId').equals(s.tenantId).toArray();
+    return db.branches.where('tenantId').equals(s.tenantId).toArray();
   }
 
-  async createDepot(input: DepotInput): Promise<Depot> {
+  async createBranch(input: BranchInput): Promise<Branch> {
     const s = await this.requireSession();
-    const depot: Depot = { id: uuid(), tenantId: s.tenantId, createdAt: now(), ...input };
-    await db.depots.put(depot);
-    return depot;
+    const branchId = uuid();
+    const ts = now();
+    const branch: Branch = { id: branchId, tenantId: s.tenantId, createdAt: ts, ...input };
+    const warehouse: Warehouse = {
+      id: uuid(),
+      tenantId: s.tenantId,
+      branchId,
+      name: input.name,
+      isDefault: true,
+      active: input.active,
+      createdAt: ts,
+    };
+    await db.transaction('rw', db.branches, db.warehouses, async () => {
+      await db.branches.put(branch);
+      await db.warehouses.put(warehouse);
+    });
+    return branch;
   }
 
-  async updateDepot(id: string, input: Partial<DepotInput>): Promise<Depot> {
+  async updateBranch(id: string, input: Partial<BranchInput>): Promise<Branch> {
     const s = await this.requireSession();
-    const existing = await db.depots.get(id);
-    if (!existing || existing.tenantId !== s.tenantId) throw new Error('Depósito no encontrado');
-    const updated: Depot = { ...existing, ...input };
-    await db.depots.put(updated);
+    const existing = await db.branches.get(id);
+    if (!existing || existing.tenantId !== s.tenantId) throw new Error('Sucursal no encontrada');
+    const updated: Branch = { ...existing, ...input };
+    await db.branches.put(updated);
     return updated;
   }
 
-  async deleteDepot(id: string): Promise<void> {
+  async deleteBranch(id: string): Promise<void> {
     const s = await this.requireSession();
-    const existing = await db.depots.get(id);
+    const existing = await db.branches.get(id);
     if (!existing || existing.tenantId !== s.tenantId) return;
-    await db.depots.delete(id);
+    // Cascade manual: borrar warehouses de la branch (y stock asociado).
+    const whs = await db.warehouses.where('branchId').equals(id).toArray();
+    await db.transaction('rw', db.branches, db.warehouses, db.stock, async () => {
+      for (const w of whs) {
+        const stocks = await db.stock.where('warehouseId').equals(w.id).toArray();
+        await Promise.all(stocks.map((si) => db.stock.delete(si.id)));
+        await db.warehouses.delete(w.id);
+      }
+      await db.branches.delete(id);
+    });
+  }
+
+  // --- warehouses ---
+  async listWarehouses(): Promise<Warehouse[]> {
+    const s = await this.requireSession();
+    return db.warehouses.where('tenantId').equals(s.tenantId).toArray();
+  }
+
+  async createWarehouse(input: WarehouseInput): Promise<Warehouse> {
+    const s = await this.requireSession();
+    const wh: Warehouse = { id: uuid(), tenantId: s.tenantId, createdAt: now(), ...input };
+    await db.warehouses.put(wh);
+    return wh;
+  }
+
+  async updateWarehouse(id: string, input: Partial<WarehouseInput>): Promise<Warehouse> {
+    const s = await this.requireSession();
+    const existing = await db.warehouses.get(id);
+    if (!existing || existing.tenantId !== s.tenantId) throw new Error('Depósito no encontrado');
+    const updated: Warehouse = { ...existing, ...input };
+    await db.warehouses.put(updated);
+    return updated;
+  }
+
+  async deleteWarehouse(id: string): Promise<void> {
+    const s = await this.requireSession();
+    const existing = await db.warehouses.get(id);
+    if (!existing || existing.tenantId !== s.tenantId) return;
+    await db.transaction('rw', db.warehouses, db.stock, async () => {
+      const stocks = await db.stock.where('warehouseId').equals(id).toArray();
+      await Promise.all(stocks.map((si) => db.stock.delete(si.id)));
+      await db.warehouses.delete(id);
+    });
+  }
+
+  async getDefaultWarehouse(branchId: string): Promise<Warehouse | null> {
+    const s = await this.requireSession();
+    const all = await db.warehouses.where('branchId').equals(branchId).toArray();
+    const wh = all.find((w) => w.isDefault && w.active && w.tenantId === s.tenantId);
+    return wh ?? null;
   }
 
   // --- users ---
@@ -242,7 +335,7 @@ export class LocalDriver implements DataDriver {
       passwordHash: await hashPassword(input.password),
       name: input.name,
       role: input.role,
-      depotId: input.depotId,
+      branchId: input.branchId,
       active: input.active,
       createdAt: now(),
     };
@@ -258,7 +351,7 @@ export class LocalDriver implements DataDriver {
       ...existing,
       name: input.name ?? existing.name,
       role: input.role ?? existing.role,
-      depotId: input.depotId !== undefined ? input.depotId : existing.depotId,
+      branchId: input.branchId !== undefined ? input.branchId : existing.branchId,
       active: input.active ?? existing.active,
       email: input.email ? input.email.toLowerCase() : existing.email,
       passwordHash: input.password ? await hashPassword(input.password) : existing.passwordHash,
@@ -335,7 +428,7 @@ export class LocalDriver implements DataDriver {
           const stock: StockItem = {
             id: uuid(),
             tenantId: s.tenantId,
-            depotId: row.depotId,
+            warehouseId: row.warehouseId,
             productId: product.id,
             qty: row.qty,
             minQty: row.minQty,
@@ -369,23 +462,23 @@ export class LocalDriver implements DataDriver {
   }
 
   // --- stock ---
-  async listStock(depotId?: string): Promise<StockItem[]> {
+  async listStock(warehouseId?: string): Promise<StockItem[]> {
     const s = await this.requireSession();
     let items = await db.stock.where('tenantId').equals(s.tenantId).toArray();
-    if (depotId) items = items.filter((x) => x.depotId === depotId);
+    if (warehouseId) items = items.filter((x) => x.warehouseId === warehouseId);
     return items;
   }
 
   async adjustStock(
     productId: string,
-    depotId: string,
+    warehouseId: string,
     deltaQty: number,
     minQty?: number,
   ): Promise<void> {
     const s = await this.requireSession();
     const existing = await db.stock
-      .where('[tenantId+depotId+productId]')
-      .equals([s.tenantId, depotId, productId])
+      .where('[tenantId+warehouseId+productId]')
+      .equals([s.tenantId, warehouseId, productId])
       .first();
     if (existing) {
       const updated: StockItem = {
@@ -399,7 +492,7 @@ export class LocalDriver implements DataDriver {
       const fresh: StockItem = {
         id: uuid(),
         tenantId: s.tenantId,
-        depotId,
+        warehouseId,
         productId,
         qty: deltaQty,
         minQty: minQty ?? 0,
@@ -413,6 +506,11 @@ export class LocalDriver implements DataDriver {
   async createSale(input: SaleInput): Promise<Sale> {
     const s = await this.requireSession();
     if (input.items.length === 0) throw new Error('El carrito está vacío');
+
+    // Resolver warehouse default de la branch (mirror del SQL create_sale_atomic).
+    const warehouse = await this.getDefaultWarehouse(input.branchId);
+    if (!warehouse) throw new Error('La sucursal no tiene un depósito principal configurado');
+
     const id = uuid();
     const ts = now();
     const products = await db.products.where('tenantId').equals(s.tenantId).toArray();
@@ -452,7 +550,7 @@ export class LocalDriver implements DataDriver {
     const sale: Sale = {
       id,
       tenantId: s.tenantId,
-      depotId: input.depotId,
+      branchId: input.branchId,
       registerId: input.registerId,
       cashierId: s.userId,
       items,
@@ -468,8 +566,8 @@ export class LocalDriver implements DataDriver {
       await db.sales.put(sale);
       for (const it of items) {
         const stock = await db.stock
-          .where('[tenantId+depotId+productId]')
-          .equals([s.tenantId, input.depotId, it.productId])
+          .where('[tenantId+warehouseId+productId]')
+          .equals([s.tenantId, warehouse.id, it.productId])
           .first();
         if (stock) {
           await db.stock.put({ ...stock, qty: stock.qty - it.qty, updatedAt: ts });
@@ -477,7 +575,7 @@ export class LocalDriver implements DataDriver {
           await db.stock.put({
             id: uuid(),
             tenantId: s.tenantId,
-            depotId: input.depotId,
+            warehouseId: warehouse.id,
             productId: it.productId,
             qty: -it.qty,
             minQty: 0,
@@ -495,13 +593,15 @@ export class LocalDriver implements DataDriver {
     const sale = await db.sales.get(id);
     if (!sale || sale.tenantId !== s.tenantId) throw new Error('Venta no encontrada');
     if (sale.voided) return;
+    const warehouse = await this.getDefaultWarehouse(sale.branchId);
+    if (!warehouse) throw new Error('La sucursal de la venta no tiene un depósito principal');
     const ts = now();
     await db.transaction('rw', db.sales, db.stock, async () => {
       await db.sales.put({ ...sale, voided: true });
       for (const it of sale.items) {
         const stock = await db.stock
-          .where('[tenantId+depotId+productId]')
-          .equals([s.tenantId, sale.depotId, it.productId])
+          .where('[tenantId+warehouseId+productId]')
+          .equals([s.tenantId, warehouse.id, it.productId])
           .first();
         if (stock) {
           await db.stock.put({ ...stock, qty: stock.qty + it.qty, updatedAt: ts });
@@ -515,7 +615,7 @@ export class LocalDriver implements DataDriver {
     let sales = await db.sales.where('tenantId').equals(s.tenantId).toArray();
     if (q.from) sales = sales.filter((x) => x.createdAt >= q.from!);
     if (q.to) sales = sales.filter((x) => x.createdAt <= q.to!);
-    if (q.depotId) sales = sales.filter((x) => x.depotId === q.depotId);
+    if (q.branchId) sales = sales.filter((x) => x.branchId === q.branchId);
     if (q.cashierId) sales = sales.filter((x) => x.cashierId === q.cashierId);
     if (q.registerId) sales = sales.filter((x) => x.registerId === q.registerId);
     sales = sales.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
@@ -527,20 +627,20 @@ export class LocalDriver implements DataDriver {
   }
 
   // --- cash register ---
-  async currentOpenRegister(depotId: string): Promise<CashRegister | null> {
+  async currentOpenRegister(branchId: string): Promise<CashRegister | null> {
     const s = await this.requireSession();
     const all = await db.registers.where('tenantId').equals(s.tenantId).toArray();
-    return all.find((r) => r.depotId === depotId && !r.closedAt) ?? null;
+    return all.find((r) => r.branchId === branchId && !r.closedAt) ?? null;
   }
 
   async openRegister(input: OpenRegisterInput): Promise<CashRegister> {
     const s = await this.requireSession();
-    const existing = await this.currentOpenRegister(input.depotId);
-    if (existing) throw new Error('Ya hay una caja abierta en este depósito');
+    const existing = await this.currentOpenRegister(input.branchId);
+    if (existing) throw new Error('Ya hay una caja abierta en esta sucursal');
     const reg: CashRegister = {
       id: uuid(),
       tenantId: s.tenantId,
-      depotId: input.depotId,
+      branchId: input.branchId,
       openedBy: s.userId,
       openedAt: now(),
       openingAmount: input.openingAmount,
@@ -603,17 +703,17 @@ export class LocalDriver implements DataDriver {
     return db.cashMovements.where('registerId').equals(registerId).toArray();
   }
 
-  async listRegisters(depotId?: string): Promise<CashRegister[]> {
+  async listRegisters(branchId?: string): Promise<CashRegister[]> {
     const s = await this.requireSession();
     let regs = await db.registers.where('tenantId').equals(s.tenantId).toArray();
-    if (depotId) regs = regs.filter((r) => r.depotId === depotId);
+    if (branchId) regs = regs.filter((r) => r.branchId === branchId);
     return regs.sort((a, b) => b.openedAt.localeCompare(a.openedAt));
   }
 
   // --- transfers ---
   async createTransfer(input: TransferInput): Promise<Transfer> {
     const s = await this.requireSession();
-    if (input.fromDepotId === input.toDepotId) {
+    if (input.fromWarehouseId === input.toWarehouseId) {
       throw new Error('Origen y destino deben ser distintos');
     }
     if (input.items.length === 0) {
@@ -624,22 +724,21 @@ export class LocalDriver implements DataDriver {
     const transfer: Transfer = {
       id,
       tenantId: s.tenantId,
-      fromDepotId: input.fromDepotId,
-      toDepotId: input.toDepotId,
+      fromWarehouseId: input.fromWarehouseId,
+      toWarehouseId: input.toWarehouseId,
       createdBy: s.userId,
       createdAt: ts,
       notes: input.notes,
       items: input.items,
     };
 
-    // Pre-validar stock disponible en origen antes de tocar la BD
     const products = await db.products.where('tenantId').equals(s.tenantId).toArray();
     const productById = new Map(products.map((p) => [p.id, p]));
     for (const it of input.items) {
       if (it.qty <= 0) throw new Error('Las cantidades deben ser mayores a cero');
       const src = await db.stock
-        .where('[tenantId+depotId+productId]')
-        .equals([s.tenantId, input.fromDepotId, it.productId])
+        .where('[tenantId+warehouseId+productId]')
+        .equals([s.tenantId, input.fromWarehouseId, it.productId])
         .first();
       const available = src?.qty ?? 0;
       if (available < it.qty) {
@@ -654,15 +753,15 @@ export class LocalDriver implements DataDriver {
       await db.transfers.put(transfer);
       for (const it of input.items) {
         const src = await db.stock
-          .where('[tenantId+depotId+productId]')
-          .equals([s.tenantId, input.fromDepotId, it.productId])
+          .where('[tenantId+warehouseId+productId]')
+          .equals([s.tenantId, input.fromWarehouseId, it.productId])
           .first();
         if (src) {
           await db.stock.put({ ...src, qty: src.qty - it.qty, updatedAt: ts });
         }
         const dst = await db.stock
-          .where('[tenantId+depotId+productId]')
-          .equals([s.tenantId, input.toDepotId, it.productId])
+          .where('[tenantId+warehouseId+productId]')
+          .equals([s.tenantId, input.toWarehouseId, it.productId])
           .first();
         if (dst) {
           await db.stock.put({ ...dst, qty: dst.qty + it.qty, updatedAt: ts });
@@ -670,7 +769,7 @@ export class LocalDriver implements DataDriver {
           await db.stock.put({
             id: uuid(),
             tenantId: s.tenantId,
-            depotId: input.toDepotId,
+            warehouseId: input.toWarehouseId,
             productId: it.productId,
             qty: it.qty,
             minQty: 0,

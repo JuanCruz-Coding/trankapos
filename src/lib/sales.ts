@@ -9,7 +9,7 @@ export interface PaymentLine {
 }
 
 export interface BuildSaleArgs {
-  depotId: string;
+  branchId: string;
   registerId: string | null;
   lines: CartLine[];
   globalDiscount: number;
@@ -43,9 +43,9 @@ export function summarizeSale(lines: CartLine[], globalDiscount: number, payment
  * No persiste — eso lo hace el driver.
  */
 export function buildSaleFromCart(args: BuildSaleArgs): SaleInput {
-  const { depotId, registerId, lines, globalDiscount, payments } = args;
+  const { branchId, registerId, lines, globalDiscount, payments } = args;
 
-  if (!depotId) throw new Error('Seleccioná un depósito antes de cobrar');
+  if (!branchId) throw new Error('Seleccioná una sucursal antes de cobrar');
   if (lines.length === 0) throw new Error('El carrito está vacío');
   if (globalDiscount < 0) throw new Error('Descuento global inválido');
 
@@ -72,7 +72,7 @@ export function buildSaleFromCart(args: BuildSaleArgs): SaleInput {
   }
 
   return {
-    depotId,
+    branchId,
     registerId,
     items: lines.map((l) => ({
       productId: l.productId,

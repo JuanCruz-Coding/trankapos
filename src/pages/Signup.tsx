@@ -9,7 +9,7 @@ import { toast } from '@/stores/toast';
 export default function Signup() {
   const [form, setForm] = useState({
     tenantName: '',
-    depotName: 'Sucursal Principal',
+    branchName: 'Sucursal Principal',
     ownerName: '',
     email: '',
     password: '',
@@ -70,12 +70,12 @@ export default function Signup() {
           </div>
           <div>
             <label className="mb-1 block text-xs font-medium text-slate-700">
-              Nombre del primer depósito
+              Nombre de tu primera sucursal
             </label>
             <Input
               required
-              value={form.depotName}
-              onChange={(e) => update('depotName', e.target.value)}
+              value={form.branchName}
+              onChange={(e) => update('branchName', e.target.value)}
             />
           </div>
           <div>
