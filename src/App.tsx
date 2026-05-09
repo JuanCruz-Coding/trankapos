@@ -21,6 +21,7 @@ import Transfers from '@/pages/Transfers';
 import Help from '@/pages/Help';
 import Plan from '@/pages/Plan';
 import PlanReturn from '@/pages/PlanReturn';
+import Settings from '@/pages/Settings';
 import Terms from '@/pages/Terms';
 import Privacy from '@/pages/Privacy';
 
@@ -109,6 +110,14 @@ export function App() {
             element={
               <ProtectedRoute roles={['owner']}>
                 <PlanReturn />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="settings"
+            element={
+              <ProtectedRoute roles={['owner']}>
+                <Settings />
               </ProtectedRoute>
             }
           />

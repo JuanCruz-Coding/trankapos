@@ -20,11 +20,12 @@ import { data } from '@/data';
 import { useAuth } from '@/stores/auth';
 import { useCart, cartTotals } from '@/stores/cart';
 import { formatARS } from '@/lib/currency';
-import { lineSubtotal, subMoney } from '@/lib/money';
+import { lineSubtotal, subMoney, applyDiscount, type DiscountMode } from '@/lib/money';
+import { cn } from '@/lib/utils';
 import { buildSaleFromCart, summarizeSale } from '@/lib/sales';
 import { beepError, beepSuccess, primeAudio } from '@/lib/sound';
 import { toast } from '@/stores/toast';
-import { PAYMENT_METHODS, type PaymentMethod, type Sale } from '@/types';
+import { PAYMENT_METHODS, type PaymentMethod, type Sale, type Tenant } from '@/types';
 
 export default function Pos() {
   const { session, activeBranchId } = useAuth();
@@ -45,6 +46,32 @@ export default function Pos() {
   const [payModal, setPayModal] = useState(false);
   const [scannerOpen, setScannerOpen] = useState(false);
   const [lastSale, setLastSale] = useState<Sale | null>(null);
+
+  // Toggle $/% por línea de descuento. El monto en pesos se sigue guardando
+  // en el store del carrito; estos states solo controlan cómo se interpreta
+  // el input del usuario.
+  const [lineDiscountModes, setLineDiscountModes] = useState<Record<string, DiscountMode>>({});
+  const [lineDiscountInputs, setLineDiscountInputs] = useState<Record<string, string>>({});
+  const [globalDiscountMode, setGlobalDiscountMode] = useState<DiscountMode>('amount');
+  const [globalDiscountInput, setGlobalDiscountInput] = useState('');
+
+  // Tenant: para los settings de ticket en el ReceiptModal.
+  const [tenant, setTenant] = useState<Tenant | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    if (!session) return;
+    (async () => {
+      try {
+        const t = await data.getTenant();
+        if (!cancelled) setTenant(t);
+      } catch {
+        // No bloquea: el ReceiptModal usa fallbacks si tenant es null.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [session?.tenantId]);
 
   const products = useLiveQuery(async () => {
     if (!session) return [];
@@ -84,6 +111,32 @@ export default function Pos() {
   }, [products, search]);
 
   const { subtotal, total } = cartTotals(lines, discount);
+
+  // Recalcula el monto del descuento de una línea desde el input crudo + modo.
+  function applyLineDiscount(productId: string, raw: string, mode: DiscountMode) {
+    setLineDiscountInputs((prev) => ({ ...prev, [productId]: raw }));
+    setLineDiscountModes((prev) => ({ ...prev, [productId]: mode }));
+    const line = lines.find((l) => l.productId === productId);
+    if (!line) return;
+    const value = Number(raw) || 0;
+    const base = line.price * line.qty;
+    const amount = applyDiscount(value, mode, base);
+    updateLineDiscount(productId, amount);
+  }
+
+  function applyGlobalDiscount(raw: string, mode: DiscountMode) {
+    setGlobalDiscountInput(raw);
+    setGlobalDiscountMode(mode);
+    const value = Number(raw) || 0;
+    // Base = subtotal de líneas (antes del descuento global) — recalcular acá
+    // sin usar `subtotal` cacheado para evitar dependencias circulares de useMemo.
+    const base = lines.reduce(
+      (acc, l) => acc + lineSubtotal(l.price, l.qty, l.discount),
+      0,
+    );
+    const amount = applyDiscount(value, mode, base);
+    setGlobalDiscount(amount);
+  }
 
   useEffect(() => {
     barcodeRef.current?.focus();
@@ -231,16 +284,35 @@ export default function Pos() {
                     <label className="text-[10px] uppercase text-slate-400">
                       Descuento línea
                     </label>
-                    <input
-                      type="number"
-                      min="0"
-                      step="1"
-                      className="h-7 w-full rounded-md border border-slate-200 px-2 text-xs"
-                      value={line.discount || ''}
-                      onChange={(e) =>
-                        updateLineDiscount(line.productId, Number(e.target.value) || 0)
-                      }
-                    />
+                    <div className="flex items-center gap-1">
+                      <input
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        className="h-7 flex-1 rounded-md border border-slate-200 px-2 text-xs"
+                        value={
+                          lineDiscountInputs[line.productId] ??
+                          (line.discount > 0 ? String(line.discount) : '')
+                        }
+                        onChange={(e) =>
+                          applyLineDiscount(
+                            line.productId,
+                            e.target.value,
+                            lineDiscountModes[line.productId] ?? 'amount',
+                          )
+                        }
+                      />
+                      <DiscountModeToggle
+                        mode={lineDiscountModes[line.productId] ?? 'amount'}
+                        onChange={(mode) =>
+                          applyLineDiscount(
+                            line.productId,
+                            lineDiscountInputs[line.productId] ?? '',
+                            mode,
+                          )
+                        }
+                      />
+                    </div>
                   </div>
                 </li>
               ))}
@@ -254,9 +326,14 @@ export default function Pos() {
             <Input
               type="number"
               min="0"
+              step="0.01"
               className="h-8 w-28 text-sm"
-              value={discount || ''}
-              onChange={(e) => setGlobalDiscount(Number(e.target.value) || 0)}
+              value={globalDiscountInput || (discount > 0 ? String(discount) : '')}
+              onChange={(e) => applyGlobalDiscount(e.target.value, globalDiscountMode)}
+            />
+            <DiscountModeToggle
+              mode={globalDiscountMode}
+              onChange={(mode) => applyGlobalDiscount(globalDiscountInput, mode)}
             />
           </div>
           <div className="mb-1 flex items-center justify-between text-sm text-slate-600">
@@ -392,12 +469,47 @@ export default function Pos() {
           toast.success('Venta registrada');
         }}
       />
-      <ReceiptModal sale={lastSale} onClose={() => setLastSale(null)} />
+      <ReceiptModal sale={lastSale} tenant={tenant} onClose={() => setLastSale(null)} />
       <BarcodeScanner
         open={scannerOpen}
         onDetected={handleScannerDetected}
         onClose={() => setScannerOpen(false)}
       />
+    </div>
+  );
+}
+
+function DiscountModeToggle({
+  mode,
+  onChange,
+}: {
+  mode: DiscountMode;
+  onChange: (mode: DiscountMode) => void;
+}) {
+  return (
+    <div className="inline-flex h-7 overflow-hidden rounded-md border border-slate-300 bg-white text-[11px]">
+      <button
+        type="button"
+        onClick={() => onChange('amount')}
+        className={cn(
+          'px-2 font-semibold transition',
+          mode === 'amount' ? 'bg-brand-600 text-white' : 'text-slate-500 hover:bg-slate-100',
+        )}
+        title="Monto en pesos"
+      >
+        $
+      </button>
+      <button
+        type="button"
+        onClick={() => onChange('percent')}
+        className={cn(
+          'px-2 font-semibold transition',
+          mode === 'percent' ? 'bg-brand-600 text-white' : 'text-slate-500 hover:bg-slate-100',
+        )}
+        title="Porcentaje"
+      >
+        %
+      </button>
     </div>
   );
 }
@@ -547,14 +659,39 @@ function PaymentModal({ open, onClose, total, onCompleted }: PayProps) {
   );
 }
 
-function ReceiptModal({ sale, onClose }: { sale: Sale | null; onClose: () => void }) {
+function ReceiptModal({
+  sale,
+  tenant,
+  onClose,
+}: {
+  sale: Sale | null;
+  tenant: Tenant | null;
+  onClose: () => void;
+}) {
   if (!sale) return null;
+
+  const businessName = tenant?.legalName || tenant?.name || 'TrankaPOS';
+  const ticketTitle = tenant?.ticketTitle ?? 'Comprobante no fiscal';
+  const ticketFooter = tenant?.ticketFooter ?? '¡Gracias por su compra!';
+  const showLogo = tenant?.ticketShowLogo ?? true;
+  const showTaxId = (tenant?.ticketShowTaxId ?? true) && !!tenant?.taxId;
+  const widthMm = tenant?.ticketWidthMm ?? 80;
+  const modalWidth = widthMm === 58 ? 'max-w-[280px]' : 'max-w-sm';
+
   return (
-    <Modal open onClose={onClose} title="Ticket" widthClass="max-w-sm">
+    <Modal open onClose={onClose} title="Ticket" widthClass={modalWidth}>
       <div id="receipt-print" className="font-mono text-xs text-slate-800">
         <div className="text-center">
-          <div className="font-bold">TrankaPOS</div>
-          <div>Ticket no fiscal</div>
+          {showLogo && (
+            <img
+              src="/brand/isotipo.png"
+              alt="logo"
+              className="mx-auto mb-1 h-10 w-10 object-contain"
+            />
+          )}
+          <div className="font-bold">{businessName}</div>
+          {showTaxId && <div className="text-[10px]">CUIT: {tenant!.taxId}</div>}
+          <div>{ticketTitle}</div>
           <div>{new Date(sale.createdAt).toLocaleString('es-AR')}</div>
           <div>#{sale.id.slice(0, 8)}</div>
         </div>
@@ -593,8 +730,12 @@ function ReceiptModal({ sale, onClose }: { sale: Sale | null; onClose: () => voi
             <span>{formatARS(p.amount)}</span>
           </div>
         ))}
-        <hr className="my-2 border-dashed" />
-        <div className="text-center">¡Gracias por su compra!</div>
+        {ticketFooter && (
+          <>
+            <hr className="my-2 border-dashed" />
+            <div className="whitespace-pre-line text-center">{ticketFooter}</div>
+          </>
+        )}
       </div>
       <div className="mt-4 flex gap-2 print:hidden">
         <Button variant="outline" className="flex-1" onClick={onClose}>

@@ -12,6 +12,7 @@ import type {
   StockItem,
   Subscription,
   Tenant,
+  TenantSettingsInput,
   Transfer,
   User,
   Warehouse,
@@ -37,6 +38,8 @@ export interface ProductInput {
   cost: number;
   categoryId: string | null;
   taxRate: number;
+  trackStock: boolean;
+  allowSaleWhenZero: boolean;
   active: boolean;
   initialStock?: { warehouseId: string; qty: number; minQty: number }[];
 }
@@ -53,6 +56,8 @@ export interface UserInput {
 export interface BranchInput {
   name: string;
   address: string;
+  phone: string;
+  email: string;
   active: boolean;
 }
 
@@ -60,6 +65,8 @@ export interface WarehouseInput {
   name: string;
   branchId: string | null;
   isDefault: boolean;
+  participatesInPos: boolean;
+  alertLowStock: boolean;
   active: boolean;
 }
 
@@ -119,6 +126,7 @@ export interface DataDriver {
 
   // --- tenant ---
   getTenant(): Promise<Tenant>;
+  updateTenantSettings(input: TenantSettingsInput): Promise<Tenant>;
 
   // --- plan / subscription ---
   getSubscription(): Promise<Subscription>;

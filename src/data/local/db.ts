@@ -100,6 +100,8 @@ export class TrankaPosDB extends Dexie {
           tenantId: d.tenantId,
           name: d.name,
           address: d.address,
+          phone: '',
+          email: '',
           active: d.active,
           createdAt: d.createdAt,
         };
@@ -112,6 +114,8 @@ export class TrankaPosDB extends Dexie {
           branchId: d.id,
           name: d.name,
           isDefault: true,
+          participatesInPos: true,
+          alertLowStock: true,
           active: d.active,
           createdAt: d.createdAt,
         };

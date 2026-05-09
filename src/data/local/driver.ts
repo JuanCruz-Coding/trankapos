@@ -14,6 +14,7 @@ import type {
   StockItem,
   Subscription,
   Tenant,
+  TenantSettingsInput,
   Transfer,
   User,
   Warehouse,
@@ -34,6 +35,32 @@ import type {
   UserInput,
   WarehouseInput,
 } from '../driver';
+
+// Defaults para los campos nuevos del Tenant (Sprint Settings).
+// Se aplican al leer un tenant viejo que todavía no tiene estos campos.
+function withTenantDefaults(t: Partial<Tenant> & Pick<Tenant, 'id' | 'name' | 'createdAt'>): Tenant {
+  return {
+    id: t.id,
+    name: t.name,
+    createdAt: t.createdAt,
+    legalName: t.legalName ?? t.name,
+    taxId: t.taxId ?? '',
+    taxCondition: t.taxCondition ?? 'monotributista',
+    legalAddress: t.legalAddress ?? '',
+    phone: t.phone ?? '',
+    email: t.email ?? '',
+    ticketTitle: t.ticketTitle ?? 'Comprobante no fiscal',
+    ticketFooter: t.ticketFooter ?? '¡Gracias por su compra!',
+    ticketShowLogo: t.ticketShowLogo ?? true,
+    ticketShowTaxId: t.ticketShowTaxId ?? true,
+    ticketWidthMm: t.ticketWidthMm ?? 80,
+    posAllowNegativeStock: t.posAllowNegativeStock ?? false,
+    posMaxDiscountPercent: t.posMaxDiscountPercent ?? 100,
+    posRoundTo: t.posRoundTo ?? 1,
+    posRequireCustomer: t.posRequireCustomer ?? false,
+    stockAlertsEnabled: t.stockAlertsEnabled ?? true,
+  };
+}
 import { hashPassword, verifyPassword } from '@/lib/hash';
 import { addMoney, eqMoney, lineSubtotal, subMoney } from '@/lib/money';
 
@@ -73,12 +100,19 @@ export class LocalDriver implements DataDriver {
     const warehouseId = uuid();
     const ts = now();
 
-    const tenant: Tenant = { id: tenantId, name: input.tenantName, createdAt: ts };
+    const tenant: Tenant = withTenantDefaults({
+      id: tenantId,
+      name: input.tenantName,
+      createdAt: ts,
+      legalName: input.tenantName,
+    });
     const branch: Branch = {
       id: branchId,
       tenantId,
       name: input.branchName,
       address: '',
+      phone: '',
+      email: '',
       active: true,
       createdAt: ts,
     };
@@ -88,6 +122,8 @@ export class LocalDriver implements DataDriver {
       branchId,
       name: input.branchName,
       isDefault: true,
+      participatesInPos: true,
+      alertLowStock: true,
       active: true,
       createdAt: ts,
     };
@@ -154,7 +190,19 @@ export class LocalDriver implements DataDriver {
     const s = await this.requireSession();
     const t = await db.tenants.get(s.tenantId);
     if (!t) throw new Error('Tenant no encontrado');
-    return t;
+    return withTenantDefaults(t);
+  }
+
+  async updateTenantSettings(input: TenantSettingsInput): Promise<Tenant> {
+    const s = await this.requireSession();
+    const existing = await db.tenants.get(s.tenantId);
+    if (!existing) throw new Error('Tenant no encontrado');
+    const merged: Tenant = withTenantDefaults({
+      ...existing,
+      ...input,
+    });
+    await db.tenants.put(merged);
+    return merged;
   }
 
   // En modo local no hay subscriptions reales — devolvemos un plan ficticio
@@ -242,6 +290,8 @@ export class LocalDriver implements DataDriver {
       branchId,
       name: input.name,
       isDefault: true,
+      participatesInPos: true,
+      alertLowStock: true,
       active: input.active,
       createdAt: ts,
     };
@@ -418,6 +468,8 @@ export class LocalDriver implements DataDriver {
       cost: input.cost,
       categoryId: input.categoryId,
       taxRate: input.taxRate,
+      trackStock: input.trackStock,
+      allowSaleWhenZero: input.allowSaleWhenZero,
       active: input.active,
       createdAt: now(),
     };
@@ -507,9 +559,13 @@ export class LocalDriver implements DataDriver {
     const s = await this.requireSession();
     if (input.items.length === 0) throw new Error('El carrito está vacío');
 
-    // Resolver warehouse default de la branch (mirror del SQL create_sale_atomic).
     const warehouse = await this.getDefaultWarehouse(input.branchId);
     if (!warehouse) throw new Error('La sucursal no tiene un depósito principal configurado');
+
+    // Settings del tenant relevantes para la venta (paridad con SQL create_sale_atomic).
+    const tenant = await this.getTenant();
+    const allowNegativeGlobal = tenant.posAllowNegativeStock;
+    const maxDiscountPct = tenant.posMaxDiscountPercent;
 
     const id = uuid();
     const ts = now();
@@ -522,6 +578,17 @@ export class LocalDriver implements DataDriver {
       if (it.qty <= 0) throw new Error(`Cantidad inválida para "${p.name}"`);
       if (it.price < 0) throw new Error(`Precio inválido para "${p.name}"`);
       if (it.discount < 0) throw new Error(`Descuento inválido para "${p.name}"`);
+
+      // Tope de descuento por línea
+      if (it.price * it.qty > 0) {
+        const linePct = (it.discount / (it.price * it.qty)) * 100;
+        if (linePct > maxDiscountPct) {
+          throw new Error(
+            `El descuento de "${p.name}" (${linePct.toFixed(2)}%) supera el tope del comercio (${maxDiscountPct}%)`,
+          );
+        }
+      }
+
       const lineSub = lineSubtotal(it.price, it.qty, it.discount);
       if (lineSub < 0) {
         throw new Error(`El descuento de "${p.name}" supera el subtotal de la línea`);
@@ -540,6 +607,17 @@ export class LocalDriver implements DataDriver {
 
     if (input.discount < 0) throw new Error('Descuento global inválido');
     const subtotal = addMoney(...items.map((i) => i.subtotal));
+
+    // Tope de descuento global
+    if (subtotal > 0) {
+      const globalPct = (input.discount / subtotal) * 100;
+      if (globalPct > maxDiscountPct) {
+        throw new Error(
+          `El descuento global (${globalPct.toFixed(2)}%) supera el tope del comercio (${maxDiscountPct}%)`,
+        );
+      }
+    }
+
     const total = subMoney(subtotal, input.discount);
     if (total < 0) throw new Error('El descuento global supera el subtotal');
     const paid = addMoney(...input.payments.map((p) => p.amount));
@@ -565,10 +643,24 @@ export class LocalDriver implements DataDriver {
     await db.transaction('rw', db.sales, db.stock, async () => {
       await db.sales.put(sale);
       for (const it of items) {
+        const product = byId.get(it.productId)!;
+        // Si el producto no controla stock, no descontamos.
+        if (!product.trackStock) continue;
+
         const stock = await db.stock
           .where('[tenantId+warehouseId+productId]')
           .equals([s.tenantId, warehouse.id, it.productId])
           .first();
+        const available = stock?.qty ?? 0;
+
+        if (available < it.qty) {
+          if (!product.allowSaleWhenZero && !allowNegativeGlobal) {
+            throw new Error(
+              `Stock insuficiente para "${product.name}": disponible ${available}, solicitado ${it.qty}`,
+            );
+          }
+        }
+
         if (stock) {
           await db.stock.put({ ...stock, qty: stock.qty - it.qty, updatedAt: ts });
         } else {

@@ -3,6 +3,7 @@ import { Link, NavLink, useLocation, useNavigate } from 'react-router-dom';
 import {
   BarChart3,
   Boxes,
+  Cog,
   Crown,
   HelpCircle,
   LayoutDashboard,
@@ -42,6 +43,7 @@ const nav: NavItem[] = [
   { to: '/branches', label: 'Sucursales', icon: Store, roles: ['owner', 'manager'] },
   { to: '/warehouses', label: 'Depósitos', icon: Boxes, roles: ['owner', 'manager'] },
   { to: '/users', label: 'Usuarios', icon: Users, roles: ['owner', 'manager'] },
+  { to: '/settings', label: 'Configuración', icon: Cog, roles: ['owner'] },
   { to: '/plan', label: 'Mi plan', icon: Crown, roles: ['owner'] },
   { to: '/help', label: 'Ayuda', icon: HelpCircle },
 ];

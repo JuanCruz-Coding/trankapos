@@ -10,10 +10,62 @@ export const PAYMENT_METHODS: { value: PaymentMethod; label: string }[] = [
   { value: 'transfer', label: 'Transferencia' },
 ];
 
+export type TaxCondition =
+  | 'responsable_inscripto'
+  | 'monotributista'
+  | 'exento'
+  | 'consumidor_final';
+
+export const TAX_CONDITIONS: { value: TaxCondition; label: string }[] = [
+  { value: 'responsable_inscripto', label: 'Responsable Inscripto' },
+  { value: 'monotributista', label: 'Monotributista' },
+  { value: 'exento', label: 'Exento' },
+  { value: 'consumidor_final', label: 'Consumidor Final' },
+];
+
 export interface Tenant {
   id: string;
   name: string;
   createdAt: string;
+  // Empresa / fiscal
+  legalName: string;
+  taxId: string;
+  taxCondition: TaxCondition;
+  legalAddress: string;
+  phone: string;
+  email: string;
+  // Ticket
+  ticketTitle: string;
+  ticketFooter: string;
+  ticketShowLogo: boolean;
+  ticketShowTaxId: boolean;
+  ticketWidthMm: 58 | 80;
+  // POS
+  posAllowNegativeStock: boolean;
+  posMaxDiscountPercent: number;
+  posRoundTo: number;
+  posRequireCustomer: boolean;
+  // Stock
+  stockAlertsEnabled: boolean;
+}
+
+export interface TenantSettingsInput {
+  legalName?: string;
+  taxId?: string;
+  taxCondition?: TaxCondition;
+  legalAddress?: string;
+  phone?: string;
+  email?: string;
+  ticketTitle?: string;
+  ticketFooter?: string;
+  ticketShowLogo?: boolean;
+  ticketShowTaxId?: boolean;
+  ticketWidthMm?: 58 | 80;
+  posAllowNegativeStock?: boolean;
+  posMaxDiscountPercent?: number;
+  posRoundTo?: number;
+  posRequireCustomer?: boolean;
+  stockAlertsEnabled?: boolean;
 }
 
 export interface User {
@@ -33,6 +85,8 @@ export interface Branch {
   tenantId: string;
   name: string;
   address: string;
+  phone: string;
+  email: string;
   active: boolean;
   createdAt: string;
 }
@@ -43,6 +97,8 @@ export interface Warehouse {
   branchId: string | null;
   name: string;
   isDefault: boolean;
+  participatesInPos: boolean;
+  alertLowStock: boolean;
   active: boolean;
   createdAt: string;
 }
@@ -63,6 +119,8 @@ export interface Product {
   cost: number;
   categoryId: string | null;
   taxRate: number;
+  trackStock: boolean;
+  allowSaleWhenZero: boolean;
   active: boolean;
   createdAt: string;
 }

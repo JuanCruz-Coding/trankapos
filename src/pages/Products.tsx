@@ -23,6 +23,8 @@ interface FormState {
   cost: string;
   categoryId: string;
   taxRate: string;
+  trackStock: boolean;
+  allowSaleWhenZero: boolean;
   active: boolean;
   initialStock: Record<string, { qty: string; minQty: string }>;
 }
@@ -34,6 +36,8 @@ const emptyForm: FormState = {
   cost: '',
   categoryId: '',
   taxRate: '21',
+  trackStock: true,
+  allowSaleWhenZero: false,
   active: true,
   initialStock: {},
 };
@@ -108,6 +112,8 @@ export default function Products() {
       cost: String(p.cost),
       categoryId: p.categoryId ?? '',
       taxRate: String(p.taxRate),
+      trackStock: p.trackStock,
+      allowSaleWhenZero: p.allowSaleWhenZero,
       active: p.active,
       initialStock: {},
     });
@@ -123,6 +129,8 @@ export default function Products() {
       cost: Number(form.cost),
       categoryId: form.categoryId || null,
       taxRate: Number(form.taxRate),
+      trackStock: form.trackStock,
+      allowSaleWhenZero: form.allowSaleWhenZero,
       active: form.active,
     });
     if (!parsed.ok) return toast.error(parsed.error);
@@ -243,6 +251,8 @@ export default function Products() {
             cost: row.cost,
             categoryId,
             taxRate: row.taxRate,
+            trackStock: true,
+            allowSaleWhenZero: false,
             active: true,
             initialStock,
           });
@@ -483,6 +493,37 @@ export default function Products() {
             </div>
           )}
 
+          <div className="space-y-2 rounded-lg border border-slate-200 bg-slate-50 p-3">
+            <label className="flex items-start gap-2 text-sm">
+              <input
+                type="checkbox"
+                checked={form.trackStock}
+                onChange={(e) => setForm({ ...form, trackStock: e.target.checked })}
+                className="mt-0.5 h-4 w-4"
+              />
+              <span>
+                Controla stock
+                <span className="block text-xs text-slate-500">
+                  Si está apagado, este producto no descuenta stock al venderse (ej. servicios).
+                </span>
+              </span>
+            </label>
+            <label className="flex items-start gap-2 text-sm">
+              <input
+                type="checkbox"
+                checked={form.allowSaleWhenZero}
+                onChange={(e) => setForm({ ...form, allowSaleWhenZero: e.target.checked })}
+                className="mt-0.5 h-4 w-4"
+                disabled={!form.trackStock}
+              />
+              <span>
+                Permite venta en cero / negativo
+                <span className="block text-xs text-slate-500">
+                  Override por producto del setting global "Permitir vender en negativo".
+                </span>
+              </span>
+            </label>
+          </div>
           <label className="flex items-center gap-2 text-sm">
             <input
               type="checkbox"

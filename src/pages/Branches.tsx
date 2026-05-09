@@ -17,6 +17,8 @@ interface FormState {
   id?: string;
   name: string;
   address: string;
+  phone: string;
+  email: string;
   active: boolean;
 }
 
@@ -25,15 +27,28 @@ export default function Branches() {
   const [refreshKey, setRefreshKey] = useState(0);
   const branches = useLiveQuery(() => data.listBranches(), [session?.tenantId, refreshKey]);
   const [modal, setModal] = useState(false);
-  const [form, setForm] = useState<FormState>({ name: '', address: '', active: true });
+  const [form, setForm] = useState<FormState>({
+    name: '',
+    address: '',
+    phone: '',
+    email: '',
+    active: true,
+  });
 
   function openNew() {
-    setForm({ name: '', address: '', active: true });
+    setForm({ name: '', address: '', phone: '', email: '', active: true });
     setModal(true);
   }
 
   function openEdit(b: Branch) {
-    setForm({ id: b.id, name: b.name, address: b.address, active: b.active });
+    setForm({
+      id: b.id,
+      name: b.name,
+      address: b.address,
+      phone: b.phone,
+      email: b.email,
+      active: b.active,
+    });
     setModal(true);
   }
 
@@ -42,6 +57,8 @@ export default function Branches() {
     const parsed = safeParse(branchSchema, {
       name: form.name,
       address: form.address,
+      phone: form.phone,
+      email: form.email,
       active: form.active,
     });
     if (!parsed.ok) return toast.error(parsed.error);
@@ -148,6 +165,23 @@ export default function Branches() {
               value={form.address}
               onChange={(e) => setForm({ ...form, address: e.target.value })}
             />
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="mb-1 block text-xs font-medium text-slate-700">Teléfono</label>
+              <Input
+                value={form.phone}
+                onChange={(e) => setForm({ ...form, phone: e.target.value })}
+              />
+            </div>
+            <div>
+              <label className="mb-1 block text-xs font-medium text-slate-700">Email</label>
+              <Input
+                type="email"
+                value={form.email}
+                onChange={(e) => setForm({ ...form, email: e.target.value })}
+              />
+            </div>
           </div>
           <label className="flex items-center gap-2 text-sm">
             <input

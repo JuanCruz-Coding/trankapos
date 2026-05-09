@@ -16,7 +16,9 @@ import type {
   StockItem,
   Subscription,
   SubscriptionStatus,
+  TaxCondition,
   Tenant,
+  TenantSettingsInput,
   Transfer,
   User,
   Warehouse,
@@ -39,22 +41,83 @@ import type {
 } from '../driver';
 
 // ============================================================
+// Tenant: el row entero (con settings nuevas) viene del SELECT
+// ============================================================
+interface TenantRow {
+  id: string;
+  name: string;
+  created_at: string;
+  legal_name: string;
+  tax_id: string;
+  tax_condition: TaxCondition;
+  legal_address: string;
+  phone: string;
+  email: string;
+  ticket_title: string;
+  ticket_footer: string;
+  ticket_show_logo: boolean;
+  ticket_show_tax_id: boolean;
+  ticket_width_mm: number;
+  pos_allow_negative_stock: boolean;
+  pos_max_discount_percent: string;
+  pos_round_to: string;
+  pos_require_customer: boolean;
+  stock_alerts_enabled: boolean;
+}
+
+function mapTenant(r: TenantRow): Tenant {
+  return {
+    id: r.id,
+    name: r.name,
+    createdAt: r.created_at,
+    legalName: r.legal_name,
+    taxId: r.tax_id,
+    taxCondition: r.tax_condition,
+    legalAddress: r.legal_address,
+    phone: r.phone,
+    email: r.email,
+    ticketTitle: r.ticket_title,
+    ticketFooter: r.ticket_footer,
+    ticketShowLogo: r.ticket_show_logo,
+    ticketShowTaxId: r.ticket_show_tax_id,
+    ticketWidthMm: (r.ticket_width_mm === 58 ? 58 : 80),
+    posAllowNegativeStock: r.pos_allow_negative_stock,
+    posMaxDiscountPercent: Number(r.pos_max_discount_percent),
+    posRoundTo: Number(r.pos_round_to),
+    posRequireCustomer: r.pos_require_customer,
+    stockAlertsEnabled: r.stock_alerts_enabled,
+  };
+}
+
+// ============================================================
 // Mappers DB → TS. Postgres `numeric` viene como string en JSON.
 // ============================================================
 
-interface BranchRow { id: string; tenant_id: string; name: string; address: string; active: boolean; created_at: string; }
+interface BranchRow {
+  id: string; tenant_id: string; name: string; address: string;
+  phone: string; email: string; active: boolean; created_at: string;
+}
 function mapBranch(r: BranchRow): Branch {
-  return { id: r.id, tenantId: r.tenant_id, name: r.name, address: r.address, active: r.active, createdAt: r.created_at };
+  return {
+    id: r.id, tenantId: r.tenant_id, name: r.name, address: r.address,
+    phone: r.phone ?? '', email: r.email ?? '',
+    active: r.active, createdAt: r.created_at,
+  };
 }
 
 interface WarehouseRow {
   id: string; tenant_id: string; branch_id: string | null;
-  name: string; is_default: boolean; active: boolean; created_at: string;
+  name: string; is_default: boolean;
+  participates_in_pos: boolean; alert_low_stock: boolean;
+  active: boolean; created_at: string;
 }
 function mapWarehouse(r: WarehouseRow): Warehouse {
   return {
     id: r.id, tenantId: r.tenant_id, branchId: r.branch_id,
-    name: r.name, isDefault: r.is_default, active: r.active, createdAt: r.created_at,
+    name: r.name, isDefault: r.is_default,
+    participatesInPos: r.participates_in_pos,
+    alertLowStock: r.alert_low_stock,
+    active: r.active, createdAt: r.created_at,
   };
 }
 
@@ -66,6 +129,7 @@ function mapCategory(r: CategoryRow): Category {
 interface ProductRow {
   id: string; tenant_id: string; name: string; barcode: string | null;
   price: string; cost: string; category_id: string | null; tax_rate: string;
+  track_stock: boolean; allow_sale_when_zero: boolean;
   active: boolean; created_at: string;
 }
 function mapProduct(r: ProductRow): Product {
@@ -73,6 +137,8 @@ function mapProduct(r: ProductRow): Product {
     id: r.id, tenantId: r.tenant_id, name: r.name, barcode: r.barcode,
     price: Number(r.price), cost: Number(r.cost),
     categoryId: r.category_id, taxRate: Number(r.tax_rate),
+    trackStock: r.track_stock ?? true,
+    allowSaleWhenZero: r.allow_sale_when_zero ?? false,
     active: r.active, createdAt: r.created_at,
   };
 }
@@ -429,11 +495,41 @@ class SupabaseDriver implements DataDriver {
     const s = await this.requireSession();
     const { data, error } = await this.sb
       .from('tenants')
-      .select('id, name, created_at')
+      .select('*')
       .eq('id', s.tenantId)
       .single();
     if (error || !data) throw new Error('Tenant no encontrado');
-    return { id: data.id, name: data.name, createdAt: data.created_at };
+    return mapTenant(data as TenantRow);
+  }
+
+  async updateTenantSettings(input: TenantSettingsInput): Promise<Tenant> {
+    const s = await this.requireSession();
+    const patch: Record<string, unknown> = {};
+    if (input.legalName !== undefined) patch.legal_name = input.legalName;
+    if (input.taxId !== undefined) patch.tax_id = input.taxId;
+    if (input.taxCondition !== undefined) patch.tax_condition = input.taxCondition;
+    if (input.legalAddress !== undefined) patch.legal_address = input.legalAddress;
+    if (input.phone !== undefined) patch.phone = input.phone;
+    if (input.email !== undefined) patch.email = input.email;
+    if (input.ticketTitle !== undefined) patch.ticket_title = input.ticketTitle;
+    if (input.ticketFooter !== undefined) patch.ticket_footer = input.ticketFooter;
+    if (input.ticketShowLogo !== undefined) patch.ticket_show_logo = input.ticketShowLogo;
+    if (input.ticketShowTaxId !== undefined) patch.ticket_show_tax_id = input.ticketShowTaxId;
+    if (input.ticketWidthMm !== undefined) patch.ticket_width_mm = input.ticketWidthMm;
+    if (input.posAllowNegativeStock !== undefined) patch.pos_allow_negative_stock = input.posAllowNegativeStock;
+    if (input.posMaxDiscountPercent !== undefined) patch.pos_max_discount_percent = input.posMaxDiscountPercent;
+    if (input.posRoundTo !== undefined) patch.pos_round_to = input.posRoundTo;
+    if (input.posRequireCustomer !== undefined) patch.pos_require_customer = input.posRequireCustomer;
+    if (input.stockAlertsEnabled !== undefined) patch.stock_alerts_enabled = input.stockAlertsEnabled;
+
+    const { data, error } = await this.sb
+      .from('tenants')
+      .update(patch)
+      .eq('id', s.tenantId)
+      .select('*')
+      .single();
+    if (error || !data) throw new Error(error?.message ?? 'No se pudo actualizar el tenant');
+    return mapTenant(data as TenantRow);
   }
 
   // ===== BRANCHES =====
@@ -456,6 +552,8 @@ class SupabaseDriver implements DataDriver {
         tenant_id: s.tenantId,
         name: input.name,
         address: input.address,
+        phone: input.phone,
+        email: input.email,
         active: input.active,
       })
       .select()
@@ -463,18 +561,16 @@ class SupabaseDriver implements DataDriver {
     if (error) throw new Error(error.message);
     const branch = mapBranch(data);
 
-    // Cada branch nueva arranca con 1 warehouse default (mismo nombre).
-    // Si el plan tiene max_warehouses_per_branch >= 1 (todos lo tienen),
-    // el trigger lo permite.
     const { error: whErr } = await this.sb.from('warehouses').insert({
       tenant_id: s.tenantId,
       branch_id: branch.id,
       name: input.name,
       is_default: true,
+      participates_in_pos: true,
+      alert_low_stock: true,
       active: true,
     });
     if (whErr) {
-      // Rollback de la branch para no dejar un huérfano sin warehouse default.
       await this.sb.from('branches').delete().eq('id', branch.id);
       throw new Error(`Branch creada pero falló warehouse default: ${whErr.message}`);
     }
@@ -486,6 +582,8 @@ class SupabaseDriver implements DataDriver {
     const patch: Record<string, unknown> = {};
     if (input.name !== undefined) patch.name = input.name;
     if (input.address !== undefined) patch.address = input.address;
+    if (input.phone !== undefined) patch.phone = input.phone;
+    if (input.email !== undefined) patch.email = input.email;
     if (input.active !== undefined) patch.active = input.active;
     const { data, error } = await this.sb
       .from('branches')
@@ -524,6 +622,8 @@ class SupabaseDriver implements DataDriver {
         branch_id: input.branchId,
         name: input.name,
         is_default: input.isDefault,
+        participates_in_pos: input.participatesInPos,
+        alert_low_stock: input.alertLowStock,
         active: input.active,
       })
       .select()
@@ -538,6 +638,8 @@ class SupabaseDriver implements DataDriver {
     if (input.name !== undefined) patch.name = input.name;
     if (input.branchId !== undefined) patch.branch_id = input.branchId;
     if (input.isDefault !== undefined) patch.is_default = input.isDefault;
+    if (input.participatesInPos !== undefined) patch.participates_in_pos = input.participatesInPos;
+    if (input.alertLowStock !== undefined) patch.alert_low_stock = input.alertLowStock;
     if (input.active !== undefined) patch.active = input.active;
     const { data, error } = await this.sb
       .from('warehouses')
@@ -637,6 +739,8 @@ class SupabaseDriver implements DataDriver {
         cost: input.cost,
         category_id: input.categoryId,
         tax_rate: input.taxRate,
+        track_stock: input.trackStock,
+        allow_sale_when_zero: input.allowSaleWhenZero,
         active: input.active,
       })
       .select()
@@ -670,6 +774,8 @@ class SupabaseDriver implements DataDriver {
     if (input.cost !== undefined) patch.cost = input.cost;
     if (input.categoryId !== undefined) patch.category_id = input.categoryId;
     if (input.taxRate !== undefined) patch.tax_rate = input.taxRate;
+    if (input.trackStock !== undefined) patch.track_stock = input.trackStock;
+    if (input.allowSaleWhenZero !== undefined) patch.allow_sale_when_zero = input.allowSaleWhenZero;
     if (input.active !== undefined) patch.active = input.active;
 
     const { data, error } = await this.sb

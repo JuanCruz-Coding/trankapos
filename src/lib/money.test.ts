@@ -10,6 +10,7 @@ import {
   fromCents,
   roundMoney,
   lineSubtotal,
+  applyDiscount,
 } from './money';
 
 describe('money — conversiones', () => {
@@ -87,5 +88,43 @@ describe('money — lineSubtotal', () => {
 
   it('puede dar negativo si el descuento supera el bruto', () => {
     expect(lineSubtotal(100, 1, 150)).toBe(-50);
+  });
+});
+
+describe('money — applyDiscount', () => {
+  it('mode amount devuelve el valor redondeado', () => {
+    expect(applyDiscount(50, 'amount', 200)).toBe(50);
+    expect(applyDiscount(50.123, 'amount', 200)).toBe(50.12);
+  });
+
+  it('mode percent calcula sobre la base', () => {
+    expect(applyDiscount(10, 'percent', 200)).toBe(20);
+    expect(applyDiscount(50, 'percent', 100)).toBe(50);
+    expect(applyDiscount(33, 'percent', 100)).toBe(33);
+  });
+
+  it('mode percent capea a 100%', () => {
+    expect(applyDiscount(150, 'percent', 100)).toBe(100);
+  });
+
+  it('recorta el resultado al máximo de la base', () => {
+    expect(applyDiscount(500, 'amount', 200)).toBe(200);
+  });
+
+  it('valores 0 o negativos devuelven 0', () => {
+    expect(applyDiscount(0, 'amount', 100)).toBe(0);
+    expect(applyDiscount(-50, 'amount', 100)).toBe(0);
+    expect(applyDiscount(-10, 'percent', 100)).toBe(0);
+  });
+
+  it('base 0 o no finita devuelve 0', () => {
+    expect(applyDiscount(50, 'amount', 0)).toBe(0);
+    expect(applyDiscount(10, 'percent', 0)).toBe(0);
+    expect(applyDiscount(10, 'percent', NaN)).toBe(0);
+  });
+
+  it('sin pérdida de precisión con porcentajes complicados', () => {
+    expect(applyDiscount(10, 'percent', 99.99)).toBe(10);
+    expect(applyDiscount(15, 'percent', 1234.56)).toBe(185.18);
   });
 });

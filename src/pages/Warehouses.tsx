@@ -19,6 +19,8 @@ interface FormState {
   name: string;
   branchId: string | null;
   isDefault: boolean;
+  participatesInPos: boolean;
+  alertLowStock: boolean;
   active: boolean;
 }
 
@@ -33,6 +35,8 @@ export default function Warehouses() {
     name: '',
     branchId: null,
     isDefault: false,
+    participatesInPos: true,
+    alertLowStock: true,
     active: true,
   });
 
@@ -48,6 +52,8 @@ export default function Warehouses() {
       name: '',
       branchId: branches?.[0]?.id ?? null,
       isDefault: false,
+      participatesInPos: true,
+      alertLowStock: true,
       active: true,
     });
     setModal(true);
@@ -59,6 +65,8 @@ export default function Warehouses() {
       name: w.name,
       branchId: w.branchId,
       isDefault: w.isDefault,
+      participatesInPos: w.participatesInPos,
+      alertLowStock: w.alertLowStock,
       active: w.active,
     });
     setModal(true);
@@ -70,6 +78,8 @@ export default function Warehouses() {
       name: form.name,
       branchId: form.branchId,
       isDefault: form.isDefault,
+      participatesInPos: form.participatesInPos,
+      alertLowStock: form.alertLowStock,
       active: form.active,
     });
     if (!parsed.ok) return toast.error(parsed.error);
@@ -222,6 +232,34 @@ export default function Warehouses() {
               disabled={form.branchId === null}
             />
             Es el principal de la sucursal (POS resta de este depósito)
+          </label>
+          <label className="flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={form.participatesInPos}
+              onChange={(e) => setForm({ ...form, participatesInPos: e.target.checked })}
+              className="h-4 w-4"
+            />
+            <span>
+              Participa en ventas
+              <span className="ml-1 text-xs text-slate-500">
+                (puede actuar como source de stock al vender)
+              </span>
+            </span>
+          </label>
+          <label className="flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={form.alertLowStock}
+              onChange={(e) => setForm({ ...form, alertLowStock: e.target.checked })}
+              className="h-4 w-4"
+            />
+            <span>
+              Aplicar alertas de stock mínimo
+              <span className="ml-1 text-xs text-slate-500">
+                (depende del toggle global en Configuración)
+              </span>
+            </span>
           </label>
           <label className="flex items-center gap-2 text-sm">
             <input

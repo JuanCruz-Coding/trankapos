@@ -24,7 +24,27 @@ export async function seedIfEmpty(): Promise<void> {
 
   const tenantId = uuid();
   const ts = new Date().toISOString();
-  const tenant: Tenant = { id: tenantId, name: 'Kiosko Demo', createdAt: ts };
+  const tenant: Tenant = {
+    id: tenantId,
+    name: 'Kiosko Demo',
+    createdAt: ts,
+    legalName: 'Kiosko Demo S.A.',
+    taxId: '',
+    taxCondition: 'monotributista',
+    legalAddress: 'Av. Corrientes 1234, CABA',
+    phone: '',
+    email: '',
+    ticketTitle: 'Comprobante no fiscal',
+    ticketFooter: '¡Gracias por su compra!',
+    ticketShowLogo: true,
+    ticketShowTaxId: true,
+    ticketWidthMm: 80,
+    posAllowNegativeStock: false,
+    posMaxDiscountPercent: 100,
+    posRoundTo: 1,
+    posRequireCustomer: false,
+    stockAlertsEnabled: true,
+  };
 
   // Demo: 1 sucursal con 2 depósitos (mostrador + trastienda) para que se
   // vea cómo funcionan las transferencias.
@@ -35,6 +55,8 @@ export async function seedIfEmpty(): Promise<void> {
       tenantId,
       name: 'Sucursal Centro',
       address: 'Av. Corrientes 1234',
+      phone: '',
+      email: '',
       active: true,
       createdAt: ts,
     },
@@ -49,6 +71,8 @@ export async function seedIfEmpty(): Promise<void> {
       branchId,
       name: 'Mostrador',
       isDefault: true,
+      participatesInPos: true,
+      alertLowStock: true,
       active: true,
       createdAt: ts,
     },
@@ -58,6 +82,8 @@ export async function seedIfEmpty(): Promise<void> {
       branchId,
       name: 'Trastienda',
       isDefault: false,
+      participatesInPos: false,
+      alertLowStock: false,
       active: true,
       createdAt: ts,
     },
@@ -121,6 +147,8 @@ export async function seedIfEmpty(): Promise<void> {
     cost: p.cost,
     categoryId: p.categoryId,
     taxRate: 21,
+    trackStock: true,
+    allowSaleWhenZero: false,
     active: true,
     createdAt: ts,
   }));

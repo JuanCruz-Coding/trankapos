@@ -16,6 +16,8 @@ describe('productSchema', () => {
     cost: 800,
     taxRate: 21,
     categoryId: null,
+    trackStock: true,
+    allowSaleWhenZero: false,
     active: true,
   };
 
@@ -85,44 +87,54 @@ describe('userSchema', () => {
 });
 
 describe('branchSchema', () => {
+  const valid = {
+    name: 'Sucursal Centro',
+    address: '',
+    phone: '',
+    email: '',
+    active: true,
+  };
+
   it('acepta sucursal válida', () => {
-    expect(
-      safeParse(branchSchema, { name: 'Sucursal Centro', address: '', active: true }).ok,
-    ).toBe(true);
+    expect(safeParse(branchSchema, valid).ok).toBe(true);
   });
 
   it('rechaza nombre vacío', () => {
-    expect(safeParse(branchSchema, { name: '', address: '', active: true }).ok).toBe(false);
+    expect(safeParse(branchSchema, { ...valid, name: '' }).ok).toBe(false);
+  });
+
+  it('rechaza email mal formado', () => {
+    expect(safeParse(branchSchema, { ...valid, email: 'no-es-email' }).ok).toBe(false);
   });
 });
 
 describe('warehouseSchema', () => {
+  const validBase = {
+    name: 'Mostrador',
+    branchId: 'b1',
+    isDefault: true,
+    participatesInPos: true,
+    alertLowStock: true,
+    active: true,
+  };
+
   it('acepta depósito válido', () => {
-    expect(
-      safeParse(warehouseSchema, {
-        name: 'Mostrador',
-        branchId: 'b1',
-        isDefault: true,
-        active: true,
-      }).ok,
-    ).toBe(true);
+    expect(safeParse(warehouseSchema, validBase).ok).toBe(true);
   });
 
   it('acepta depósito central (branchId null)', () => {
     expect(
       safeParse(warehouseSchema, {
+        ...validBase,
         name: 'Central',
         branchId: null,
         isDefault: false,
-        active: true,
       }).ok,
     ).toBe(true);
   });
 
   it('rechaza nombre vacío', () => {
-    expect(
-      safeParse(warehouseSchema, { name: '', branchId: 'b1', isDefault: true, active: true }).ok,
-    ).toBe(false);
+    expect(safeParse(warehouseSchema, { ...validBase, name: '' }).ok).toBe(false);
   });
 });
 
