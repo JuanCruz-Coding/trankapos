@@ -72,14 +72,15 @@ export default function Sales() {
                   <td className="px-4 py-3 text-right">
                     {s.items.reduce((a, i) => a + i.qty, 0)}
                   </td>
-                  <td className="px-4 py-3 text-right font-semibold">{formatARS(s.total)}</td>
+                  <td className="px-4 py-3 text-right font-semibold tabular-nums">{formatARS(s.total)}</td>
                   <td className="px-4 py-3">
                     {s.voided ? (
-                      <span className="rounded-full bg-red-50 px-2 py-0.5 text-xs text-red-700">
+                      <span className="inline-flex items-center gap-1.5 rounded-full bg-red-50 px-2 py-0.5 text-xs text-red-700">
                         Anulada
                       </span>
                     ) : (
-                      <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-xs text-emerald-700">
+                      <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-50 px-2 py-0.5 text-xs text-emerald-700">
+                        <span className="status-dot status-dot--green" />
                         Ok
                       </span>
                     )}

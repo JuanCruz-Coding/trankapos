@@ -214,7 +214,7 @@ function StatCard({
           <Icon className="h-4 w-4" />
         </div>
       </div>
-      <div className="mt-2 text-2xl font-bold text-slate-900">{value}</div>
+      <div className="mt-2 font-display text-2xl font-bold tabular-nums text-navy">{value}</div>
     </div>
   );
 }

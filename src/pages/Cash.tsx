@@ -188,11 +188,11 @@ export default function Cash() {
                           </span>
                         )}
                       </td>
-                      <td className="px-2 py-2 text-right">{formatARS(r.openingAmount)}</td>
-                      <td className="px-2 py-2 text-right">
+                      <td className="px-2 py-2 text-right tabular-nums">{formatARS(r.openingAmount)}</td>
+                      <td className="px-2 py-2 text-right tabular-nums">
                         {r.expectedCash !== null ? formatARS(r.expectedCash) : '—'}
                       </td>
-                      <td className="px-2 py-2 text-right">
+                      <td className="px-2 py-2 text-right tabular-nums">
                         {r.closingAmount !== null ? formatARS(r.closingAmount) : '—'}
                       </td>
                       <td className="px-2 py-2 text-right">
@@ -260,7 +260,7 @@ function Stat({ label, value, highlight }: { label: string; value: string; highl
         <Wallet className="h-3.5 w-3.5" />
         {label}
       </div>
-      <div className="mt-1 text-xl font-bold">{value}</div>
+      <div className="mt-1 font-display text-xl font-bold tabular-nums">{value}</div>
     </div>
   );
 }

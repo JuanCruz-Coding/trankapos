@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import {
   AlertCircle,
+  Camera,
   Minus,
   Package,
   Plus,
@@ -14,6 +15,7 @@ import {
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import { Modal } from '@/components/ui/Modal';
+import { BarcodeScanner } from '@/components/ui/BarcodeScanner';
 import { data } from '@/data';
 import { useAuth } from '@/stores/auth';
 import { useCart, cartTotals } from '@/stores/cart';
@@ -40,6 +42,7 @@ export default function Pos() {
   const [barcode, setBarcode] = useState('');
   const barcodeRef = useRef<HTMLInputElement>(null);
   const [payModal, setPayModal] = useState(false);
+  const [scannerOpen, setScannerOpen] = useState(false);
   const [lastSale, setLastSale] = useState<Sale | null>(null);
 
   const products = useLiveQuery(async () => {
@@ -91,11 +94,9 @@ export default function Pos() {
     return () => window.removeEventListener('keydown', handler);
   }, [lines.length]);
 
-  async function handleBarcode(e: FormEvent) {
-    e.preventDefault();
-    const code = barcode.trim();
+  async function processCode(rawCode: string) {
+    const code = rawCode.trim();
     if (!code) return;
-    setBarcode('');
     try {
       const product = await data.findProductByBarcode(code);
       if (!product) {
@@ -111,6 +112,17 @@ export default function Pos() {
     } catch (err) {
       toast.error((err as Error).message);
     }
+  }
+
+  async function handleBarcode(e: FormEvent) {
+    e.preventDefault();
+    setBarcode('');
+    await processCode(barcode);
+  }
+
+  async function handleScannerDetected(code: string) {
+    setScannerOpen(false);
+    await processCode(code);
   }
 
   if (!session || !activeDepotId) {
@@ -245,9 +257,9 @@ export default function Pos() {
               <span>-{formatARS(discount)}</span>
             </div>
           )}
-          <div className="mb-3 flex items-center justify-between text-lg font-bold text-slate-900">
+          <div className="mb-3 flex items-center justify-between font-display text-lg font-bold text-navy">
             <span>Total</span>
-            <span>{formatARS(total)}</span>
+            <span className="tabular-nums">{formatARS(total)}</span>
           </div>
           {!openRegister && (
             <div className="mb-2 flex items-center gap-2 rounded-md bg-amber-50 px-3 py-2 text-xs text-amber-800">
@@ -280,6 +292,15 @@ export default function Pos() {
               autoFocus
             />
           </div>
+          <Button
+            type="button"
+            variant="outline"
+            className="lg:hidden"
+            onClick={() => setScannerOpen(true)}
+            aria-label="Escanear con cámara"
+          >
+            <Camera className="h-4 w-4" />
+          </Button>
           <Button type="submit">Agregar</Button>
         </form>
 
@@ -354,6 +375,11 @@ export default function Pos() {
         }}
       />
       <ReceiptModal sale={lastSale} onClose={() => setLastSale(null)} />
+      <BarcodeScanner
+        open={scannerOpen}
+        onDetected={handleScannerDetected}
+        onClose={() => setScannerOpen(false)}
+      />
     </div>
   );
 }
@@ -420,9 +446,9 @@ function PaymentModal({ open, onClose, total, onCompleted }: PayProps) {
 
   return (
     <Modal open={open} onClose={onClose} title="Cobrar" widthClass="max-w-md">
-      <div className="mb-3 rounded-lg bg-brand-50 p-4 text-center">
-        <div className="text-xs uppercase text-brand-700">Total a cobrar</div>
-        <div className="text-3xl font-bold text-brand-800">{formatARS(total)}</div>
+      <div className="mb-3 rounded-lg bg-ice p-4 text-center">
+        <div className="eyebrow text-cyan">Total a cobrar</div>
+        <div className="font-display text-3xl font-bold tabular-nums text-navy">{formatARS(total)}</div>
       </div>
 
       <div className="space-y-2">

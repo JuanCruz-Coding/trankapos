@@ -14,10 +14,17 @@ import { cn } from '@/lib/utils';
 import { formatARS } from '@/lib/currency';
 import type { Plan, PlanUsage, Subscription, SubscriptionStatus } from '@/types';
 
-const STATUS_LABEL: Record<SubscriptionStatus, { text: string; color: string }> = {
-  trialing: { text: 'En prueba', color: 'bg-sky-50 text-sky-700' },
-  active: { text: 'Activa', color: 'bg-emerald-50 text-emerald-700' },
-  past_due: { text: 'Pago vencido', color: 'bg-amber-50 text-amber-700' },
+const STATUS_LABEL: Record<
+  SubscriptionStatus,
+  { text: string; color: string; dot?: string }
+> = {
+  trialing: { text: 'En prueba', color: 'bg-ice text-navy', dot: 'status-dot--blue' },
+  active: { text: 'Activa', color: 'bg-emerald-50 text-emerald-700', dot: 'status-dot--green' },
+  past_due: {
+    text: 'Pago vencido',
+    color: 'bg-accent/10 text-accent-dark',
+    dot: 'status-dot--orange',
+  },
   canceled: { text: 'Cancelada', color: 'bg-red-50 text-red-700' },
 };
 
@@ -169,7 +176,13 @@ export default function Plan() {
                 </div>
               </div>
             </div>
-            <span className={cn('rounded-full px-2.5 py-1 text-xs font-medium', status.color)}>
+            <span
+              className={cn(
+                'inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium',
+                status.color,
+              )}
+            >
+              {status.dot && <span className={cn('status-dot', status.dot)} />}
               {status.text}
             </span>
           </CardHeader>

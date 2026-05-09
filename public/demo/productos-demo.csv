@@ -1,0 +1,106 @@
+nombre;codigo_barras;precio;costo;categoria;iva;stock
+Coca Cola 500ml;7790895100001;1500;1100;Bebidas;21;24
+Coca Cola 1.5L;7790895100002;3200;2400;Bebidas;21;18
+Coca Cola 2.25L;7790895100003;4500;3400;Bebidas;21;12
+Coca Cola Zero 500ml;7790895100004;1500;1100;Bebidas;21;15
+Sprite 500ml;7790895100005;1450;1050;Bebidas;21;18
+Fanta Naranja 500ml;7790895100006;1450;1050;Bebidas;21;15
+Pepsi 500ml;7790895100007;1400;1000;Bebidas;21;20
+Pepsi 2.25L;7790895100008;4200;3100;Bebidas;21;10
+Manaos Cola 2L;7790895100009;2200;1500;Bebidas;21;14
+7Up 500ml;7790895100010;1400;1000;Bebidas;21;12
+Agua Mineral Villa del Sur 500ml;7790895100011;900;600;Bebidas;21;36
+Agua Mineral Villavicencio 1.5L;7790895100012;1800;1300;Bebidas;21;24
+Agua Saborizada Levite Pomelo 1.5L;7790895100013;2300;1700;Bebidas;21;18
+Cerveza Quilmes 1L;7790895100014;3500;2700;Bebidas;21;24
+Cerveza Brahma 1L;7790895100015;3300;2500;Bebidas;21;18
+Papas Fritas Lays Clásicas 70g;7790895200001;1800;1300;Snacks;21;20
+Papas Fritas Pringles 124g;7790895200002;3500;2700;Snacks;21;12
+Doritos Queso 75g;7790895200003;1900;1400;Snacks;21;18
+Cheetos 75g;7790895200004;1700;1250;Snacks;21;16
+Palitos Salados Bagley 100g;7790895200005;1500;1100;Snacks;21;14
+Galletitas Oreo 117g;7790895200006;2200;1700;Snacks;21;20
+Galletitas Pepitos 100g;7790895200007;1300;950;Snacks;21;25
+Galletitas Toddy 150g;7790895200008;1600;1200;Snacks;21;18
+Galletitas Sonrisas 60g;7790895200009;800;550;Snacks;21;30
+Alfajor Jorgito Triple 55g;7790895200010;850;600;Snacks;21;40
+Alfajor Guaymallén Negro 50g;7790895200011;700;500;Snacks;21;50
+Alfajor Cachafaz 80g;7790895200012;2400;1900;Snacks;21;15
+Chocolate Milka Leche 100g;7790895200013;3800;3000;Snacks;21;20
+Chupetín Barrilete;7790895200014;250;150;Snacks;21;100
+Chicles Beldent Menta;7790895200015;1100;800;Snacks;21;30
+Yerba Taragüí 500g;7790895300001;3500;2800;Almacen;21;20
+Yerba Playadito 1kg;7790895300002;6800;5500;Almacen;21;12
+Yerba Rosamonte 500g;7790895300003;3300;2600;Almacen;21;16
+Yerba CBSé Hierbas 500g;7790895300004;3700;3000;Almacen;21;14
+Azúcar Ledesma 1kg;7790895300005;1900;1400;Almacen;21;25
+Sal Fina Celusal 500g;7790895300006;1100;800;Almacen;21;20
+Aceite Natura Girasol 1.5L;7790895300007;5800;4600;Almacen;21;18
+Aceite Cocinero Mezcla 900ml;7790895300008;3900;3100;Almacen;21;15
+Fideos Matarazzo Spaghetti 500g;7790895300009;1700;1300;Almacen;21;30
+Fideos Lucchetti Tirabuzón 500g;7790895300010;1700;1300;Almacen;21;25
+Arroz Gallo Largo Fino 1kg;7790895300011;2600;2000;Almacen;21;20
+Arroz Lucchetti Yaman 1kg;7790895300012;2700;2100;Almacen;21;15
+Harina 0000 Blancaflor 1kg;7790895300013;1500;1100;Almacen;21;25
+Harina Leudante Pureza 1kg;7790895300014;1700;1300;Almacen;21;20
+Polenta Presto 500g;7790895300015;1400;1050;Almacen;21;18
+Lentejas Marolio 400g;7790895300016;1900;1400;Almacen;21;14
+Garbanzos La Salteña 350g;7790895300017;2100;1600;Almacen;21;12
+Tomate Triturado La Campagnola 520g;7790895300018;1900;1450;Almacen;21;24
+Pure de Tomate Arcor 520g;7790895300019;1500;1100;Almacen;21;30
+Vinagre de Alcohol Casalta 500ml;7790895300020;1300;950;Almacen;21;15
+Leche Entera La Serenísima 1L;7790895400001;2200;1700;Lacteos;21;36
+Leche Descremada Sancor 1L;7790895400002;2200;1700;Lacteos;21;24
+Leche Chocolatada Cindor 1L;7790895400003;2700;2100;Lacteos;21;18
+Yogur Yogurísimo Bebible 1L;7790895400004;3200;2500;Lacteos;21;15
+Yogur Ser Vainilla 190g;7790895400005;1200;900;Lacteos;21;30
+Queso Cremoso La Paulina 250g;7790895400006;3800;3000;Lacteos;21;14
+Queso Tybo Sancor 200g;7790895400007;3500;2700;Lacteos;21;12
+Manteca La Serenísima 200g;7790895400008;3200;2500;Lacteos;21;18
+Crema de Leche Sancor 200g;7790895400009;1800;1350;Lacteos;21;20
+Dulce de Leche Ilolay 400g;7790895400010;3300;2600;Lacteos;21;15
+Lavandina Ayudín 1L;7790895500001;1900;1450;Limpieza;21;24
+Detergente Magistral 750ml;7790895500002;3200;2500;Limpieza;21;20
+Jabón en Polvo Skip 800g;7790895500003;5800;4600;Limpieza;21;15
+Suavizante Comfort 900ml;7790895500004;3400;2700;Limpieza;21;18
+Limpiador Cif Crema 750ml;7790895500005;3100;2400;Limpieza;21;14
+Esponjas Mortimer x3;7790895500006;1500;1100;Limpieza;21;30
+Bolsas Consorcio 60x80 x10;7790895500007;2800;2200;Limpieza;21;20
+Papel Higiénico Higienol x4;7790895500008;3600;2800;Limpieza;21;25
+Rollo Cocina Sussex x2;7790895500009;2700;2100;Limpieza;21;20
+Servilletas Elite x100;7790895500010;1900;1450;Limpieza;21;18
+Pasta Dental Colgate Triple Acción 90g;7790895600001;2300;1750;Higiene;21;25
+Cepillo Dental Colgate Extra Clean;7790895600002;2200;1700;Higiene;21;30
+Shampoo Sedal Reparación 340ml;7790895600003;3700;2900;Higiene;21;18
+Acondicionador Pantene 300ml;7790895600004;3900;3100;Higiene;21;15
+Jabón de Tocador Rexona 90g;7790895600005;1100;800;Higiene;21;40
+Desodorante Axe Aerosol 150ml;7790895600006;3500;2700;Higiene;21;20
+Desodorante Rexona Mujer 150ml;7790895600007;3300;2600;Higiene;21;18
+Toallitas Femeninas Always Normal x8;7790895600008;1900;1450;Higiene;10.5;25
+Pañales Pampers Premium G x10;7790895600009;5800;4600;Higiene;10.5;15
+Algodón Estrella 100g;7790895600010;1700;1300;Higiene;21;20
+Marlboro Box 20;7790895700001;5500;4200;Cigarrillos;21;30
+Philip Morris Box 20;7790895700002;5300;4100;Cigarrillos;21;25
+Camel Box 20;7790895700003;5400;4150;Cigarrillos;21;20
+LM Azul Box 20;7790895700004;4900;3800;Cigarrillos;21;28
+Lucky Strike Box 20;7790895700005;5100;3950;Cigarrillos;21;22
+Pan Lactal Bimbo Blanco 555g;7790895800001;3200;2500;Panaderia;10.5;14
+Pan Rallado Preferido 200g;7790895800002;1300;950;Panaderia;10.5;20
+Tostadas Granix Light x12;7790895800003;2400;1850;Panaderia;10.5;15
+Pan de Hamburguesa x4 Bimbo;7790895800004;2100;1600;Panaderia;10.5;18
+Bizcochos 9 de Oro 200g;7790895800005;1700;1300;Panaderia;10.5;25
+Helado Frigor Tentación 1L;7790895900001;6800;5400;Congelados;21;10
+Hamburguesas Patty x4;7790895900002;5400;4200;Congelados;21;12
+Milanesas de Pollo Granja Tres Arroyos 600g;7790895900003;6900;5500;Congelados;21;10
+Papas Mc Cain Súper Crocantes 750g;7790895900004;4600;3600;Congelados;21;15
+Pizza Frizzia Muzzarella;7790895900005;5800;4600;Congelados;21;10
+Café La Virginia Tradicional 250g;7790899000001;5400;4300;Bebidas;21;15
+Café Cabrales Tostado 250g;7790899000002;4900;3900;Bebidas;21;12
+Té Green Hills Saquitos x25;7790899000003;1900;1450;Bebidas;21;20
+Mate Cocido La Virginia x25;7790899000004;1700;1300;Bebidas;21;18
+Mermelada Arcor Frutilla 454g;7790899000005;3400;2700;Almacen;21;14
+Miel Pampa 500g;7790899000006;5800;4600;Almacen;10.5;12
+Edulcorante Hileret líquido 200ml;7790899000007;2900;2300;Almacen;21;15
+Pilas Duracell AA x4;7790899000008;3900;3100;Otros;21;20
+Encendedor Bic;7790899000009;800;550;Otros;21;100
+Velas x6 Cumpleaños;7790899000010;1300;950;Otros;21;30
