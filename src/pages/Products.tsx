@@ -162,7 +162,8 @@ export default function Products() {
 
   async function handleDelete(p: Product) {
     const ok = await confirmDialog(`¿Eliminar "${p.name}"?`, {
-      text: 'No vas a poder recuperarlo.',
+      text:
+        'Si el producto tiene ventas o transferencias no se puede borrar; en ese caso, desactivalo (editá y desmarcá "Producto activo") para sacarlo del POS sin perder el histórico.',
       confirmText: 'Eliminar',
       danger: true,
     });

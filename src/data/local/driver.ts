@@ -559,6 +559,22 @@ export class LocalDriver implements DataDriver {
     const s = await this.requireSession();
     const existing = await db.products.get(id);
     if (!existing || existing.tenantId !== s.tenantId) return;
+
+    // Misma regla que el SupabaseDriver: si hay ventas o transferencias con
+    // este producto, no se puede eliminar (corrompería el histórico).
+    const [allSales, allTransfers] = await Promise.all([
+      db.sales.where('tenantId').equals(s.tenantId).toArray(),
+      db.transfers.where('tenantId').equals(s.tenantId).toArray(),
+    ]);
+    const hasSales = allSales.some((sale) => sale.items.some((it) => it.productId === id));
+    const hasTransfers = allTransfers.some((t) => t.items.some((it) => it.productId === id));
+    if (hasSales || hasTransfers) {
+      const motivo = hasSales ? 'ventas' : 'transferencias';
+      throw new Error(
+        `No se puede eliminar: el producto tiene ${motivo} asociadas. Para sacarlo del catálogo, editalo y desmarcá "Producto activo".`,
+      );
+    }
+
     await db.transaction('rw', db.products, db.stock, async () => {
       await db.products.delete(id);
       const stock = await db.stock.where('productId').equals(id).toArray();

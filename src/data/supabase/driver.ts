@@ -891,6 +891,33 @@ class SupabaseDriver implements DataDriver {
 
   async deleteProduct(id: string): Promise<void> {
     await this.requireSession();
+
+    // Pre-check: si el producto ya tiene ventas o transferencias, no se puede
+    // borrar (FK on delete restrict en sale_items y transfer_items). Devolvemos
+    // un mensaje claro para que el dueño desactive el producto en lugar de
+    // borrarlo. Borrar el histórico corrompería reportes y tickets pasados.
+    const [salesRes, transfersRes] = await Promise.all([
+      this.sb
+        .from('sale_items')
+        .select('id', { count: 'exact', head: true })
+        .eq('product_id', id),
+      this.sb
+        .from('transfer_items')
+        .select('id', { count: 'exact', head: true })
+        .eq('product_id', id),
+    ]);
+    if (salesRes.error) throw new Error(salesRes.error.message);
+    if (transfersRes.error) throw new Error(transfersRes.error.message);
+
+    const hasSales = (salesRes.count ?? 0) > 0;
+    const hasTransfers = (transfersRes.count ?? 0) > 0;
+    if (hasSales || hasTransfers) {
+      const motivo = hasSales ? 'ventas' : 'transferencias';
+      throw new Error(
+        `No se puede eliminar: el producto tiene ${motivo} asociadas. Para sacarlo del catálogo, editalo y desmarcá "Producto activo".`,
+      );
+    }
+
     const { error } = await this.sb.from('products').delete().eq('id', id);
     if (error) throw new Error(error.message);
   }
