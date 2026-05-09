@@ -8,48 +8,18 @@ interface Props {
   onClose: () => void;
 }
 
-function isBackCamera(label: string) {
-  return /back|rear|environment|trasera/i.test(label);
-}
+type Facing = 'environment' | 'user';
 
 export function BarcodeScanner({ open, onDetected, onClose }: Props) {
   const videoRef = useRef<HTMLVideoElement>(null);
-  const [devices, setDevices] = useState<MediaDeviceInfo[]>([]);
-  const [currentDeviceId, setCurrentDeviceId] = useState<string | null>(null);
+  const [facing, setFacing] = useState<Facing>('environment');
   const [error, setError] = useState<string | null>(null);
 
-  // Effect 1: al abrir, listar dispositivos y elegir el default (trasera).
   useEffect(() => {
     if (!open) {
-      setDevices([]);
-      setCurrentDeviceId(null);
       setError(null);
       return;
     }
-    (async () => {
-      try {
-        const list = await BrowserMultiFormatReader.listVideoInputDevices();
-        setDevices(list);
-        const back = list.find((d) => isBackCamera(d.label));
-        const initial = back?.deviceId ?? list[0]?.deviceId ?? null;
-        setCurrentDeviceId(initial);
-        if (!initial) {
-          setError('No se encontró ninguna cámara en este dispositivo.');
-        }
-      } catch (err) {
-        const msg = (err as Error).message ?? '';
-        if (/permission|denied|NotAllowed/i.test(msg)) {
-          setError('Permiso de cámara denegado. Habilitalo en la configuración del navegador.');
-        } else {
-          setError(`No se pudo acceder a las cámaras: ${msg}`);
-        }
-      }
-    })();
-  }, [open]);
-
-  // Effect 2: arrancar/reiniciar el stream cuando cambia el device seleccionado.
-  useEffect(() => {
-    if (!open || !currentDeviceId) return;
 
     const reader = new BrowserMultiFormatReader();
     let cancelled = false;
@@ -58,8 +28,17 @@ export function BarcodeScanner({ open, onDetected, onClose }: Props) {
     (async () => {
       try {
         if (!videoRef.current || cancelled) return;
-        controls = await reader.decodeFromVideoDevice(
-          currentDeviceId,
+        // facingMode: { ideal } pide la trasera (environment) o frontal (user)
+        // según corresponda; el browser maneja el deviceId internamente.
+        // Esto es más confiable que listVideoInputDevices() en mobile, donde
+        // los labels están vacíos hasta que se otorga permiso.
+        controls = await reader.decodeFromConstraints(
+          {
+            video: {
+              facingMode: { ideal: facing },
+            },
+            audio: false,
+          },
           videoRef.current,
           (result) => {
             if (result && !cancelled) {
@@ -70,13 +49,25 @@ export function BarcodeScanner({ open, onDetected, onClose }: Props) {
           },
         );
       } catch (err) {
-        const msg = (err as Error).message ?? '';
-        if (/permission|denied|NotAllowed/i.test(msg)) {
+        const e = err as Error;
+        const msg = e.message ?? '';
+        const name = e.name ?? '';
+        // Log completo para debug; el toast/UI muestra mensaje amigable.
+        console.error('[BarcodeScanner] error:', name, msg, err);
+        if (/NotAllowed|Permission|denied/i.test(name + msg)) {
           setError('Permiso de cámara denegado. Habilitalo en la configuración del navegador.');
-        } else if (/NotFound/i.test(msg)) {
-          setError('No se encontró ninguna cámara en este dispositivo.');
+        } else if (/NotFound|DevicesNotFound/i.test(name + msg)) {
+          setError(
+            facing === 'environment'
+              ? 'No se encontró cámara trasera. Probá con la frontal.'
+              : 'No se encontró ninguna cámara en este dispositivo.',
+          );
+        } else if (/NotReadable|TrackStart/i.test(name + msg)) {
+          setError('La cámara está siendo usada por otra app. Cerrala y volvé a intentar.');
+        } else if (/secure|HTTPS/i.test(msg)) {
+          setError('La cámara solo funciona en HTTPS. Probá desde pos.trankasoft.com.');
         } else {
-          setError(`No se pudo iniciar la cámara: ${msg}`);
+          setError(`No se pudo iniciar la cámara: ${msg || name || 'error desconocido'}`);
         }
       }
     })();
@@ -85,19 +76,16 @@ export function BarcodeScanner({ open, onDetected, onClose }: Props) {
       cancelled = true;
       controls?.stop();
     };
-  }, [open, currentDeviceId, onDetected]);
+  }, [open, facing, onDetected]);
 
   function switchCamera() {
-    if (devices.length < 2) return;
-    const idx = devices.findIndex((d) => d.deviceId === currentDeviceId);
-    const next = devices[(idx + 1) % devices.length];
-    setCurrentDeviceId(next.deviceId);
+    setError(null);
+    setFacing((f) => (f === 'environment' ? 'user' : 'environment'));
   }
 
   if (!open) return null;
 
-  const currentDevice = devices.find((d) => d.deviceId === currentDeviceId);
-  const facing = currentDevice && isBackCamera(currentDevice.label) ? 'Trasera' : 'Frontal';
+  const facingLabel = facing === 'environment' ? 'Trasera' : 'Frontal';
 
   return (
     <div className="fixed inset-0 z-[60] flex flex-col bg-black">
@@ -107,16 +95,14 @@ export function BarcodeScanner({ open, onDetected, onClose }: Props) {
           <span className="font-display text-sm font-bold">Escanear código</span>
         </div>
         <div className="flex items-center gap-1">
-          {devices.length > 1 && !error && (
-            <button
-              onClick={switchCamera}
-              className="flex items-center gap-1.5 rounded-md px-2 py-1 text-xs text-white hover:bg-white/10"
-              aria-label="Cambiar cámara"
-            >
-              <SwitchCamera className="h-4 w-4" />
-              <span>{facing}</span>
-            </button>
-          )}
+          <button
+            onClick={switchCamera}
+            className="flex items-center gap-1.5 rounded-md px-2 py-1 text-xs text-white hover:bg-white/10"
+            aria-label="Cambiar cámara"
+          >
+            <SwitchCamera className="h-4 w-4" />
+            <span>{facingLabel}</span>
+          </button>
           <button
             onClick={onClose}
             className="rounded-md p-1 text-white hover:bg-white/10"
@@ -129,14 +115,22 @@ export function BarcodeScanner({ open, onDetected, onClose }: Props) {
 
       <div className="relative flex-1 overflow-hidden">
         {error ? (
-          <div className="flex h-full flex-col items-center justify-center p-6 text-center text-white">
-            <p className="mb-4 text-sm text-slate-300">{error}</p>
-            <button
-              onClick={onClose}
-              className="rounded-lg bg-white/10 px-4 py-2 text-sm hover:bg-white/20"
-            >
-              Volver
-            </button>
+          <div className="flex h-full flex-col items-center justify-center gap-3 p-6 text-center text-white">
+            <p className="text-sm text-slate-300">{error}</p>
+            <div className="flex gap-2">
+              <button
+                onClick={switchCamera}
+                className="rounded-lg bg-cyan/20 px-4 py-2 text-sm hover:bg-cyan/30"
+              >
+                Probar otra cámara
+              </button>
+              <button
+                onClick={onClose}
+                className="rounded-lg bg-white/10 px-4 py-2 text-sm hover:bg-white/20"
+              >
+                Volver
+              </button>
+            </div>
           </div>
         ) : (
           <>
@@ -145,6 +139,7 @@ export function BarcodeScanner({ open, onDetected, onClose }: Props) {
               className="h-full w-full object-cover"
               playsInline
               muted
+              autoPlay
             />
             {/* Overlay con marco de targeting */}
             <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
