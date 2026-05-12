@@ -17,6 +17,7 @@ import { Input } from '@/components/ui/Input';
 import { Modal } from '@/components/ui/Modal';
 import { BarcodeScanner } from '@/components/ui/BarcodeScanner';
 import { data } from '@/data';
+import { getSupabase } from '@/lib/supabase';
 import { useAuth } from '@/stores/auth';
 import { useCart, cartTotals } from '@/stores/cart';
 import { formatARS } from '@/lib/currency';
@@ -26,6 +27,7 @@ import { buildSaleFromCart, summarizeSale } from '@/lib/sales';
 import { beepError, beepSuccess, primeAudio } from '@/lib/sound';
 import { toast } from '@/stores/toast';
 import { PAYMENT_METHODS, type PaymentMethod, type Sale, type Tenant } from '@/types';
+import { QRPaymentModal } from '@/components/ui/QRPaymentModal';
 
 export default function Pos() {
   const { session, activeBranchId } = useAuth();
@@ -72,6 +74,36 @@ export default function Pos() {
       cancelled = true;
     };
   }, [session?.tenantId]);
+
+  // ¿El tenant tiene MP Connect listo para cobrar con QR?
+  const [mpReady, setMpReady] = useState(false);
+  useEffect(() => {
+    if (!session) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const sb = getSupabase();
+        const { data: integ } = await sb
+          .from('tenant_payment_integrations')
+          .select('mp_pos_id')
+          .eq('provider', 'mp')
+          .maybeSingle();
+        if (!cancelled) setMpReady(Boolean(integ?.mp_pos_id));
+      } catch {
+        if (!cancelled) setMpReady(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [session?.tenantId]);
+
+  // QR charge en curso (cobro MP)
+  const [qrCharge, setQrCharge] = useState<{
+    items: { productId: string; qty: number; price: number; discount: number; name?: string }[];
+    discount: number;
+    amount: number;
+  } | null>(null);
 
   const products = useLiveQuery(async () => {
     if (!session) return [];
@@ -462,13 +494,35 @@ export default function Pos() {
         open={payModal}
         onClose={() => setPayModal(false)}
         total={total}
+        mpReady={mpReady}
         onCompleted={(sale) => {
           setPayModal(false);
           clear();
           setLastSale(sale);
           toast.success('Venta registrada');
         }}
+        onPayWithQR={(items, globalDiscount, amount) => {
+          setPayModal(false);
+          setQrCharge({ items, discount: globalDiscount, amount });
+        }}
       />
+      {qrCharge && activeBranchId && (
+        <QRPaymentModal
+          open
+          branchId={activeBranchId}
+          registerId={openRegister?.id ?? null}
+          items={qrCharge.items}
+          discount={qrCharge.discount}
+          amount={qrCharge.amount}
+          onClose={() => setQrCharge(null)}
+          onPaid={(sale) => {
+            setQrCharge(null);
+            clear();
+            setLastSale(sale);
+            toast.success('Cobro QR confirmado');
+          }}
+        />
+      )}
       <ReceiptModal sale={lastSale} tenant={tenant} onClose={() => setLastSale(null)} />
       <BarcodeScanner
         open={scannerOpen}
@@ -518,10 +572,18 @@ interface PayProps {
   open: boolean;
   onClose: () => void;
   total: number;
+  /** Si true, ofrecemos cobrar con QR cuando el único método es 'qr'. */
+  mpReady?: boolean;
   onCompleted: (sale: Sale) => void;
+  /** Se llama cuando se elige cobrar 100% por QR con MP conectado. */
+  onPayWithQR?: (
+    items: { productId: string; qty: number; price: number; discount: number; name?: string }[],
+    discount: number,
+    amount: number,
+  ) => void;
 }
 
-function PaymentModal({ open, onClose, total, onCompleted }: PayProps) {
+function PaymentModal({ open, onClose, total, mpReady, onCompleted, onPayWithQR }: PayProps) {
   const { session, activeBranchId } = useAuth();
   const { lines, discount } = useCart();
   const [payments, setPayments] = useState<{ method: PaymentMethod; amount: number }[]>([
@@ -559,8 +621,32 @@ function PaymentModal({ open, onClose, total, onCompleted }: PayProps) {
     );
   }
 
+  // Si todos los pagos son QR + MP conectado + no es seña → redirigimos
+  // al flow de QRPaymentModal en lugar de crear la sale localmente.
+  const isFullQR =
+    !partial &&
+    mpReady &&
+    payments.length > 0 &&
+    payments.every((p) => p.method === 'qr');
+
   async function handleConfirm() {
     if (!session || !activeBranchId) return;
+
+    if (isFullQR && onPayWithQR) {
+      onPayWithQR(
+        lines.map((l) => ({
+          productId: l.productId,
+          qty: l.qty,
+          price: l.price,
+          discount: l.discount,
+          name: l.name,
+        })),
+        discount,
+        total,
+      );
+      return;
+    }
+
     setLoading(true);
     try {
       const reg = await data.currentOpenRegister(activeBranchId);

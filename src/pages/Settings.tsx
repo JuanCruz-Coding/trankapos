@@ -1,10 +1,24 @@
 import { useEffect, useRef, useState, type ChangeEvent, type FormEvent } from 'react';
-import { Building2, Receipt, ShoppingCart, Boxes, Save, Upload, Trash2, ImageOff } from 'lucide-react';
+import {
+  Building2,
+  Receipt,
+  ShoppingCart,
+  Boxes,
+  Save,
+  Upload,
+  Trash2,
+  ImageOff,
+  CreditCard,
+  ExternalLink,
+  CheckCircle2,
+  XCircle,
+} from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import { Card, CardBody } from '@/components/ui/Card';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { data } from '@/data';
+import { getSupabase } from '@/lib/supabase';
 import { useAuth } from '@/stores/auth';
 import { toast } from '@/stores/toast';
 import { confirmDialog } from '@/lib/dialog';
@@ -12,13 +26,14 @@ import { TAX_CONDITIONS, type TaxCondition, type Tenant, type TenantSettingsInpu
 import { cn } from '@/lib/utils';
 import { LOGO_REQUIREMENTS_TEXT, validateLogoFile } from '@/lib/imageUpload';
 
-type Tab = 'empresa' | 'ticket' | 'pos' | 'stock';
+type Tab = 'empresa' | 'ticket' | 'pos' | 'stock' | 'pagos';
 
 const TABS: { id: Tab; label: string; icon: typeof Building2 }[] = [
   { id: 'empresa', label: 'Empresa', icon: Building2 },
   { id: 'ticket', label: 'Ticket', icon: Receipt },
   { id: 'pos', label: 'POS', icon: ShoppingCart },
   { id: 'stock', label: 'Stock', icon: Boxes },
+  { id: 'pagos', label: 'Pagos', icon: CreditCard },
 ];
 
 interface FormState {
@@ -187,22 +202,220 @@ export default function Settings() {
         })}
       </div>
 
-      <form onSubmit={handleSubmit}>
+      {tab === 'pagos' ? (
         <Card>
-          <CardBody className="space-y-4">
-            {tab === 'empresa' && (
-              <EmpresaTab
-                form={form}
-                update={update}
-                onLogoChange={(url) => setForm((f) => (f ? { ...f, logoUrl: url } : f))}
-              />
-            )}
-            {tab === 'ticket' && <TicketTab form={form} update={update} />}
-            {tab === 'pos' && <PosTab form={form} update={update} />}
-            {tab === 'stock' && <StockTab form={form} update={update} />}
+          <CardBody>
+            <PagosTab />
           </CardBody>
         </Card>
-      </form>
+      ) : (
+        <form onSubmit={handleSubmit}>
+          <Card>
+            <CardBody className="space-y-4">
+              {tab === 'empresa' && (
+                <EmpresaTab
+                  form={form}
+                  update={update}
+                  onLogoChange={(url) => setForm((f) => (f ? { ...f, logoUrl: url } : f))}
+                />
+              )}
+              {tab === 'ticket' && <TicketTab form={form} update={update} />}
+              {tab === 'pos' && <PosTab form={form} update={update} />}
+              {tab === 'stock' && <StockTab form={form} update={update} />}
+            </CardBody>
+          </Card>
+        </form>
+      )}
+    </div>
+  );
+}
+
+// =====================================================================
+// Tab Pagos — integración Mercado Pago Connect
+// =====================================================================
+interface MpIntegrationStatus {
+  connected: boolean;
+  mpUserId?: string;
+  liveMode?: boolean;
+  connectedAt?: string;
+  expiresAt?: string;
+}
+
+function PagosTab() {
+  const [status, setStatus] = useState<MpIntegrationStatus | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [working, setWorking] = useState(false);
+
+  useEffect(() => {
+    void refresh();
+  }, []);
+
+  async function refresh() {
+    setLoading(true);
+    try {
+      const sb = getSupabase();
+      // Solo seleccionamos columnas no sensibles. Los tokens viven en la
+      // misma tabla pero NO se piden — la edge function los usa con
+      // service_role.
+      const { data: row, error } = await sb
+        .from('tenant_payment_integrations')
+        .select('mp_user_id, live_mode, connected_at, expires_at, provider')
+        .eq('provider', 'mp')
+        .maybeSingle();
+      if (error) throw error;
+      if (row) {
+        setStatus({
+          connected: true,
+          mpUserId: row.mp_user_id ?? undefined,
+          liveMode: row.live_mode,
+          connectedAt: row.connected_at,
+          expiresAt: row.expires_at ?? undefined,
+        });
+      } else {
+        setStatus({ connected: false });
+      }
+    } catch (err) {
+      toast.error((err as Error).message);
+      setStatus({ connected: false });
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  function handleConnect() {
+    const clientId = import.meta.env.VITE_MP_OAUTH_CLIENT_ID;
+    const redirectUri =
+      import.meta.env.VITE_MP_OAUTH_REDIRECT_URI ??
+      `${window.location.origin}/settings/integrations/mp/callback`;
+    if (!clientId) {
+      toast.error('Falta VITE_MP_OAUTH_CLIENT_ID en el frontend.');
+      return;
+    }
+    // CSRF protection: guardamos un state random y lo verificamos al volver.
+    const state = crypto.randomUUID();
+    sessionStorage.setItem('mp_oauth_state', state);
+    const url = new URL('https://auth.mercadopago.com.ar/authorization');
+    url.searchParams.set('client_id', clientId);
+    url.searchParams.set('response_type', 'code');
+    url.searchParams.set('platform_id', 'mp');
+    url.searchParams.set('redirect_uri', redirectUri);
+    url.searchParams.set('state', state);
+    window.location.href = url.toString();
+  }
+
+  async function handleDisconnect() {
+    const ok = await confirmDialog('¿Desconectar Mercado Pago?', {
+      text: 'Vas a dejar de poder cobrar con QR. Las ventas pasadas no se afectan.',
+      confirmText: 'Desconectar',
+      danger: true,
+    });
+    if (!ok) return;
+
+    setWorking(true);
+    try {
+      const sb = getSupabase();
+      const { data: sessionData } = await sb.auth.getSession();
+      const token = sessionData.session?.access_token;
+      if (!token) throw new Error('No autenticado');
+
+      const url = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/mp-disconnect`;
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+          apikey: import.meta.env.VITE_SUPABASE_ANON_KEY ?? '',
+        },
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body?.error ?? `Error HTTP ${res.status}`);
+      toast.success('Mercado Pago desconectado');
+      await refresh();
+    } catch (err) {
+      toast.error((err as Error).message);
+    } finally {
+      setWorking(false);
+    }
+  }
+
+  if (loading) {
+    return <div className="text-sm text-slate-500">Cargando estado de integraciones…</div>;
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="rounded-lg border border-slate-200 p-4">
+        <div className="flex items-start gap-3">
+          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-sky-100 text-sky-700">
+            <CreditCard className="h-5 w-5" />
+          </div>
+          <div className="flex-1">
+            <div className="flex flex-wrap items-center gap-2">
+              <h3 className="font-display text-base font-bold text-navy">Mercado Pago</h3>
+              {status?.connected ? (
+                <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-700">
+                  <CheckCircle2 className="h-3 w-3" />
+                  Conectado
+                </span>
+              ) : (
+                <span className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600">
+                  <XCircle className="h-3 w-3" />
+                  Sin conectar
+                </span>
+              )}
+              {status?.connected && status.liveMode === false && (
+                <span className="rounded-full bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-700">
+                  Modo prueba
+                </span>
+              )}
+            </div>
+            <p className="mt-1 text-sm text-slate-600">
+              Conectá tu cuenta de Mercado Pago para cobrar con QR a tus clientes.
+              Las suscripciones a TrankaPos se siguen cobrando aparte; esto es para los
+              cobros que vos le hacés a quien te compra.
+            </p>
+
+            {status?.connected && (
+              <div className="mt-3 rounded-lg bg-slate-50 p-3 text-xs text-slate-600">
+                <div>
+                  <strong>Cuenta MP:</strong> {status.mpUserId ?? '—'}
+                </div>
+                {status.connectedAt && (
+                  <div>
+                    <strong>Conectado el:</strong>{' '}
+                    {new Date(status.connectedAt).toLocaleString('es-AR')}
+                  </div>
+                )}
+                {status.expiresAt && (
+                  <div>
+                    <strong>Token vence:</strong>{' '}
+                    {new Date(status.expiresAt).toLocaleString('es-AR')} (se refresca solo)
+                  </div>
+                )}
+              </div>
+            )}
+
+            <div className="mt-4 flex flex-wrap gap-2">
+              {!status?.connected ? (
+                <Button onClick={handleConnect}>
+                  <ExternalLink className="h-4 w-4" />
+                  Conectar Mercado Pago
+                </Button>
+              ) : (
+                <Button variant="outline" onClick={handleDisconnect} disabled={working}>
+                  <XCircle className="h-4 w-4" />
+                  {working ? 'Desconectando…' : 'Desconectar'}
+                </Button>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <p className="text-xs text-slate-500">
+        Próximamente vas a poder elegir <strong>QR / MP</strong> al cobrar y el
+        sistema generará un QR dinámico que tu cliente escanea con su app.
+      </p>
     </div>
   );
 }
