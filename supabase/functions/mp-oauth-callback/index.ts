@@ -147,6 +147,11 @@ Deno.serve(async (req) => {
     const posExternalId = `trankapos-${tenantId.slice(0, 8)}`;
     let mpStoreId: string | null = null;
     let mpPosId: string | null = null;
+    // posError: motivo legible si la caja MP no quedó lista. Se devuelve al
+    // frontend para que el usuario sepa qué pasó y pueda reintentar — los
+    // tokens igual se guardan, pero sin POS el QR dinámico no funciona.
+    let posError: string | null = null;
+    let posErrorStage: 'lookup' | 'store' | 'pos' | 'exception' | null = null;
 
     try {
       // ¿Ya existe un POS nuestro? (reconexión)
@@ -159,16 +164,19 @@ Deno.serve(async (req) => {
         const existing = existingData.results?.[0];
         if (existing) {
           mpPosId = String(existing.id);
-          // Inferimos store_id desde el POS si vino; sino lo dejamos NULL
-          // (el store sigue válido en MP, no es bloqueante para QR).
           const storeIdMaybe = (existing as { store_id?: string | number }).store_id;
           if (storeIdMaybe !== undefined) mpStoreId = String(storeIdMaybe);
         }
+      } else {
+        // No frenamos por esto — si el lookup falla, intentamos crear igual.
+        const errBody = await existingPosRes.text().catch(() => '');
+        console.warn('Lookup POS existente falló:', existingPosRes.status, errBody.slice(0, 200));
       }
 
       // Si no había POS previo, crear store + pos nuevos.
       if (!mpPosId) {
-        // Crear store
+        // Crear store. MP exige country_name como código ISO (AR, BR, MX, etc),
+        // NO el nombre completo. Misma rigurosidad para state si está validado.
         const storeBody = {
           name: `TrankaPos - ${tenantRow?.legal_name || tenantRow?.name || 'Comercio'}`,
           business_hours: {},
@@ -177,7 +185,7 @@ Deno.serve(async (req) => {
             street_name: tenantRow?.legal_address || 'Sin dirección',
             city_name: 'Buenos Aires',
             state_name: 'Buenos Aires',
-            country_name: 'Argentina',
+            country_name: 'AR',
             latitude: -34.6037,
             longitude: -58.3816,
             reference: '',
@@ -220,15 +228,22 @@ Deno.serve(async (req) => {
             mpPosId = String(posJson.id);
           } else {
             const errBody = await posRes.text().catch(() => '');
-            console.warn('No se pudo crear POS:', posRes.status, errBody.slice(0, 200));
+            console.warn('No se pudo crear POS:', posRes.status, errBody.slice(0, 300));
+            posError = `MP rechazó la creación de la caja (HTTP ${posRes.status}): ${errBody.slice(0, 200)}`;
+            posErrorStage = 'pos';
           }
         } else {
           const errBody = await storeRes.text().catch(() => '');
-          console.warn('No se pudo crear store:', storeRes.status, errBody.slice(0, 200));
+          console.warn('No se pudo crear store:', storeRes.status, errBody.slice(0, 300));
+          posError = `MP rechazó la creación de la sucursal (HTTP ${storeRes.status}): ${errBody.slice(0, 200)}`;
+          posErrorStage = 'store';
         }
       }
     } catch (err) {
-      console.warn('Error best-effort store/pos:', (err as Error).message);
+      const msg = (err as Error).message;
+      console.warn('Error best-effort store/pos:', msg);
+      posError = `Error de red al configurar la caja MP: ${msg}`;
+      posErrorStage = 'exception';
     }
 
     // 3. Guardar todo (tokens obligatorios; store/pos pueden ser null)
@@ -263,6 +278,8 @@ Deno.serve(async (req) => {
         mpUserId,
         liveMode: mpTokens.live_mode,
         posReady: Boolean(mpPosId),
+        posError,
+        posErrorStage,
       },
       200,
     );

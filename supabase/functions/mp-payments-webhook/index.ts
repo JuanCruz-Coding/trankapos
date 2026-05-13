@@ -148,27 +148,37 @@ Deno.serve(async (req) => {
       return new Response('ok', { status: 200 });
     }
 
-    // Solo nos interesa merchant_order. Los topic 'payment' los manejamos
-    // mirando el merchant_order asociado (más confiable para detectar
-    // "venta completa").
-    if (!type.includes('merchant_order')) {
+    // Aceptamos:
+    //   - 'order' / 'order.updated' / 'order.action_required' → nueva API de Orders
+    //   - 'merchant_order' → API legacy (fallback)
+    // El topic 'payment' por sí solo lo ignoramos: confiamos en order/merchant_order
+    // para detectar venta completa (un Order puede tener varios payments).
+    const isNewOrder = type === 'order' || type.startsWith('order.');
+    const isLegacyMerchantOrder = type.includes('merchant_order');
+    if (!isNewOrder && !isLegacyMerchantOrder) {
       return new Response(JSON.stringify({ ok: true, ignored: type }), { status: 200 });
     }
 
-    // GET merchant_order para ver estado real
-    const orderRes = await fetch(
-      `https://api.mercadopago.com/merchant_orders/${dataId}`,
-      { headers: { Authorization: `Bearer ${accessToken}` } },
-    );
+    // GET del recurso para ver el estado real. Cada API usa endpoint distinto.
+    const orderUrl = isNewOrder
+      ? `https://api.mercadopago.com/v1/orders/${dataId}`
+      : `https://api.mercadopago.com/merchant_orders/${dataId}`;
+    const orderRes = await fetch(orderUrl, {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
     if (!orderRes.ok) {
-      console.error('Error fetch merchant_order:', await orderRes.text());
+      console.error('Error fetch order:', orderRes.status, await orderRes.text());
       return new Response('ok', { status: 200 });
     }
     const order = await orderRes.json() as {
-      id: number;
+      id: number | string;
+      // Nueva API (v1/orders)
       status?: string;
       external_reference?: string;
-      total_amount?: number;
+      total_amount?: number | string;
+      type_response?: { qr_data?: string };
+      transactions?: { payments?: { status?: string; amount?: number | string }[] };
+      // Legacy (merchant_orders)
       paid_amount?: number;
       order_status?: string;
       payments?: { status?: string; transaction_amount?: number }[];
@@ -176,7 +186,7 @@ Deno.serve(async (req) => {
 
     const externalRef = order.external_reference;
     if (!externalRef) {
-      console.warn('merchant_order sin external_reference');
+      console.warn('order sin external_reference');
       return new Response('ok', { status: 200 });
     }
 
@@ -198,18 +208,31 @@ Deno.serve(async (req) => {
       );
     }
 
-    // ¿El order está saldado? MP marca order_status='paid' cuando los pagos
-    // cubren el total. También chequeamos paid_amount como fallback.
-    const isPaid =
-      order.order_status === 'paid' ||
-      order.status === 'closed' ||
-      (typeof order.paid_amount === 'number' &&
-        typeof order.total_amount === 'number' &&
-        order.paid_amount >= order.total_amount);
+    // ¿El order está saldado? Aceptamos varios indicadores según API:
+    //   - Nueva: status 'processed' / 'paid' / 'closed'
+    //   - Legacy: order_status 'paid' o paid_amount >= total_amount
+    //   - Cualquiera: si todos los payments del array están approved y cubren total
+    const newApiPaid =
+      isNewOrder &&
+      (order.status === 'processed' ||
+        order.status === 'paid' ||
+        order.status === 'closed' ||
+        (order.transactions?.payments?.some((p) => p.status === 'approved') ?? false));
+    const legacyPaid =
+      isLegacyMerchantOrder &&
+      (order.order_status === 'paid' ||
+        order.status === 'closed' ||
+        (typeof order.paid_amount === 'number' &&
+          typeof order.total_amount === 'number' &&
+          order.paid_amount >= order.total_amount));
+    const isPaid = newApiPaid || legacyPaid;
 
     if (!isPaid) {
       // Posiblemente todavía está pendiente — devolver ok y esperar próxima notificación
-      return new Response(JSON.stringify({ ok: true, pending: true }), { status: 200 });
+      return new Response(
+        JSON.stringify({ ok: true, pending: true, status: order.status ?? order.order_status }),
+        { status: 200 },
+      );
     }
 
     // Crear sale desde intent (idempotente desde el lado de la RPC)

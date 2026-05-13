@@ -239,6 +239,9 @@ interface MpIntegrationStatus {
   liveMode?: boolean;
   connectedAt?: string;
   expiresAt?: string;
+  // posReady=false significa que los tokens están guardados pero la caja MP
+  // (store + pos) no se creó — el cobro con QR va a fallar hasta reconectar.
+  posReady?: boolean;
 }
 
 function PagosTab() {
@@ -259,7 +262,7 @@ function PagosTab() {
       // service_role.
       const { data: row, error } = await sb
         .from('tenant_payment_integrations')
-        .select('mp_user_id, live_mode, connected_at, expires_at, provider')
+        .select('mp_user_id, mp_pos_id, live_mode, connected_at, expires_at, provider')
         .eq('provider', 'mp')
         .maybeSingle();
       if (error) throw error;
@@ -270,6 +273,7 @@ function PagosTab() {
           liveMode: row.live_mode,
           connectedAt: row.connected_at,
           expiresAt: row.expires_at ?? undefined,
+          posReady: Boolean(row.mp_pos_id),
         });
       } else {
         setStatus({ connected: false });
@@ -375,6 +379,14 @@ function PagosTab() {
               cobros que vos le hacés a quien te compra.
             </p>
 
+            {status?.connected && status.posReady === false && (
+              <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+                <strong>Caja MP no sincronizada.</strong> Los tokens están guardados pero
+                no se creó la caja en tu cuenta de Mercado Pago, así que el cobro con QR
+                va a fallar. Reconectá para reintentar la creación.
+              </div>
+            )}
+
             {status?.connected && (
               <div className="mt-3 rounded-lg bg-slate-50 p-3 text-xs text-slate-600">
                 <div>
@@ -402,10 +414,18 @@ function PagosTab() {
                   Conectar Mercado Pago
                 </Button>
               ) : (
-                <Button variant="outline" onClick={handleDisconnect} disabled={working}>
-                  <XCircle className="h-4 w-4" />
-                  {working ? 'Desconectando…' : 'Desconectar'}
-                </Button>
+                <>
+                  {status.posReady === false && (
+                    <Button onClick={handleConnect}>
+                      <ExternalLink className="h-4 w-4" />
+                      Reconectar Mercado Pago
+                    </Button>
+                  )}
+                  <Button variant="outline" onClick={handleDisconnect} disabled={working}>
+                    <XCircle className="h-4 w-4" />
+                    {working ? 'Desconectando…' : 'Desconectar'}
+                  </Button>
+                </>
               )}
             </div>
           </div>

@@ -144,78 +144,119 @@ Deno.serve(async (req) => {
       );
     }
 
-    // 3. Llamar a MP para generar QR dinámico
-    // notification_url incluye ?t=tenantId para que el webhook sepa qué
-    // access_token usar al hacer el GET del merchant_order.
+    // 3. Llamar a la NUEVA API de Orders de MP para generar QR dinámico.
+    // Endpoint: POST /v1/orders con type='qr'. El external_pos_id va en
+    // config.external_pos_id; el access_token identifica al collector.
+    // total_amount es STRING (no number) según doc. expiration_time es
+    // ISO 8601 duration (PT16M = 16 minutos), no timestamp.
     const baseUrl =
       body.notificationUrl ??
       `${Deno.env.get('SUPABASE_URL')}/functions/v1/mp-payments-webhook`;
     const notificationUrl = `${baseUrl}${baseUrl.includes('?') ? '&' : '?'}t=${tenantId}`;
-    const expirationDate = new Date(
-      Date.now() + QR_EXPIRATION_MINUTES * 60_000,
-    ).toISOString();
+    const expiresAt = new Date(Date.now() + QR_EXPIRATION_MINUTES * 60_000).toISOString();
 
-    // Body del request a MP. La doc no detalla todos los campos del body
-    // de QR Pro, así que usamos shape conservador. Si MP rechaza algún
-    // field, lo ajustamos sin romper schema.
-    const mpBody = {
+    const mpBody: Record<string, unknown> = {
+      type: 'qr',
       external_reference: intent.external_reference,
-      title: body.title ?? 'Venta TrankaPos',
-      description: `Cobro POS ${intent.external_reference.slice(0, 8)}`,
-      total_amount: body.amount,
+      total_amount: body.amount.toFixed(2),
+      description: (body.title ?? 'Venta TrankaPos').slice(0, 150),
+      expiration_time: `PT${QR_EXPIRATION_MINUTES}M`,
       items: body.items.map((it) => ({
-        title: it.name ?? `Item ${it.productId.slice(0, 6)}`,
-        sku_number: it.productId,
+        title: (it.name ?? `Item ${it.productId.slice(0, 6)}`).slice(0, 256),
+        unit_price: it.price.toFixed(2),
         quantity: it.qty,
-        unit_price: it.price,
         unit_measure: 'unit',
-        total_amount: Math.round((it.price * it.qty - (it.discount ?? 0)) * 100) / 100,
+        external_code: it.productId,
       })),
+      config: {
+        external_pos_id: integ.mp_pos_external_id,
+      },
       notification_url: notificationUrl,
-      expiration_date: expirationDate,
     };
 
-    const url = `https://api.mercadopago.com/instore/orders/qr/seller/collectors/${integ.mp_user_id}/pos/${integ.mp_pos_external_id}/qrs`;
-    const qrRes = await fetch(url, {
+    const qrRes = await fetch('https://api.mercadopago.com/v1/orders', {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${integ.access_token}`,
         'Content-Type': 'application/json',
+        // X-Idempotency-Key requerido por la nueva API; usamos el id del intent.
+        'X-Idempotency-Key': intent.id,
       },
       body: JSON.stringify(mpBody),
     });
 
     if (!qrRes.ok) {
       const errBody = await qrRes.text().catch(() => '');
-      // Marcamos el intent como rechazado para no dejarlo colgando
       await adminClient
         .from('mp_payment_intents')
         .update({ status: 'rejected' })
         .eq('id', intent.id);
+
+      // Traducción de errores comunes a algo que el cajero pueda accionar.
+      // MP puede devolver 404/400 cuando el external_pos_id no está dado de
+      // alta (caso típico: OAuth se conectó pero falló la creación del POS).
+      const lower = errBody.toLowerCase();
+      const isPosNotFound =
+        qrRes.status === 404 ||
+        lower.includes('external_pos_id') ||
+        lower.includes('pos not found') ||
+        lower.includes('store not found') ||
+        lower.includes('collector') ||
+        lower.includes('invalid_pos');
+      if (isPosNotFound) {
+        return jsonResponse(
+          {
+            error:
+              'La caja Mercado Pago no está sincronizada. Pedile al dueño que entre a Configuración → Pagos y vuelva a conectar Mercado Pago.',
+            details: errBody.slice(0, 300),
+            code: 'mp_pos_not_synced',
+          },
+          400,
+        );
+      }
+      if (qrRes.status === 401 || qrRes.status === 403) {
+        return jsonResponse(
+          {
+            error:
+              'El token de Mercado Pago expiró o fue revocado. Reconectá MP desde Configuración → Pagos.',
+            details: errBody.slice(0, 300),
+            code: 'mp_token_invalid',
+          },
+          400,
+        );
+      }
       return jsonResponse(
-        { error: `MP rechazó la orden: HTTP ${qrRes.status} ${errBody.slice(0, 300)}` },
+        { error: `MP rechazó la orden: HTTP ${qrRes.status} ${errBody.slice(0, 500)}` },
         500,
       );
     }
 
-    const qrJson = (await qrRes.json()) as {
+    // Response de la nueva API: qr_data viene dentro de type_response.
+    interface OrderResponse {
+      id?: string;
+      status?: string;
+      type_response?: { qr_data?: string };
+      // legacy fallback por si el endpoint /instore/... sigue activo
       in_store_order_id?: string;
       qr_data?: string;
-    };
+    }
+    const qrJson = (await qrRes.json()) as OrderResponse;
+    const qrData = qrJson.type_response?.qr_data ?? qrJson.qr_data;
+    const orderId = qrJson.id ?? qrJson.in_store_order_id;
 
-    if (!qrJson.qr_data) {
+    if (!qrData) {
       return jsonResponse(
         { error: 'MP no devolvió qr_data. Revisá la integración.' },
         500,
       );
     }
 
-    // 4. Actualizar intent con qr_data y mp_payment_id (in_store_order_id)
+    // 4. Actualizar intent con qr_data y mp_payment_id (order.id de la nueva API).
     await adminClient
       .from('mp_payment_intents')
       .update({
-        mp_qr_data: qrJson.qr_data,
-        mp_payment_id: qrJson.in_store_order_id ?? null,
+        mp_qr_data: qrData,
+        mp_payment_id: orderId ?? null,
       })
       .eq('id', intent.id);
 
@@ -224,8 +265,8 @@ Deno.serve(async (req) => {
         ok: true,
         intentId: intent.id,
         externalReference: intent.external_reference,
-        qrData: qrJson.qr_data,
-        expiresAt: expirationDate,
+        qrData,
+        expiresAt,
       },
       200,
     );

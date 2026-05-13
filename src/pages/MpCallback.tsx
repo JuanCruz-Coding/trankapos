@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { Loader2, CheckCircle2, XCircle } from 'lucide-react';
+import { Loader2, CheckCircle2, XCircle, AlertTriangle } from 'lucide-react';
 import { getSupabase } from '@/lib/supabase';
 import { toast } from '@/stores/toast';
 
@@ -11,8 +11,12 @@ import { toast } from '@/stores/toast';
 export default function MpCallback() {
   const [params] = useSearchParams();
   const navigate = useNavigate();
-  const [status, setStatus] = useState<'processing' | 'success' | 'error'>('processing');
+  // 'warning' = tokens guardados pero caja MP no se creó (no se puede cobrar QR).
+  const [status, setStatus] = useState<'processing' | 'success' | 'warning' | 'error'>(
+    'processing',
+  );
   const [errorMsg, setErrorMsg] = useState('');
+  const [posErrorMsg, setPosErrorMsg] = useState('');
   const ranRef = useRef(false);
 
   useEffect(() => {
@@ -49,8 +53,21 @@ export default function MpCallback() {
           },
           body: JSON.stringify({ code }),
         });
-        const body = await res.json().catch(() => ({}));
+        const body = (await res.json().catch(() => ({}))) as {
+          error?: string;
+          posReady?: boolean;
+          posError?: string | null;
+        };
         if (!res.ok) throw new Error(body?.error ?? `Error HTTP ${res.status}`);
+
+        // Tokens OK pero caja MP no creada: warning, no redirigir automáticamente
+        // para que el usuario lea el motivo y reintente.
+        if (body.posReady === false) {
+          setStatus('warning');
+          setPosErrorMsg(body.posError ?? 'No se pudo crear la caja MP.');
+          toast.error('Mercado Pago se conectó pero la caja no quedó lista');
+          return;
+        }
 
         setStatus('success');
         toast.success('Mercado Pago conectado');
@@ -81,6 +98,32 @@ export default function MpCallback() {
             <CheckCircle2 className="mx-auto mb-3 h-10 w-10 text-emerald-500" />
             <h1 className="font-display text-lg font-bold text-navy">¡Listo!</h1>
             <p className="mt-1 text-sm text-slate-500">Te llevamos a la configuración…</p>
+          </>
+        )}
+        {status === 'warning' && (
+          <>
+            <AlertTriangle className="mx-auto mb-3 h-10 w-10 text-amber-500" />
+            <h1 className="font-display text-lg font-bold text-navy">
+              Conectado a medias
+            </h1>
+            <p className="mt-2 text-sm text-slate-600">
+              Guardamos los tokens, pero <strong>la caja MP no se pudo crear</strong>,
+              así que todavía no podés cobrar con QR.
+            </p>
+            <p className="mt-2 break-words rounded-md bg-amber-50 p-2 text-left text-xs text-amber-800">
+              {posErrorMsg}
+            </p>
+            <p className="mt-2 text-xs text-slate-500">
+              Probá desconectar y volver a conectar desde Configuración &gt; Pagos.
+              Si vuelve a fallar, revisá que los datos del comercio (dirección, nombre legal)
+              estén completos.
+            </p>
+            <button
+              onClick={() => navigate('/settings', { replace: true })}
+              className="mt-4 rounded-md bg-brand-600 px-4 py-2 text-sm font-semibold text-white hover:bg-brand-700"
+            >
+              Ir a configuración
+            </button>
           </>
         )}
         {status === 'error' && (
