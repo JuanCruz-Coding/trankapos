@@ -51,6 +51,8 @@ function withTenantDefaults(t: Partial<Tenant> & Pick<Tenant, 'id' | 'name' | 'c
     taxId: t.taxId ?? '',
     taxCondition: t.taxCondition ?? 'monotributista',
     legalAddress: t.legalAddress ?? '',
+    city: t.city ?? '',
+    stateProvince: t.stateProvince ?? '',
     phone: t.phone ?? '',
     email: t.email ?? '',
     ticketTitle: t.ticketTitle ?? 'Comprobante no fiscal',

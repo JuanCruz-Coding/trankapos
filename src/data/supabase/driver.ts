@@ -54,6 +54,8 @@ interface TenantRow {
   tax_id: string;
   tax_condition: TaxCondition;
   legal_address: string;
+  city: string | null;
+  state_province: string | null;
   phone: string;
   email: string;
   ticket_title: string;
@@ -81,6 +83,8 @@ function mapTenant(r: TenantRow): Tenant {
     taxId: r.tax_id,
     taxCondition: r.tax_condition,
     legalAddress: r.legal_address,
+    city: r.city ?? '',
+    stateProvince: r.state_province ?? '',
     phone: r.phone,
     email: r.email,
     ticketTitle: r.ticket_title,
@@ -547,6 +551,8 @@ class SupabaseDriver implements DataDriver {
     if (input.taxId !== undefined) patch.tax_id = input.taxId;
     if (input.taxCondition !== undefined) patch.tax_condition = input.taxCondition;
     if (input.legalAddress !== undefined) patch.legal_address = input.legalAddress;
+    if (input.city !== undefined) patch.city = input.city;
+    if (input.stateProvince !== undefined) patch.state_province = input.stateProvince;
     if (input.phone !== undefined) patch.phone = input.phone;
     if (input.email !== undefined) patch.email = input.email;
     if (input.ticketTitle !== undefined) patch.ticket_title = input.ticketTitle;

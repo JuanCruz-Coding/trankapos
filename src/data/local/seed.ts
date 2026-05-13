@@ -32,6 +32,8 @@ export async function seedIfEmpty(): Promise<void> {
     taxId: '',
     taxCondition: 'monotributista',
     legalAddress: 'Av. Corrientes 1234, CABA',
+    city: 'Monserrat',
+    stateProvince: 'Capital Federal',
     phone: '',
     email: '',
     ticketTitle: 'Comprobante no fiscal',

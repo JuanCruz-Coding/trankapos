@@ -3,16 +3,16 @@
 // =====================================================================
 // Recibe notificaciones de MP cuando un cobro QR del comercio se aprueba.
 //
-// MP postea con topic `merchant_order` (y a veces `payment` también).
-// Configurado en MP Dashboard del comercio O en la app de plataforma con:
-//   notification_url = https://<host>/functions/v1/mp-payments-webhook?t=TENANT_ID
+// La URL del webhook se configura UNA SOLA VEZ en el panel de la app MP
+// (Tus integraciones → app → Webhooks). MP NO permite notification_url
+// custom en el body de /v1/orders, así que la URL es fija para toda la
+// plataforma.
 //
-// Por qué `?t=tenantId`:
-//   El webhook por sí solo solo trae topic+id. Para hacer el GET del order
-//   necesitamos el access_token del comercio dueño del cobro. Identificamos
-//   al tenant por el query param que metimos en notification_url al crear
-//   el cobro (mp-create-charge). Es información NO sensible (el tenant_id
-//   no permite a un atacante hacer nada sin las RLS).
+// Identificación del tenant:
+//   MP incluye en el body del webhook el campo `user_id` = id del seller.
+//   Hacemos lookup en tenant_payment_integrations.mp_user_id para obtener
+//   tenant_id + access_token. Eso reemplaza al viejo ?t=tenantId que ya
+//   no podemos mandar.
 //
 // Secrets requeridos:
 //   MP_PAYMENTS_WEBHOOK_SECRET — para validar HMAC
@@ -46,23 +46,61 @@ function timingSafeEqual(a: string, b: string): boolean {
   return diff === 0;
 }
 
-async function verifySignature(req: Request, dataId: string): Promise<boolean> {
+interface HmacResult {
+  ok: boolean;
+  reason: string;
+  diag: Record<string, unknown>;
+}
+
+async function verifySignature(req: Request, dataId: string): Promise<HmacResult> {
   const secret = Deno.env.get('MP_PAYMENTS_WEBHOOK_SECRET');
   if (!secret) {
-    console.error('MP_PAYMENTS_WEBHOOK_SECRET no configurado — rechazando');
-    return false;
+    return { ok: false, reason: 'secret_missing', diag: {} };
   }
   const sigHeader = req.headers.get('x-signature') ?? '';
   const requestId = req.headers.get('x-request-id') ?? '';
+
   const parts = sigHeader.split(',').map((p) => p.trim());
   const ts = parts.find((p) => p.startsWith('ts='))?.slice(3);
   const v1 = parts.find((p) => p.startsWith('v1='))?.slice(3);
-  if (!ts || !v1) return false;
+  if (!ts || !v1) {
+    return {
+      ok: false,
+      reason: 'header_parse_failed',
+      diag: { sigHeader, requestId, dataId },
+    };
+  }
   const tsNum = Number(ts);
-  if (!Number.isFinite(tsNum) || Math.abs(Date.now() / 1000 - tsNum) > 300) return false;
-  const manifest = `id:${dataId};request-id:${requestId};ts:${ts};`;
+  const tsSeconds = tsNum > 1e12 ? tsNum / 1000 : tsNum;
+  const drift = Math.abs(Date.now() / 1000 - tsSeconds);
+  if (!Number.isFinite(tsNum) || drift > 600) {
+    return {
+      ok: false,
+      reason: 'ts_out_of_range',
+      diag: { ts, drift, dataId },
+    };
+  }
+
+  // ¡Detalle no documentado!: MP firma con el data.id EN MINÚSCULAS aunque
+  // lo envía en el body en mayúsculas (ej. "ORD01KRH..." en el body firma
+  // como "ord01krh..."). Si no se respeta, el HMAC nunca matchea para Orders.
+  const manifest = `id:${dataId.toLowerCase()};request-id:${requestId};ts:${ts};`;
   const expected = await hmacSha256Hex(secret, manifest);
-  return timingSafeEqual(expected, v1);
+  const match = timingSafeEqual(expected, v1);
+
+  return {
+    ok: match,
+    reason: match ? 'ok' : 'hmac_mismatch',
+    diag: {
+      manifest,
+      expected_prefix: expected.slice(0, 16),
+      got_prefix: v1.slice(0, 16),
+      secret_prefix: secret.slice(0, 4) + '…' + secret.slice(-4),
+      ts,
+      requestId,
+      dataId,
+    },
+  };
 }
 
 interface MpWebhookPayload {
@@ -72,6 +110,9 @@ interface MpWebhookPayload {
   resource?: string;
   data?: { id?: string };
   id?: string | number;
+  // user_id: id del seller (collector) que recibe el pago. Lo usamos para
+  // identificar tenant_id en nuestra tabla.
+  user_id?: number | string;
 }
 
 // ============================================================
@@ -80,9 +121,6 @@ interface MpWebhookPayload {
 
 Deno.serve(async (req) => {
   if (req.method === 'GET') return new Response('ok', { status: 200 });
-
-  const url = new URL(req.url);
-  const tenantIdFromQuery = url.searchParams.get('t');
 
   let payload: MpWebhookPayload;
   try {
@@ -97,11 +135,16 @@ Deno.serve(async (req) => {
   if (!dataId) {
     return new Response(JSON.stringify({ ignored: 'sin data.id' }), { status: 200 });
   }
+  const mpUserId = payload.user_id != null ? String(payload.user_id) : null;
 
-  // Validar HMAC
-  const valid = await verifySignature(req, String(dataId));
-  if (!valid) {
-    return new Response(JSON.stringify({ error: 'Firma inválida' }), { status: 401 });
+  // Validar HMAC con el template correcto para Orders (dataId en minúsculas).
+  const hmacRes = await verifySignature(req, String(dataId));
+  if (!hmacRes.ok) {
+    console.warn('[HMAC] Firma inválida:', hmacRes.reason);
+    return new Response(
+      JSON.stringify({ error: 'Firma inválida', reason: hmacRes.reason }),
+      { status: 401, headers: { 'Content-Type': 'application/json' } },
+    );
   }
 
   const adminClient = createClient(
@@ -128,23 +171,24 @@ Deno.serve(async (req) => {
   }
 
   try {
-    // Resolver access_token del tenant. Si vino tenant_id por query, lo usamos.
-    // Sino, el webhook puede venir con `collector_id` en payload — no en nuestro
-    // caso. Para robustez, si falta tenant_id y el topic es payment, fallback.
-    let accessToken: string | null = null;
-
-    if (tenantIdFromQuery) {
-      const { data: integ } = await adminClient
-        .from('tenant_payment_integrations')
-        .select('access_token')
-        .eq('tenant_id', tenantIdFromQuery)
-        .eq('provider', 'mp')
-        .maybeSingle();
-      accessToken = integ?.access_token ?? null;
+    // Resolver tenant + access_token por mp_user_id (seller) del payload.
+    if (!mpUserId) {
+      console.warn('Webhook sin user_id en payload — type:', type, 'dataId:', dataId);
+      return new Response('ok', { status: 200 });
     }
 
+    const { data: integ } = await adminClient
+      .from('tenant_payment_integrations')
+      .select('access_token, tenant_id')
+      .eq('mp_user_id', mpUserId)
+      .eq('provider', 'mp')
+      .maybeSingle();
+    const accessToken = integ?.access_token ?? null;
+
     if (!accessToken) {
-      console.warn('Webhook sin tenant_id query param o tenant sin integración');
+      console.warn(
+        `No hay integración MP activa para mp_user_id=${mpUserId} — ignorando webhook`,
+      );
       return new Response('ok', { status: 200 });
     }
 

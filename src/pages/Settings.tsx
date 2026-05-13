@@ -41,6 +41,8 @@ interface FormState {
   taxId: string;
   taxCondition: TaxCondition;
   legalAddress: string;
+  city: string;
+  stateProvince: string;
   phone: string;
   email: string;
   ticketTitle: string;
@@ -65,6 +67,8 @@ function tenantToForm(t: Tenant): FormState {
     taxId: t.taxId,
     taxCondition: t.taxCondition,
     legalAddress: t.legalAddress,
+    city: t.city,
+    stateProvince: t.stateProvince,
     phone: t.phone,
     email: t.email,
     ticketTitle: t.ticketTitle,
@@ -134,6 +138,8 @@ export default function Settings() {
         taxId: form.taxId,
         taxCondition: form.taxCondition,
         legalAddress: form.legalAddress,
+        city: form.city,
+        stateProvince: form.stateProvince,
         phone: form.phone,
         email: form.email,
         ticketTitle: form.ticketTitle,
@@ -493,10 +499,58 @@ function EmpresaTab({
           onChange={(e) => update('legalAddress', e.target.value)}
         />
       </Field>
+      <Field label="Provincia" hint="Requerida para conectar Mercado Pago">
+        <select
+          className="h-10 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm"
+          value={form.stateProvince}
+          onChange={(e) => update('stateProvince', e.target.value)}
+        >
+          <option value="">Seleccionar…</option>
+          {AR_PROVINCES.map((p) => (
+            <option key={p} value={p}>
+              {p}
+            </option>
+          ))}
+        </select>
+      </Field>
+      <Field label="Ciudad / Localidad" hint="Tal como aparece en el catálogo MP (ej. Palermo, La Plata)">
+        <Input
+          value={form.city}
+          onChange={(e) => update('city', e.target.value)}
+        />
+      </Field>
       </div>
     </div>
   );
 }
+
+// 24 provincias AR oficiales — coincide con catálogo MP para crear sucursal.
+const AR_PROVINCES = [
+  'Capital Federal',
+  'Buenos Aires',
+  'Catamarca',
+  'Chaco',
+  'Chubut',
+  'Córdoba',
+  'Corrientes',
+  'Entre Ríos',
+  'Formosa',
+  'Jujuy',
+  'La Pampa',
+  'La Rioja',
+  'Mendoza',
+  'Misiones',
+  'Neuquén',
+  'Río Negro',
+  'Salta',
+  'San Juan',
+  'San Luis',
+  'Santa Cruz',
+  'Santa Fe',
+  'Santiago del Estero',
+  'Tierra del Fuego',
+  'Tucumán',
+] as const;
 
 function LogoUploader({
   logoUrl,

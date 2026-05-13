@@ -145,20 +145,24 @@ Deno.serve(async (req) => {
     }
 
     // 3. Llamar a la NUEVA API de Orders de MP para generar QR dinámico.
-    // Endpoint: POST /v1/orders con type='qr'. El external_pos_id va en
-    // config.external_pos_id; el access_token identifica al collector.
-    // total_amount es STRING (no number) según doc. expiration_time es
-    // ISO 8601 duration (PT16M = 16 minutos), no timestamp.
-    const baseUrl =
-      body.notificationUrl ??
-      `${Deno.env.get('SUPABASE_URL')}/functions/v1/mp-payments-webhook`;
-    const notificationUrl = `${baseUrl}${baseUrl.includes('?') ? '&' : '?'}t=${tenantId}`;
+    // Endpoint: POST /v1/orders con type='qr'.
+    // - total_amount como STRING ("10.00"), no number.
+    // - expiration_time como ISO 8601 duration (PT16M), no timestamp.
+    // - config.qr.{external_pos_id, mode='dynamic'}.
+    // - transactions.payments[{amount}] obligatorio.
+    // - external_code en items max 30 chars.
+    // - notification_url NO se acepta en body — se configura en el panel de
+    //   la app MP (Tus integraciones → Notificaciones).
     const expiresAt = new Date(Date.now() + QR_EXPIRATION_MINUTES * 60_000).toISOString();
 
+    // Shape correcto del body según doc oficial Orders type=qr:
+    //   config.qr.{external_pos_id, mode}  (no config.external_pos_id directo)
+    //   transactions.payments[{amount}]    (campo obligatorio que faltaba)
+    const totalAmountStr = body.amount.toFixed(2);
     const mpBody: Record<string, unknown> = {
       type: 'qr',
       external_reference: intent.external_reference,
-      total_amount: body.amount.toFixed(2),
+      total_amount: totalAmountStr,
       description: (body.title ?? 'Venta TrankaPos').slice(0, 150),
       expiration_time: `PT${QR_EXPIRATION_MINUTES}M`,
       items: body.items.map((it) => ({
@@ -166,12 +170,18 @@ Deno.serve(async (req) => {
         unit_price: it.price.toFixed(2),
         quantity: it.qty,
         unit_measure: 'unit',
-        external_code: it.productId,
+        // external_code max 30 chars. UUID sin guiones (32 hex) recortado.
+        external_code: it.productId.replace(/-/g, '').slice(0, 30),
       })),
       config: {
-        external_pos_id: integ.mp_pos_external_id,
+        qr: {
+          external_pos_id: integ.mp_pos_external_id,
+          mode: 'dynamic',
+        },
       },
-      notification_url: notificationUrl,
+      transactions: {
+        payments: [{ amount: totalAmountStr }],
+      },
     };
 
     const qrRes = await fetch('https://api.mercadopago.com/v1/orders', {

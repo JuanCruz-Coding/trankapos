@@ -32,6 +32,10 @@ export interface Tenant {
   taxId: string;
   taxCondition: TaxCondition;
   legalAddress: string;
+  /** Ciudad/localidad — requerida para conectar MP Connect (catálogo oficial AR). */
+  city: string;
+  /** Provincia AR — requerida para conectar MP Connect (una de las 24). */
+  stateProvince: string;
   phone: string;
   email: string;
   // Ticket
@@ -61,6 +65,8 @@ export interface TenantSettingsInput {
   taxId?: string;
   taxCondition?: TaxCondition;
   legalAddress?: string;
+  city?: string;
+  stateProvince?: string;
   phone?: string;
   email?: string;
   ticketTitle?: string;
