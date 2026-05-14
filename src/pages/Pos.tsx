@@ -3,6 +3,7 @@ import { useLiveQuery } from 'dexie-react-hooks';
 import {
   AlertCircle,
   Camera,
+  Loader2,
   Minus,
   Package,
   Plus,
@@ -12,6 +13,7 @@ import {
   Trash2,
   X,
 } from 'lucide-react';
+import { QRCodeSVG } from 'qrcode.react';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import { Modal } from '@/components/ui/Modal';
@@ -774,6 +776,110 @@ function PaymentModal({ open, onClose, total, mpReady, onCompleted, onPayWithQR 
   );
 }
 
+interface AfipDocState {
+  status: 'idle' | 'emitting' | 'authorized' | 'rejected' | 'skip';
+  cae?: string;
+  voucherNumber?: number;
+  caeDueDate?: string;
+  ptoVta?: number;
+  cbteTipo?: string;
+  qrUrl?: string;
+  error?: string;
+}
+
+function useAfipDocumentFor(sale: Sale | null): AfipDocState {
+  const [state, setState] = useState<AfipDocState>({ status: 'idle' });
+  useEffect(() => {
+    if (!sale) {
+      setState({ status: 'idle' });
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      try {
+        const sb = getSupabase();
+        // 1) ¿ya existe un afip_document para esta sale?
+        const { data: existing } = await sb
+          .from('afip_documents')
+          .select('cae, voucher_number, cae_due_date, sales_point, doc_letter, status, error_message')
+          .eq('sale_id', sale.id)
+          .eq('status', 'authorized')
+          .maybeSingle();
+        if (cancelled) return;
+        if (existing?.cae) {
+          setState({
+            status: 'authorized',
+            cae: existing.cae,
+            voucherNumber: existing.voucher_number,
+            caeDueDate: existing.cae_due_date,
+            ptoVta: existing.sales_point,
+            cbteTipo: existing.doc_letter,
+          });
+          return;
+        }
+
+        // 2) ¿tenant tiene AFIP activo? Si no, no intentamos emitir.
+        const { data: creds } = await sb
+          .from('tenant_afip_credentials')
+          .select('is_active, last_test_ok')
+          .maybeSingle();
+        if (cancelled) return;
+        if (!creds?.is_active || creds?.last_test_ok !== true) {
+          setState({ status: 'skip' });
+          return;
+        }
+
+        // 3) Emitir
+        setState({ status: 'emitting' });
+        const { data: sessionData } = await sb.auth.getSession();
+        const token = sessionData.session?.access_token;
+        if (!token) throw new Error('No autenticado');
+
+        const url = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/afip-emit-voucher`;
+        const res = await fetch(url, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`,
+            apikey: import.meta.env.VITE_SUPABASE_ANON_KEY ?? '',
+          },
+          body: JSON.stringify({ saleId: sale.id }),
+        });
+        const body = (await res.json().catch(() => ({}))) as {
+          ok?: boolean;
+          cae?: string;
+          voucherNumber?: number;
+          caeDueDate?: string;
+          ptoVta?: number;
+          cbteTipo?: string;
+          qrUrl?: string;
+          error?: string;
+        };
+        if (cancelled) return;
+        if (!res.ok || !body.ok) {
+          setState({ status: 'rejected', error: body.error ?? `Error HTTP ${res.status}` });
+          return;
+        }
+        setState({
+          status: 'authorized',
+          cae: body.cae,
+          voucherNumber: body.voucherNumber,
+          caeDueDate: body.caeDueDate,
+          ptoVta: body.ptoVta,
+          cbteTipo: body.cbteTipo,
+          qrUrl: body.qrUrl,
+        });
+      } catch (err) {
+        if (!cancelled) setState({ status: 'rejected', error: (err as Error).message });
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [sale]);
+  return state;
+}
+
 function ReceiptModal({
   sale,
   tenant,
@@ -783,10 +889,14 @@ function ReceiptModal({
   tenant: Tenant | null;
   onClose: () => void;
 }) {
+  const afip = useAfipDocumentFor(sale);
   if (!sale) return null;
 
   const businessName = tenant?.legalName || tenant?.name || 'TrankaPOS';
-  const ticketTitle = tenant?.ticketTitle ?? 'Comprobante no fiscal';
+  const ticketTitle =
+    afip.status === 'authorized' && afip.cbteTipo
+      ? `Factura ${afip.cbteTipo}`
+      : tenant?.ticketTitle ?? 'Comprobante no fiscal';
   const ticketFooter = tenant?.ticketFooter ?? '¡Gracias por su compra!';
   const showLogo = tenant?.ticketShowLogo ?? true;
   const showTaxId = (tenant?.ticketShowTaxId ?? true) && !!tenant?.taxId;
@@ -814,6 +924,11 @@ function ReceiptModal({
           <div className="font-bold">{businessName}</div>
           {showTaxId && <div className="text-[10px]">CUIT: {tenant!.taxId}</div>}
           <div>{ticketTitle}</div>
+          {afip.status === 'authorized' && afip.ptoVta !== undefined && afip.voucherNumber !== undefined && (
+            <div className="font-bold">
+              Nº {String(afip.ptoVta).padStart(5, '0')}-{String(afip.voucherNumber).padStart(8, '0')}
+            </div>
+          )}
           <div>{new Date(sale.createdAt).toLocaleString('es-AR')}</div>
           <div>#{sale.id.slice(0, 8)}</div>
         </div>
@@ -852,6 +967,44 @@ function ReceiptModal({
             <span>{formatARS(p.amount)}</span>
           </div>
         ))}
+        {/* Bloque AFIP */}
+        {afip.status === 'emitting' && (
+          <>
+            <hr className="my-2 border-dashed" />
+            <div className="flex items-center justify-center gap-1 text-[10px] text-slate-500">
+              <Loader2 className="h-3 w-3 animate-spin" />
+              Solicitando CAE a AFIP…
+            </div>
+          </>
+        )}
+        {afip.status === 'authorized' && afip.cae && (
+          <>
+            <hr className="my-2 border-dashed" />
+            <div className="text-center text-[10px]">
+              {afip.qrUrl && (
+                <div className="mx-auto mb-1 inline-block rounded bg-white p-1">
+                  <QRCodeSVG value={afip.qrUrl} size={80} level="M" />
+                </div>
+              )}
+              <div><strong>CAE:</strong> {afip.cae}</div>
+              {afip.caeDueDate && (
+                <div>
+                  <strong>Vto CAE:</strong>{' '}
+                  {new Date(afip.caeDueDate + 'T00:00:00').toLocaleDateString('es-AR')}
+                </div>
+              )}
+            </div>
+          </>
+        )}
+        {afip.status === 'rejected' && (
+          <>
+            <hr className="my-2 border-dashed" />
+            <div className="text-center text-[10px] text-red-700">
+              <strong>AFIP rechazó:</strong> {afip.error?.slice(0, 120) ?? 'error desconocido'}
+            </div>
+          </>
+        )}
+
         {ticketFooter && (
           <>
             <hr className="my-2 border-dashed" />
