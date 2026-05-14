@@ -28,6 +28,7 @@ import { confirmDialog } from '@/lib/dialog';
 import { TAX_CONDITIONS, type TaxCondition, type Tenant, type TenantSettingsInput } from '@/types';
 import { cn } from '@/lib/utils';
 import { LOGO_REQUIREMENTS_TEXT, validateLogoFile } from '@/lib/imageUpload';
+import { ProductionToggleModal } from '@/components/afip/ProductionToggleModal';
 
 type Tab = 'empresa' | 'ticket' | 'pos' | 'stock' | 'pagos' | 'facturacion';
 
@@ -861,12 +862,17 @@ function FacturacionTab() {
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
 
-  // Form para subir nuevas credenciales
+  // Form para subir nuevas credenciales del ambiente ACTUAL.
+  // El cambio de ambiente ya no es un campo del form: pasar a producción
+  // es un flujo aparte (ProductionToggleModal). Acá `environment` solo
+  // refleja el ambiente vigente de las credenciales guardadas, y se manda
+  // tal cual al guardar para no cambiarlo silenciosamente.
   const [cuit, setCuit] = useState('');
   const [salesPoint, setSalesPoint] = useState('1');
   const [environment, setEnvironment] = useState<'homologation' | 'production'>('homologation');
   const [certPem, setCertPem] = useState('');
   const [keyPem, setKeyPem] = useState('');
+  const [showProductionModal, setShowProductionModal] = useState(false);
 
   useEffect(() => {
     void refresh();
@@ -1068,16 +1074,6 @@ function FacturacionTab() {
                   Sin configurar
                 </span>
               )}
-              {status?.environment && (
-                <span className={cn(
-                  'rounded-full px-2 py-0.5 text-xs font-medium',
-                  status.environment === 'production'
-                    ? 'bg-emerald-50 text-emerald-700'
-                    : 'bg-amber-50 text-amber-700',
-                )}>
-                  {status.environment === 'production' ? 'Producción' : 'Homologación'}
-                </span>
-              )}
             </div>
             <p className="mt-1 text-sm text-slate-600">
               Conectá tu CUIT y certificado AFIP para emitir comprobantes fiscales (Factura A/B/C,
@@ -1106,6 +1102,59 @@ function FacturacionTab() {
         </div>
       </div>
 
+      {/* Ambiente actual — estado destacado + flujo de paso a producción */}
+      {status?.configured && status.environment && (
+        <div
+          className={cn(
+            'rounded-lg border p-4',
+            status.environment === 'production'
+              ? 'border-emerald-200 bg-emerald-50'
+              : 'border-amber-200 bg-amber-50',
+          )}
+        >
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex items-start gap-3">
+              {status.environment === 'production' ? (
+                <CheckCircle2 className="mt-0.5 h-5 w-5 shrink-0 text-emerald-600" />
+              ) : (
+                <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-amber-600" />
+              )}
+              <div>
+                <div
+                  className={cn(
+                    'text-sm font-bold',
+                    status.environment === 'production'
+                      ? 'text-emerald-800'
+                      : 'text-amber-800',
+                  )}
+                >
+                  {status.environment === 'production'
+                    ? 'Modo PRODUCCIÓN — comprobantes con validez fiscal'
+                    : 'Modo HOMOLOGACIÓN — los comprobantes son de prueba'}
+                </div>
+                <p
+                  className={cn(
+                    'mt-0.5 text-xs',
+                    status.environment === 'production'
+                      ? 'text-emerald-700'
+                      : 'text-amber-700',
+                  )}
+                >
+                  {status.environment === 'production'
+                    ? 'Ya estás emitiendo comprobantes reales ante AFIP.'
+                    : 'Cuando tengas el certificado de producción de AFIP, pasá a producción para emitir comprobantes con validez fiscal.'}
+                </p>
+              </div>
+            </div>
+            {status.environment === 'homologation' && (
+              <Button onClick={() => setShowProductionModal(true)}>
+                Pasar a producción
+              </Button>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* Form de carga */}
       <div className="rounded-lg border border-slate-200 p-4">
         <h4 className="mb-3 font-display text-sm font-bold text-navy">
@@ -1122,16 +1171,6 @@ function FacturacionTab() {
               value={salesPoint}
               onChange={(e) => setSalesPoint(e.target.value)}
             />
-          </Field>
-          <Field label="Ambiente" className="md:col-span-2">
-            <select
-              className="h-10 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm"
-              value={environment}
-              onChange={(e) => setEnvironment(e.target.value as 'homologation' | 'production')}
-            >
-              <option value="homologation">Homologación (pruebas)</option>
-              <option value="production">Producción (comprobantes reales)</option>
-            </select>
           </Field>
           <Field label="Certificado (.crt / .pem)" hint="Archivo PEM generado en AFIP">
             <div className="space-y-1">
@@ -1184,6 +1223,14 @@ function FacturacionTab() {
           configurar AFIP.
         </p>
       </div>
+
+      <ProductionToggleModal
+        open={showProductionModal}
+        onClose={() => setShowProductionModal(false)}
+        onConfirmed={() => {
+          void refresh();
+        }}
+      />
     </div>
   );
 }

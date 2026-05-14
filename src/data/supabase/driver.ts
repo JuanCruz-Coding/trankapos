@@ -310,6 +310,23 @@ function mapAfipDocument(r: AfipDocumentRow): AfipDocumentSummary {
   };
 }
 
+// Fila extendida del historial A5a: incluye campos de contingencia/retry.
+interface AfipDocumentDetailRow extends AfipDocumentRow {
+  retry_count: number | null;
+  last_retry_at: string | null;
+  environment: 'homologation' | 'production' | null;
+  emitted_at: string | null;
+}
+function mapAfipDocumentDetail(r: AfipDocumentDetailRow): AfipDocumentDetail {
+  return {
+    ...mapAfipDocument(r),
+    retryCount: r.retry_count ?? 0,
+    lastRetryAt: r.last_retry_at,
+    environment: r.environment,
+    emittedAt: r.emitted_at,
+  };
+}
+
 // ============================================================
 
 export function createSupabaseDriver(): DataDriver {
@@ -1656,19 +1673,58 @@ class SupabaseDriver implements DataDriver {
   }
 
   // --- AFIP A5a: contingencia / historial / retry ---
-  // STUB del Paso 0 — implementación real en Pieza B del agent-team A5a.
+
   async getAfipContingencySummary(): Promise<AfipContingencySummary> {
     await this.requireSession();
-    throw new Error('getAfipContingencySummary no implementado todavía (A5a Pieza B)');
+    // RPC afip_contingency_summary devuelve filas { rejected_count, oldest_rejected_at }.
+    const { data, error } = await this.sb.rpc('afip_contingency_summary');
+    if (error) throw new Error(error.message);
+    const row = (data as { rejected_count: number; oldest_rejected_at: string | null }[] | null)?.[0];
+    return {
+      rejectedCount: row?.rejected_count ?? 0,
+      oldestRejectedAt: row?.oldest_rejected_at ?? null,
+    };
   }
 
-  async listAfipDocuments(_q: AfipDocumentsQuery): Promise<AfipDocumentDetail[]> {
+  async listAfipDocuments(q: AfipDocumentsQuery): Promise<AfipDocumentDetail[]> {
     await this.requireSession();
-    throw new Error('listAfipDocuments no implementado todavía (A5a Pieza B)');
+    let query = this.sb
+      .from('afip_documents')
+      .select('*')
+      .order('created_at', { ascending: false });
+    if (q.status) query = query.eq('status', q.status);
+    if (q.docType) query = query.eq('doc_type', q.docType);
+    if (q.from) query = query.gte('created_at', q.from);
+    if (q.to) query = query.lte('created_at', q.to);
+    const limit = q.limit ?? 50;
+    const offset = q.offset ?? 0;
+    query = query.range(offset, offset + limit - 1);
+
+    const { data, error } = await query;
+    if (error) throw new Error(error.message);
+    return (data as AfipDocumentDetailRow[]).map(mapAfipDocumentDetail);
   }
 
-  async retryAfipDocument(_input: RetryDocumentInput): Promise<RetryResult> {
+  async retryAfipDocument(input: RetryDocumentInput): Promise<RetryResult> {
     await this.requireSession();
-    throw new Error('retryAfipDocument no implementado todavía (A5a Pieza B)');
+    const { data: sessionData } = await this.sb.auth.getSession();
+    const token = sessionData.session?.access_token;
+    if (!token) throw new Error('No autenticado');
+
+    const url = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/afip-retry-document`;
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+        apikey: import.meta.env.VITE_SUPABASE_ANON_KEY ?? '',
+      },
+      body: JSON.stringify(input),
+    });
+    const body = (await res.json().catch(() => ({}))) as RetryResult;
+    if (!res.ok && body.error === undefined) {
+      throw new Error(`Error HTTP ${res.status}`);
+    }
+    return body;
   }
 }

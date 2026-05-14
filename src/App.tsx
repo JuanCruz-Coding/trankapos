@@ -16,6 +16,7 @@ import Cash from '@/pages/Cash';
 import Dashboard from '@/pages/Dashboard';
 import Reports from '@/pages/Reports';
 import Sales from '@/pages/Sales';
+import Comprobantes from '@/pages/Comprobantes';
 import Customers from '@/pages/Customers';
 import Stock from '@/pages/Stock';
 import Transfers from '@/pages/Transfers';
@@ -73,6 +74,14 @@ export function App() {
           />
           <Route path="cash" element={<Cash />} />
           <Route path="sales" element={<Sales />} />
+          <Route
+            path="comprobantes"
+            element={
+              <ProtectedRoute permission="view_reports">
+                <Comprobantes />
+              </ProtectedRoute>
+            }
+          />
           <Route path="customers" element={<Customers />} />
           <Route
             path="reports"

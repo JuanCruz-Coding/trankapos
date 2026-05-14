@@ -6,6 +6,7 @@ import {
   Cog,
   Contact,
   Crown,
+  FileText,
   HelpCircle,
   LayoutDashboard,
   LogOut,
@@ -22,6 +23,7 @@ import {
 import { useAuth } from '@/stores/auth';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { data } from '@/data';
+import { AfipStatusBanner } from '@/components/afip/AfipStatusBanner';
 import { cn } from '@/lib/utils';
 import { hasPermission } from '@/lib/permissions';
 import type { Permission, Role } from '@/types';
@@ -42,6 +44,7 @@ const nav: NavItem[] = [
   { to: '/transfers', label: 'Transferencias', icon: TrendingUp, permission: 'do_transfers' },
   { to: '/cash', label: 'Caja', icon: Wallet },
   { to: '/sales', label: 'Ventas', icon: Receipt },
+  { to: '/comprobantes', label: 'Comprobantes', icon: FileText, permission: 'view_reports' },
   { to: '/customers', label: 'Clientes', icon: Contact },
   { to: '/reports', label: 'Reportes', icon: BarChart3, permission: 'view_reports' },
   { to: '/branches', label: 'Sucursales', icon: Store, permission: 'manage_branches' },
@@ -184,6 +187,8 @@ export function Layout({ children }: PropsWithChildren) {
           </Link>
           <div className="w-8" />
         </header>
+
+        <AfipStatusBanner />
 
         <main
           className={cn(
