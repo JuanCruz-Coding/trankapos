@@ -63,11 +63,31 @@ export interface VoucherRequest {
   impTrib: number;           // Tributos (percepciones, etc)
   monId: string;             // 'PES' = pesos AR
   monCotiz: number;          // 1 para pesos
+  // Condición IVA del receptor (RG 5616/2024 — obligatorio desde 2024-11).
+  // Valores: 1=RI, 4=Exento, 5=Consumidor Final, 6=Monotributista, 7=No Cat,
+  // 8=Exterior proveedor, 9=Exterior cliente, 10=Liberado, 13=Mono Social,
+  // 15=No Alcanzado, 16=Mono Promovido.
+  condicionIVAReceptorId: number;
   // Para servicios (concepto=2/3): fechas de servicio
   fchServDesde?: string;
   fchServHasta?: string;
   fchVtoPago?: string;
 }
+
+/** Códigos AFIP para condición IVA del receptor (RG 5616/2024). */
+export const COND_IVA_RECEPTOR = {
+  RESPONSABLE_INSCRIPTO: 1,
+  EXENTO: 4,
+  CONSUMIDOR_FINAL: 5,
+  MONOTRIBUTISTA: 6,
+  NO_CATEGORIZADO: 7,
+  PROVEEDOR_EXTERIOR: 8,
+  CLIENTE_EXTERIOR: 9,
+  LIBERADO_LEY_19640: 10,
+  MONOTRIBUTISTA_SOCIAL: 13,
+  NO_ALCANZADO: 15,
+  MONOTRIBUTISTA_PROMOVIDO: 16,
+} as const;
 
 export interface VoucherResponse {
   resultado: 'A' | 'R' | 'P';
@@ -84,11 +104,13 @@ export interface VoucherResponse {
 // Helpers SOAP
 // ---------------------------------------------------------------------
 function buildAuthBlock(auth: AuthParams): string {
-  return `<Auth>
-  <Token>${escapeXml(auth.ta.token)}</Token>
-  <Sign>${escapeXml(auth.ta.sign)}</Sign>
-  <Cuit>${auth.cuit}</Cuit>
-</Auth>`;
+  // AFIP exige que el bloque Auth tenga el mismo namespace que el resto
+  // del request (ar:). Sin prefijo, devuelve "Campo Auth no fue ingresado".
+  return `<ar:Auth>
+  <ar:Token>${escapeXml(auth.ta.token)}</ar:Token>
+  <ar:Sign>${escapeXml(auth.ta.sign)}</ar:Sign>
+  <ar:Cuit>${auth.cuit}</ar:Cuit>
+</ar:Auth>`;
 }
 
 function escapeXml(s: string): string {
@@ -246,6 +268,7 @@ export async function feCAESolicitar(
         ${servBlock}
         <ar:MonId>${v.monId}</ar:MonId>
         <ar:MonCotiz>${v.monCotiz}</ar:MonCotiz>
+        <ar:CondicionIVAReceptorId>${v.condicionIVAReceptorId}</ar:CondicionIVAReceptorId>
       </ar:FECAEDetRequest>
     </ar:FeDetReq>
   </ar:FeCAEReq>

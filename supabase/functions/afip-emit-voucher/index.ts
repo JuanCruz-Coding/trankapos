@@ -28,6 +28,7 @@ import { createClient } from 'jsr:@supabase/supabase-js@2';
 import { getTicketAccess, type AfipEnv } from '../_shared/afip-wsaa.ts';
 import {
   CBTE_TIPO,
+  COND_IVA_RECEPTOR,
   DOC_TIPO,
   feCAESolicitar,
   feCompUltimoAutorizado,
@@ -279,6 +280,8 @@ Deno.serve(async (req) => {
         impTrib: 0,
         monId: 'PES',
         monCotiz: 1,
+        // RG 5616/2024: obligatorio. Factura C a anónimo → Consumidor Final.
+        condicionIVAReceptorId: COND_IVA_RECEPTOR.CONSUMIDOR_FINAL,
       });
 
       if (resp.resultado !== 'A') {
