@@ -389,21 +389,8 @@ Deno.serve(async (req) => {
         );
       }
 
-      // OK: autorizar el documento
-      const caeFchVtoIso = `${resp.caeFchVto.slice(0, 4)}-${resp.caeFchVto.slice(4, 6)}-${resp.caeFchVto.slice(6, 8)}`;
-      await admin
-        .from('afip_documents')
-        .update({
-          status: 'authorized',
-          voucher_number: nextNumber,
-          cae: resp.cae,
-          cae_due_date: caeFchVtoIso,
-          raw_response: resp,
-          emitted_at: new Date().toISOString(),
-        })
-        .eq('id', docRow.id);
-
       // Construir QR fiscal AFIP — con tipo real y datos del receptor reales.
+      const caeFchVtoIso = `${resp.caeFchVto.slice(0, 4)}-${resp.caeFchVto.slice(4, 6)}-${resp.caeFchVto.slice(6, 8)}`;
       const qrUrl = buildQrUrl({
         cuit,
         ptoVta,
@@ -415,6 +402,20 @@ Deno.serve(async (req) => {
         tipoDocRec: classification.docTipo,
         nroDocRec: classification.docNro === '0' ? 0 : Number(classification.docNro),
       });
+
+      // OK: autorizar el documento (guardamos también el qr_url como snapshot).
+      await admin
+        .from('afip_documents')
+        .update({
+          status: 'authorized',
+          voucher_number: nextNumber,
+          cae: resp.cae,
+          cae_due_date: caeFchVtoIso,
+          qr_url: qrUrl,
+          raw_response: resp,
+          emitted_at: new Date().toISOString(),
+        })
+        .eq('id', docRow.id);
 
       return jsonResponse(
         {

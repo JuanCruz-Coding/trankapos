@@ -52,29 +52,32 @@ function useAfipDocumentFor(
         // 1) ¿ya existe afip_document authorized para esta sale?
         const { data: existing } = await sb
           .from('afip_documents')
-          .select('cae, voucher_number, cae_due_date, sales_point, doc_letter, status')
+          .select('cae, voucher_number, cae_due_date, sales_point, doc_letter, status, qr_url')
           .eq('sale_id', sale.id)
           .eq('status', 'authorized')
           .maybeSingle();
         if (cancelled) return;
 
         if (existing?.cae) {
-          // Reconstruimos el QR client-side para que /sales no dependa del
-          // qrUrl que devolvió el backend al emitir.
+          // El qr_url se guarda como snapshot al emitir (migration 025).
+          // Para documentos viejos (emitidos antes de la migración) qr_url es
+          // null → fallback: reconstruir client-side con tenant.taxId.
           const letter = existing.doc_letter as 'A' | 'B' | 'C';
-          const qrUrl = tenant?.taxId
-            ? buildAfipQrUrl({
-                cuit: tenant.taxId,
-                ptoVta: existing.sales_point,
-                tipoCmp: letterToCbteTipo(letter),
-                nroCmp: existing.voucher_number,
-                fecha: sale.createdAt.slice(0, 10),
-                importe: sale.total,
-                cae: existing.cae,
-                tipoDocRec: sale.customerDocType ?? 99,
-                nroDocRec: sale.customerDocNumber ? Number(sale.customerDocNumber) : 0,
-              })
-            : undefined;
+          const qrUrl =
+            existing.qr_url ??
+            (tenant?.taxId
+              ? buildAfipQrUrl({
+                  cuit: tenant.taxId,
+                  ptoVta: existing.sales_point,
+                  tipoCmp: letterToCbteTipo(letter),
+                  nroCmp: existing.voucher_number,
+                  fecha: sale.createdAt.slice(0, 10),
+                  importe: sale.total,
+                  cae: existing.cae,
+                  tipoDocRec: sale.customerDocType ?? 99,
+                  nroDocRec: sale.customerDocNumber ? Number(sale.customerDocNumber) : 0,
+                })
+              : undefined);
 
           setState({
             status: 'authorized',
