@@ -11,9 +11,13 @@ import {
   Scan,
   Search,
   Trash2,
+  UserCircle2,
+  UserPlus,
   X,
 } from 'lucide-react';
 import { QRCodeSVG } from 'qrcode.react';
+import { ReceiverSelectorModal } from '@/components/pos/ReceiverSelectorModal';
+import { determineCbteLetter } from '@/lib/afipLetter';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import { Modal } from '@/components/ui/Modal';
@@ -28,7 +32,7 @@ import { cn } from '@/lib/utils';
 import { buildSaleFromCart, summarizeSale } from '@/lib/sales';
 import { beepError, beepSuccess, primeAudio } from '@/lib/sound';
 import { toast } from '@/stores/toast';
-import { PAYMENT_METHODS, type PaymentMethod, type Sale, type Tenant } from '@/types';
+import { PAYMENT_METHODS, type PaymentMethod, type Sale, type SaleReceiver, type TaxCondition, type Tenant } from '@/types';
 import { QRPaymentModal } from '@/components/ui/QRPaymentModal';
 
 export default function Pos() {
@@ -497,6 +501,7 @@ export default function Pos() {
         onClose={() => setPayModal(false)}
         total={total}
         mpReady={mpReady}
+        tenantTaxCondition={tenant?.taxCondition ?? null}
         onCompleted={(sale) => {
           setPayModal(false);
           clear();
@@ -576,6 +581,8 @@ interface PayProps {
   total: number;
   /** Si true, ofrecemos cobrar con QR cuando el único método es 'qr'. */
   mpReady?: boolean;
+  /** Condición IVA del tenant emisor para previsualizar la letra de factura. */
+  tenantTaxCondition: TaxCondition | null;
   onCompleted: (sale: Sale) => void;
   /** Se llama cuando se elige cobrar 100% por QR con MP conectado. */
   onPayWithQR?: (
@@ -585,7 +592,7 @@ interface PayProps {
   ) => void;
 }
 
-function PaymentModal({ open, onClose, total, mpReady, onCompleted, onPayWithQR }: PayProps) {
+function PaymentModal({ open, onClose, total, mpReady, tenantTaxCondition, onCompleted, onPayWithQR }: PayProps) {
   const { session, activeBranchId } = useAuth();
   const { lines, discount } = useCart();
   const [payments, setPayments] = useState<{ method: PaymentMethod; amount: number }[]>([
@@ -593,13 +600,21 @@ function PaymentModal({ open, onClose, total, mpReady, onCompleted, onPayWithQR 
   ]);
   const [partial, setPartial] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [receiver, setReceiver] = useState<SaleReceiver | null>(null);
+  const [receiverModalOpen, setReceiverModalOpen] = useState(false);
 
   useEffect(() => {
     if (open) {
       setPayments([{ method: 'cash', amount: total }]);
       setPartial(false);
+      setReceiver(null);
     }
   }, [open, total]);
+
+  // Previsualización de la letra de factura para el cajero.
+  const letterPreview = tenantTaxCondition
+    ? determineCbteLetter(tenantTaxCondition, receiver)
+    : null;
 
   const summary = summarizeSale(lines, discount, payments);
   const paid = summary.paid;
@@ -659,6 +674,7 @@ function PaymentModal({ open, onClose, total, mpReady, onCompleted, onPayWithQR 
         globalDiscount: discount,
         payments,
         partial,
+        receiver,
       });
       const sale = await data.createSale(saleInput);
       onCompleted(sale);
@@ -674,6 +690,43 @@ function PaymentModal({ open, onClose, total, mpReady, onCompleted, onPayWithQR 
       <div className="mb-3 rounded-lg bg-ice p-4 text-center">
         <div className="eyebrow text-cyan">Total a cobrar</div>
         <div className="font-display text-3xl font-bold tabular-nums text-navy">{formatARS(total)}</div>
+        {letterPreview?.letter && (
+          <div className="mt-1 text-[11px] text-slate-600">
+            Se va a emitir <strong>Factura {letterPreview.letter}</strong>
+          </div>
+        )}
+      </div>
+
+      {/* Receptor (opcional). Si no se selecciona, queda como consumidor final anónimo. */}
+      <div className="mb-3 rounded-lg border border-slate-200 p-2.5 text-sm">
+        {receiver ? (
+          <div className="flex items-start gap-2">
+            <UserCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-600" />
+            <div className="min-w-0 flex-1">
+              <div className="truncate font-medium text-navy">{receiver.legalName}</div>
+              <div className="text-[11px] text-slate-500">
+                {receiver.docType === 80 ? 'CUIT' : receiver.docType === 86 ? 'CUIL' : 'DNI'}{' '}
+                {receiver.docNumber}
+              </div>
+            </div>
+            <button
+              onClick={() => setReceiver(null)}
+              className="rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-red-600"
+              title="Quitar cliente"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          </div>
+        ) : (
+          <button
+            type="button"
+            onClick={() => setReceiverModalOpen(true)}
+            className="flex w-full items-center gap-2 text-left text-slate-600 hover:text-navy"
+          >
+            <UserPlus className="h-4 w-4" />
+            <span>Identificar cliente (opcional)</span>
+          </button>
+        )}
       </div>
 
       <div className="space-y-2">
@@ -772,6 +825,12 @@ function PaymentModal({ open, onClose, total, mpReady, onCompleted, onPayWithQR 
           {loading ? 'Procesando…' : partial ? `Cobrar seña ${formatARS(paid)}` : 'Confirmar'}
         </Button>
       </div>
+
+      <ReceiverSelectorModal
+        open={receiverModalOpen}
+        onClose={() => setReceiverModalOpen(false)}
+        onConfirm={(r) => setReceiver(r)}
+      />
     </Modal>
   );
 }

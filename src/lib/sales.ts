@@ -1,6 +1,6 @@
 import type { CartLine } from '@/stores/cart';
 import type { SaleInput } from '@/data/driver';
-import type { PaymentMethod } from '@/types';
+import type { PaymentMethod, SaleReceiver } from '@/types';
 import { addMoney, eqMoney, lineSubtotal, subMoney } from './money';
 
 export interface PaymentLine {
@@ -16,6 +16,8 @@ export interface BuildSaleArgs {
   payments: PaymentLine[];
   /** Si true, los pagos pueden ser menores al total (seña). */
   partial?: boolean;
+  /** Receptor identificado para emitir Factura A/B. null = anónimo. */
+  receiver?: SaleReceiver | null;
 }
 
 export interface SaleSummary {
@@ -45,7 +47,7 @@ export function summarizeSale(lines: CartLine[], globalDiscount: number, payment
  * No persiste — eso lo hace el driver.
  */
 export function buildSaleFromCart(args: BuildSaleArgs): SaleInput {
-  const { branchId, registerId, lines, globalDiscount, payments, partial } = args;
+  const { branchId, registerId, lines, globalDiscount, payments, partial, receiver } = args;
 
   if (!branchId) throw new Error('Seleccioná una sucursal antes de cobrar');
   if (lines.length === 0) throw new Error('El carrito está vacío');
@@ -93,5 +95,6 @@ export function buildSaleFromCart(args: BuildSaleArgs): SaleInput {
     payments,
     discount: globalDiscount,
     partial: partial ?? false,
+    receiver: receiver ?? null,
   };
 }
