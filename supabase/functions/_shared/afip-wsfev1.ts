@@ -75,6 +75,9 @@ export interface VoucherRequest {
   // Discriminación de IVA (obligatorio en Factura A/B, ausente en Factura C).
   // Cada alícuota va como <AlicIva> dentro del bloque <Iva>.
   iva?: IvaAlicuota[];
+  // Comprobantes asociados — obligatorio en Notas de Crédito/Débito para
+  // vincularlas a la factura original. Ausente en facturas.
+  cbtesAsoc?: CbteAsoc[];
 }
 
 /**
@@ -117,6 +120,18 @@ export interface IvaAlicuota {
   id: number;       // IVA_ALICUOTA_ID.*
   baseImp: number;  // Base imponible (neto)
   importe: number;  // IVA calculado sobre la base
+}
+
+/**
+ * Comprobante asociado — usado en Notas de Crédito/Débito para vincularlas
+ * a la factura original. Va en el bloque <CbtesAsoc> del request.
+ */
+export interface CbteAsoc {
+  tipo: number;      // CBTE_TIPO de la factura original (1=A, 6=B, 11=C)
+  ptoVta: number;
+  nro: number;       // voucher_number de la factura original
+  cuit: string;      // CUIT del EMISOR de la factura asociada (el mismo tenant)
+  cbteFch?: string;  // YYYYMMDD de la factura original (recomendado por AFIP)
 }
 
 export interface IvaBreakdown {
@@ -395,6 +410,25 @@ export async function feCAESolicitar(
         </ar:Iva>`
       : '';
 
+  // Bloque comprobantes asociados (NC/ND). Vincula la NC a su factura.
+  // Va antes de <MonId> en el orden del schema. Ausente en facturas.
+  const cbtesAsocBlock =
+    v.cbtesAsoc && v.cbtesAsoc.length > 0
+      ? `<ar:CbtesAsoc>
+          ${v.cbtesAsoc
+            .map(
+              (c) => `<ar:CbteAsoc>
+            <ar:Tipo>${c.tipo}</ar:Tipo>
+            <ar:PtoVta>${c.ptoVta}</ar:PtoVta>
+            <ar:Nro>${c.nro}</ar:Nro>
+            <ar:Cuit>${c.cuit}</ar:Cuit>
+            ${c.cbteFch ? `<ar:CbteFch>${c.cbteFch}</ar:CbteFch>` : ''}
+          </ar:CbteAsoc>`,
+            )
+            .join('')}
+        </ar:CbtesAsoc>`
+      : '';
+
   const body = `<ar:FECAESolicitar>
   ${buildAuthBlock(auth)}
   <ar:FeCAEReq>
@@ -418,6 +452,7 @@ export async function feCAESolicitar(
         <ar:ImpTrib>${num(v.impTrib)}</ar:ImpTrib>
         <ar:ImpIVA>${num(v.impIVA)}</ar:ImpIVA>
         ${servBlock}
+        ${cbtesAsocBlock}
         <ar:MonId>${v.monId}</ar:MonId>
         <ar:MonCotiz>${v.monCotiz}</ar:MonCotiz>
         <ar:CondicionIVAReceptorId>${v.condicionIVAReceptorId}</ar:CondicionIVAReceptorId>

@@ -351,10 +351,13 @@ Deno.serve(async (req) => {
       const cbteFch = fmtDate(today);
       const cbteFchIso = `${cbteFch.slice(0, 4)}-${cbteFch.slice(4, 6)}-${cbteFch.slice(6, 8)}`;
 
-      const resp = await feCAESolicitar(auth, ptoVta, nextNumber, {
+      // VoucherRequest completo — lo guardamos en afip_documents.raw_request
+      // porque las Notas de Crédito necesitan copiar estos importes EXACTOS
+      // de la factura original (recalcular = riesgo de error 10063 de AFIP).
+      const voucherRequest = {
         cbteTipo: classification.cbteTipo,
         ptoVta,
-        concepto: 1, // 1 = Productos
+        concepto: 1 as const, // 1 = Productos
         docTipo: classification.docTipo,
         docNro: classification.docNro,
         cbteFch,
@@ -368,7 +371,9 @@ Deno.serve(async (req) => {
         monCotiz: 1,
         condicionIVAReceptorId: classification.condicionIVAReceptorId,
         iva: ivaForRequest,
-      });
+      };
+
+      const resp = await feCAESolicitar(auth, ptoVta, nextNumber, voucherRequest);
 
       if (resp.resultado !== 'A') {
         const obsTxt = resp.observaciones.map((o) => `${o.code}:${o.msg}`).join(' | ');
@@ -380,6 +385,7 @@ Deno.serve(async (req) => {
             status: 'rejected',
             voucher_number: nextNumber,
             error_message: detail.slice(0, 500),
+            raw_request: voucherRequest,
             raw_response: resp,
           })
           .eq('id', docRow.id);
@@ -403,7 +409,8 @@ Deno.serve(async (req) => {
         nroDocRec: classification.docNro === '0' ? 0 : Number(classification.docNro),
       });
 
-      // OK: autorizar el documento (guardamos también el qr_url como snapshot).
+      // OK: autorizar el documento. Guardamos qr_url + raw_request como
+      // snapshot (raw_request es la fuente de verdad para emitir la NC).
       await admin
         .from('afip_documents')
         .update({
@@ -412,6 +419,7 @@ Deno.serve(async (req) => {
           cae: resp.cae,
           cae_due_date: caeFchVtoIso,
           qr_url: qrUrl,
+          raw_request: voucherRequest,
           raw_response: resp,
           emitted_at: new Date().toISOString(),
         })

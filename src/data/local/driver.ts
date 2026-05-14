@@ -24,10 +24,13 @@ import type {
 } from '@/types';
 import type {
   AddPaymentInput,
+  AfipDocumentSummary,
   BranchInput,
   CashMovementInput,
   CategoryInput,
   CloseRegisterInput,
+  CreditNoteInput,
+  CreditNoteResult,
   CustomerInput,
   DataDriver,
   LoginInput,
@@ -1205,5 +1208,17 @@ export class LocalDriver implements DataDriver {
   async deactivateCustomer(_id: string): Promise<void> {
     await this.requireSession();
     throw new Error('La gestión de clientes requiere modo online.');
+  }
+
+  // --- AFIP: documentos fiscales y notas de crédito (Sprint A4) ---
+  // AFIP requiere conexión siempre — en modo local no hay documentos fiscales.
+  async listAfipDocumentsForSale(_saleId: string): Promise<AfipDocumentSummary[]> {
+    await this.requireSession();
+    return [];
+  }
+
+  async emitCreditNote(_input: CreditNoteInput): Promise<CreditNoteResult> {
+    await this.requireSession();
+    throw new Error('La emisión de comprobantes AFIP requiere modo online.');
   }
 }

@@ -29,10 +29,13 @@ import type {
 } from '@/types';
 import type {
   AddPaymentInput,
+  AfipDocumentSummary,
   BranchInput,
   CashMovementInput,
   CategoryInput,
   CloseRegisterInput,
+  CreditNoteInput,
+  CreditNoteResult,
   CustomerInput,
   DataDriver,
   LoginInput,
@@ -1576,5 +1579,17 @@ class SupabaseDriver implements DataDriver {
       .update({ active: false })
       .eq('id', id);
     if (error) throw new Error(error.message);
+  }
+
+  // --- AFIP: documentos fiscales y notas de crédito (Sprint A4) ---
+  // STUB del Paso 0 — implementación real en Pieza C del agent-team.
+  async listAfipDocumentsForSale(_saleId: string): Promise<AfipDocumentSummary[]> {
+    await this.requireSession();
+    throw new Error('listAfipDocumentsForSale no implementado todavía (A4 Pieza C)');
+  }
+
+  async emitCreditNote(_input: CreditNoteInput): Promise<CreditNoteResult> {
+    await this.requireSession();
+    throw new Error('emitCreditNote no implementado todavía (A4 Pieza C)');
   }
 }

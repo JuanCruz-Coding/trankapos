@@ -186,3 +186,16 @@ export function isClassificationError(
 ): v is ClassificationError {
   return 'code' in v;
 }
+
+/**
+ * Dado la letra de una factura, devuelve el CBTE_TIPO de la Nota de Crédito
+ * correspondiente. La numeración de NC es independiente de la de facturas.
+ *   A → 3 (NC A) · B → 8 (NC B) · C → 13 (NC C)
+ */
+export function creditNoteCbteTipo(letter: 'A' | 'B' | 'C'): number {
+  switch (letter) {
+    case 'A': return CBTE_TIPO.NOTA_CREDITO_A;
+    case 'B': return CBTE_TIPO.NOTA_CREDITO_B;
+    case 'C': return CBTE_TIPO.NOTA_CREDITO_C;
+  }
+}

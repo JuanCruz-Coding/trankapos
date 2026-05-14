@@ -107,6 +107,45 @@ export interface CustomerInput {
   active?: boolean;
 }
 
+/** Documento fiscal AFIP asociado a una venta (factura o nota de crédito). */
+export interface AfipDocumentSummary {
+  id: string;
+  saleId: string | null;
+  docType: 'factura' | 'nota_credito' | 'nota_debito';
+  docLetter: 'A' | 'B' | 'C';
+  salesPoint: number;
+  voucherNumber: number | null;
+  cae: string | null;
+  caeDueDate: string | null;
+  status: 'pending' | 'authorized' | 'rejected' | 'cancelled';
+  relatedDocId: string | null;
+  qrUrl: string | null;
+  errorMessage: string | null;
+  createdAt: string;
+}
+
+/** Input para emitir una Nota de Crédito. */
+export type CreditNoteInput =
+  // Anular venta facturada + emitir NC del total.
+  | { mode: 'void'; saleId: string }
+  // NC manual sobre una factura (sin anular la venta entera).
+  | { mode: 'manual'; afipDocumentId: string; reason?: string };
+
+/** Resultado de emitir una Nota de Crédito. */
+export interface CreditNoteResult {
+  ok: boolean;
+  documentId?: string;
+  cae?: string;
+  voucherNumber?: number;
+  caeDueDate?: string;
+  ptoVta?: number;
+  cbteTipo?: 'A' | 'B' | 'C';
+  qrUrl?: string;
+  /** mode='void': si la venta se anuló OK (puede ser true aunque la NC falle). */
+  voided?: boolean;
+  error?: string;
+}
+
 export interface AddPaymentInput {
   saleId: string;
   payments: { method: Sale['payments'][number]['method']; amount: number }[];
@@ -241,4 +280,10 @@ export interface DataDriver {
   updateCustomer(id: string, input: Partial<CustomerInput>): Promise<Customer>;
   /** Soft delete: setea active=false. */
   deactivateCustomer(id: string): Promise<void>;
+
+  // --- AFIP: documentos fiscales y notas de crédito ---
+  /** Documentos AFIP (factura + NC/ND) asociados a una venta. */
+  listAfipDocumentsForSale(saleId: string): Promise<AfipDocumentSummary[]>;
+  /** Emite una Nota de Crédito (anulando la venta o manual sobre una factura). */
+  emitCreditNote(input: CreditNoteInput): Promise<CreditNoteResult>;
 }
