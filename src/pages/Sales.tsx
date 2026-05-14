@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useState, type FormEvent } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
-import { Ban, CircleDollarSign, Eye, X } from 'lucide-react';
+import { Ban, CircleDollarSign, Eye, Receipt, X } from 'lucide-react';
 import { Modal } from '@/components/ui/Modal';
 import { Button } from '@/components/ui/Button';
 import { PageHeader } from '@/components/ui/PageHeader';
+import { ReceiptModal } from '@/components/pos/ReceiptModal';
 import { data } from '@/data';
 import { useAuth } from '@/stores/auth';
 import { formatARS } from '@/lib/currency';
@@ -26,7 +27,9 @@ export default function Sales() {
     [session?.tenantId, activeBranchId, refreshKey, limit],
   );
   const users = useLiveQuery(() => data.listUsers(), [session?.tenantId]);
+  const tenant = useLiveQuery(() => data.getTenant(), [session?.tenantId]);
   const [view, setView] = useState<Sale | null>(null);
+  const [ticketFor, setTicketFor] = useState<Sale | null>(null);
   const [collectFor, setCollectFor] = useState<Sale | null>(null);
 
   async function handleVoid(s: Sale) {
@@ -119,8 +122,16 @@ export default function Sales() {
                         <button
                           onClick={() => setView(s)}
                           className="rounded-md p-2 text-slate-500 hover:bg-slate-100"
+                          title="Ver detalle"
                         >
                           <Eye className="h-4 w-4" />
+                        </button>
+                        <button
+                          onClick={() => setTicketFor(s)}
+                          className="rounded-md p-2 text-slate-500 hover:bg-slate-100"
+                          title="Ver ticket / factura"
+                        >
+                          <Receipt className="h-4 w-4" />
                         </button>
                         {!s.voided && canVoidSales && (
                           <button
@@ -152,6 +163,14 @@ export default function Sales() {
       )}
 
       {view && <SaleDetailModal sale={view} onClose={() => setView(null)} />}
+      {ticketFor && (
+        <ReceiptModal
+          sale={ticketFor}
+          tenant={tenant ?? null}
+          mode="view"
+          onClose={() => setTicketFor(null)}
+        />
+      )}
       {collectFor && (
         <CollectBalanceModal
           sale={collectFor}
