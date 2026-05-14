@@ -26,6 +26,10 @@ interface AfipDocState {
   cbteTipo?: string; // 'A' | 'B' | 'C'
   qrUrl?: string;
   error?: string;
+  /** 'factura' | 'nota_credito'. Determina el título del comprobante. */
+  docType?: 'factura' | 'nota_credito' | 'nota_debito';
+  /** Si es NC: número de la factura que anula (ptoVta-voucher), si se resolvió. */
+  relatedVoucherLabel?: string | null;
   receiver?: {
     docType: number;
     docNumber: string;
@@ -49,14 +53,35 @@ function useAfipDocumentFor(
     void (async () => {
       try {
         const sb = getSupabase();
-        // 1) ¿ya existe afip_document authorized para esta sale?
-        const { data: existing } = await sb
+        // 1) ¿ya existen afip_documents authorized para esta sale?
+        //    Una venta puede tener 2: la Factura Y una Nota de Crédito que la
+        //    anula. En ese caso mostramos la NC (es el comprobante relevante).
+        const { data: docs } = await sb
           .from('afip_documents')
-          .select('cae, voucher_number, cae_due_date, sales_point, doc_letter, status, qr_url')
+          .select('id, doc_type, cae, voucher_number, cae_due_date, sales_point, doc_letter, status, qr_url, related_doc_id')
           .eq('sale_id', sale.id)
           .eq('status', 'authorized')
-          .maybeSingle();
+          .order('created_at', { ascending: true });
         if (cancelled) return;
+
+        type DocRow = {
+          id: string;
+          doc_type: 'factura' | 'nota_credito' | 'nota_debito';
+          cae: string | null;
+          voucher_number: number | null;
+          cae_due_date: string | null;
+          sales_point: number;
+          doc_letter: 'A' | 'B' | 'C';
+          status: string;
+          qr_url: string | null;
+          related_doc_id: string | null;
+        };
+        const rows = (docs ?? []) as DocRow[];
+        // Preferimos la NC si existe; sino la factura.
+        const existing =
+          rows.find((d) => d.doc_type === 'nota_credito') ??
+          rows.find((d) => d.doc_type === 'factura') ??
+          null;
 
         if (existing?.cae) {
           // El qr_url se guarda como snapshot al emitir (migration 025).
@@ -70,7 +95,7 @@ function useAfipDocumentFor(
                   cuit: tenant.taxId,
                   ptoVta: existing.sales_point,
                   tipoCmp: letterToCbteTipo(letter),
-                  nroCmp: existing.voucher_number,
+                  nroCmp: existing.voucher_number ?? 0,
                   fecha: sale.createdAt.slice(0, 10),
                   importe: sale.total,
                   cae: existing.cae,
@@ -79,14 +104,25 @@ function useAfipDocumentFor(
                 })
               : undefined);
 
+          // Si es NC, resolvemos la factura que anula para mostrar su número.
+          let relatedVoucherLabel: string | null = null;
+          if (existing.doc_type === 'nota_credito' && existing.related_doc_id) {
+            const related = rows.find((d) => d.id === existing.related_doc_id);
+            if (related) {
+              relatedVoucherLabel = `${related.doc_letter} N° ${String(related.sales_point).padStart(5, '0')}-${String(related.voucher_number ?? 0).padStart(8, '0')}`;
+            }
+          }
+
           setState({
             status: 'authorized',
             cae: existing.cae,
-            voucherNumber: existing.voucher_number,
-            caeDueDate: existing.cae_due_date,
+            voucherNumber: existing.voucher_number ?? undefined,
+            caeDueDate: existing.cae_due_date ?? undefined,
             ptoVta: existing.sales_point,
             cbteTipo: existing.doc_letter,
             qrUrl,
+            docType: existing.doc_type,
+            relatedVoucherLabel,
             receiver: sale.customerDocNumber
               ? {
                   docType: sale.customerDocType ?? 99,
@@ -156,6 +192,7 @@ function useAfipDocumentFor(
           ptoVta: body.ptoVta,
           cbteTipo: body.cbteTipo,
           qrUrl: body.qrUrl,
+          docType: 'factura',
           receiver: body.receiver ?? null,
         });
       } catch (err) {
@@ -183,7 +220,9 @@ export function ReceiptModal({ sale, tenant, onClose, mode = 'emit' }: Props) {
   const businessName = tenant?.legalName || tenant?.name || 'TrankaPOS';
   const ticketTitle =
     afip.status === 'authorized' && afip.cbteTipo
-      ? `Factura ${afip.cbteTipo}`
+      ? afip.docType === 'nota_credito'
+        ? `Nota de Crédito ${afip.cbteTipo}`
+        : `Factura ${afip.cbteTipo}`
       : tenant?.ticketTitle ?? 'Comprobante no fiscal';
   const ticketFooter = tenant?.ticketFooter ?? '¡Gracias por su compra!';
   const showLogo = tenant?.ticketShowLogo ?? true;
@@ -215,6 +254,9 @@ export function ReceiptModal({ sale, tenant, onClose, mode = 'emit' }: Props) {
             <div className="font-bold">
               Nº {String(afip.ptoVta).padStart(5, '0')}-{String(afip.voucherNumber).padStart(8, '0')}
             </div>
+          )}
+          {afip.status === 'authorized' && afip.docType === 'nota_credito' && afip.relatedVoucherLabel && (
+            <div className="text-[10px] text-slate-600">Anula Factura {afip.relatedVoucherLabel}</div>
           )}
           <div>{new Date(sale.createdAt).toLocaleString('es-AR')}</div>
           <div>#{sale.id.slice(0, 8)}</div>

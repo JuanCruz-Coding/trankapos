@@ -272,6 +272,39 @@ function mapCustomer(r: CustomerRow): Customer {
   };
 }
 
+interface AfipDocumentRow {
+  id: string;
+  sale_id: string | null;
+  doc_type: 'factura' | 'nota_credito' | 'nota_debito';
+  doc_letter: 'A' | 'B' | 'C';
+  sales_point: number;
+  voucher_number: number | null;
+  cae: string | null;
+  cae_due_date: string | null;
+  status: 'pending' | 'authorized' | 'rejected' | 'cancelled';
+  related_doc_id: string | null;
+  qr_url: string | null;
+  error_message: string | null;
+  created_at: string;
+}
+function mapAfipDocument(r: AfipDocumentRow): AfipDocumentSummary {
+  return {
+    id: r.id,
+    saleId: r.sale_id,
+    docType: r.doc_type,
+    docLetter: r.doc_letter,
+    salesPoint: r.sales_point,
+    voucherNumber: r.voucher_number,
+    cae: r.cae,
+    caeDueDate: r.cae_due_date,
+    status: r.status,
+    relatedDocId: r.related_doc_id,
+    qrUrl: r.qr_url,
+    errorMessage: r.error_message,
+    createdAt: r.created_at,
+  };
+}
+
 // ============================================================
 
 export function createSupabaseDriver(): DataDriver {
@@ -1582,14 +1615,38 @@ class SupabaseDriver implements DataDriver {
   }
 
   // --- AFIP: documentos fiscales y notas de crédito (Sprint A4) ---
-  // STUB del Paso 0 — implementación real en Pieza C del agent-team.
-  async listAfipDocumentsForSale(_saleId: string): Promise<AfipDocumentSummary[]> {
+
+  async listAfipDocumentsForSale(saleId: string): Promise<AfipDocumentSummary[]> {
     await this.requireSession();
-    throw new Error('listAfipDocumentsForSale no implementado todavía (A4 Pieza C)');
+    const { data, error } = await this.sb
+      .from('afip_documents')
+      .select('id, sale_id, doc_type, doc_letter, sales_point, voucher_number, cae, cae_due_date, status, related_doc_id, qr_url, error_message, created_at')
+      .eq('sale_id', saleId)
+      .order('created_at', { ascending: true });
+    if (error) throw new Error(error.message);
+    return (data as AfipDocumentRow[]).map(mapAfipDocument);
   }
 
-  async emitCreditNote(_input: CreditNoteInput): Promise<CreditNoteResult> {
+  async emitCreditNote(input: CreditNoteInput): Promise<CreditNoteResult> {
     await this.requireSession();
-    throw new Error('emitCreditNote no implementado todavía (A4 Pieza C)');
+    const { data: sessionData } = await this.sb.auth.getSession();
+    const token = sessionData.session?.access_token;
+    if (!token) throw new Error('No autenticado');
+
+    const url = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/afip-emit-credit-note`;
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+        apikey: import.meta.env.VITE_SUPABASE_ANON_KEY ?? '',
+      },
+      body: JSON.stringify(input),
+    });
+    const body = (await res.json().catch(() => ({}))) as CreditNoteResult;
+    if (!res.ok && body.error === undefined) {
+      throw new Error(`Error HTTP ${res.status}`);
+    }
+    return body;
   }
 }

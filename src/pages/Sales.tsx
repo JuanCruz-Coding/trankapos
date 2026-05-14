@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, type FormEvent } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
-import { Ban, CircleDollarSign, Eye, Receipt, X } from 'lucide-react';
+import { Ban, CircleDollarSign, Eye, FileMinus, Receipt, X } from 'lucide-react';
 import { Modal } from '@/components/ui/Modal';
 import { Button } from '@/components/ui/Button';
 import { PageHeader } from '@/components/ui/PageHeader';
@@ -13,7 +13,15 @@ import { addMoney, subMoney } from '@/lib/money';
 import { toast } from '@/stores/toast';
 import { confirmDialog } from '@/lib/dialog';
 import { PAYMENT_METHODS, type PaymentMethod, type Sale } from '@/types';
+import type { AfipDocumentSummary } from '@/data/driver';
 import { usePermission } from '@/lib/permissions';
+
+/** Formatea el número de comprobante AFIP: ptoVta-voucherNumber con padding. */
+function formatVoucherNumber(doc: AfipDocumentSummary): string {
+  const pv = String(doc.salesPoint).padStart(5, '0');
+  const nro = String(doc.voucherNumber ?? 0).padStart(8, '0');
+  return `${pv}-${nro}`;
+}
 
 const PAGE_SIZE = 50;
 
@@ -31,23 +39,140 @@ export default function Sales() {
   const [view, setView] = useState<Sale | null>(null);
   const [ticketFor, setTicketFor] = useState<Sale | null>(null);
   const [collectFor, setCollectFor] = useState<Sale | null>(null);
+  // Documentos AFIP por venta (factura + NC). Se cargan al cambiar la lista
+  // de ventas visibles. Vacío para ventas sin facturación o en modo offline.
+  const [afipDocs, setAfipDocs] = useState<Map<string, AfipDocumentSummary[]>>(new Map());
+  // saleIds en proceso de anulación/emisión de NC (deshabilita botones).
+  const [busySaleIds, setBusySaleIds] = useState<Set<string>>(new Set());
+
+  // Carga los afip_documents de todas las ventas visibles en paralelo.
+  useEffect(() => {
+    if (!sales || sales.length === 0) {
+      setAfipDocs(new Map());
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      try {
+        const entries = await Promise.all(
+          sales.map(async (s) => {
+            const docs = await data.listAfipDocumentsForSale(s.id);
+            return [s.id, docs] as const;
+          }),
+        );
+        if (!cancelled) setAfipDocs(new Map(entries));
+      } catch {
+        // Modo offline o sin AFIP: dejamos el map vacío, no rompe nada.
+        if (!cancelled) setAfipDocs(new Map());
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [sales, refreshKey]);
+
+  /** La factura authorized de una venta, si la tiene. */
+  function getAuthorizedInvoice(saleId: string): AfipDocumentSummary | null {
+    const docs = afipDocs.get(saleId) ?? [];
+    return docs.find((d) => d.docType === 'factura' && d.status === 'authorized') ?? null;
+  }
+
+  /** True si la venta ya tiene una NC authorized (no se puede emitir otra). */
+  function hasAuthorizedCreditNote(saleId: string): boolean {
+    const docs = afipDocs.get(saleId) ?? [];
+    return docs.some((d) => d.docType === 'nota_credito' && d.status === 'authorized');
+  }
+
+  function setBusy(saleId: string, busy: boolean) {
+    setBusySaleIds((prev) => {
+      const next = new Set(prev);
+      if (busy) next.add(saleId);
+      else next.delete(saleId);
+      return next;
+    });
+  }
 
   async function handleVoid(s: Sale) {
+    const invoice = getAuthorizedInvoice(s.id);
+
+    // Caso 1: venta sin factura → anulación normal.
+    if (!invoice) {
+      const ok = await confirmDialog(`¿Anular venta por ${formatARS(s.total)}?`, {
+        text:
+          s.status === 'partial' && s.stockReservedMode
+            ? 'Se libera el stock reservado. La seña se anula.'
+            : 'Se devuelve el stock al depósito de origen.',
+        confirmText: 'Anular venta',
+        danger: true,
+      });
+      if (!ok) return;
+      try {
+        await data.voidSale(s.id);
+        toast.success('Venta anulada');
+        setRefreshKey((k) => k + 1);
+      } catch (err) {
+        toast.error((err as Error).message);
+      }
+      return;
+    }
+
+    // Caso 2: venta facturada → anular + emitir Nota de Crédito en AFIP.
     const ok = await confirmDialog(`¿Anular venta por ${formatARS(s.total)}?`, {
-      text:
-        s.status === 'partial' && s.stockReservedMode
-          ? 'Se libera el stock reservado. La seña se anula.'
-          : 'Se devuelve el stock al depósito de origen.',
-      confirmText: 'Anular venta',
+      text: `Esta venta tiene Factura ${invoice.docLetter} N° ${formatVoucherNumber(invoice)}. Se va a anular la venta y emitir una Nota de Crédito en AFIP.`,
+      confirmText: 'Anular y emitir NC',
       danger: true,
     });
     if (!ok) return;
+
+    setBusy(s.id, true);
     try {
-      await data.voidSale(s.id);
-      toast.success('Venta anulada');
-      setRefreshKey((k) => k + 1);
+      const result = await data.emitCreditNote({ mode: 'void', saleId: s.id });
+      if (result.ok) {
+        toast.success(`Venta anulada — NC ${result.cbteTipo ?? ''} emitida`);
+      } else if (result.voided) {
+        // La venta SÍ se anuló pero la NC fiscal falló: hay que reintentar.
+        toast.error(
+          `Venta anulada. La NC fiscal falló: ${result.error ?? 'error desconocido'}. Reintentá desde el ticket.`,
+        );
+      } else {
+        toast.error(result.error ?? 'No se pudo anular la venta');
+      }
     } catch (err) {
       toast.error((err as Error).message);
+    } finally {
+      setBusy(s.id, false);
+      setRefreshKey((k) => k + 1);
+    }
+  }
+
+  // NC manual sobre una factura, sin anular la venta entera.
+  async function handleEmitCreditNote(s: Sale) {
+    const invoice = getAuthorizedInvoice(s.id);
+    if (!invoice) return;
+
+    const ok = await confirmDialog(
+      `¿Emitir Nota de Crédito sobre la Factura ${invoice.docLetter} N° ${formatVoucherNumber(invoice)}?`,
+      {
+        text: 'Esto emite solo el comprobante fiscal — si hubo devolución de mercadería, ajustá el stock manualmente.',
+        confirmText: 'Emitir NC',
+        danger: true,
+      },
+    );
+    if (!ok) return;
+
+    setBusy(s.id, true);
+    try {
+      const result = await data.emitCreditNote({ mode: 'manual', afipDocumentId: invoice.id });
+      if (result.ok) {
+        toast.success(`NC ${result.cbteTipo ?? ''} emitida`);
+      } else {
+        toast.error(result.error ?? 'No se pudo emitir la Nota de Crédito');
+      }
+    } catch (err) {
+      toast.error((err as Error).message);
+    } finally {
+      setBusy(s.id, false);
+      setRefreshKey((k) => k + 1);
     }
   }
 
@@ -76,6 +201,9 @@ export default function Sales() {
               {sales!.map((s) => {
                 const paid = addMoney(...s.payments.map((p) => p.amount));
                 const remaining = subMoney(s.total, paid);
+                const isBusy = busySaleIds.has(s.id);
+                const canEmitCreditNote =
+                  !s.voided && getAuthorizedInvoice(s.id) !== null && !hasAuthorizedCreditNote(s.id);
                 return (
                   <tr key={s.id} className={s.voided ? 'opacity-50' : 'hover:bg-slate-50'}>
                     <td className="px-4 py-3">{formatDateTime(s.createdAt)}</td>
@@ -133,10 +261,22 @@ export default function Sales() {
                         >
                           <Receipt className="h-4 w-4" />
                         </button>
+                        {canEmitCreditNote && canVoidSales && (
+                          <button
+                            onClick={() => handleEmitCreditNote(s)}
+                            disabled={isBusy}
+                            className="rounded-md p-2 text-slate-500 hover:bg-amber-50 hover:text-amber-700 disabled:opacity-40"
+                            title="Emitir Nota de Crédito"
+                          >
+                            <FileMinus className="h-4 w-4" />
+                          </button>
+                        )}
                         {!s.voided && canVoidSales && (
                           <button
                             onClick={() => handleVoid(s)}
-                            className="rounded-md p-2 text-slate-500 hover:bg-red-50 hover:text-red-600"
+                            disabled={isBusy}
+                            className="rounded-md p-2 text-slate-500 hover:bg-red-50 hover:text-red-600 disabled:opacity-40"
+                            title="Anular venta"
                           >
                             <Ban className="h-4 w-4" />
                           </button>
