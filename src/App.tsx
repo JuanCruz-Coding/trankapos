@@ -16,6 +16,7 @@ import Cash from '@/pages/Cash';
 import Dashboard from '@/pages/Dashboard';
 import Reports from '@/pages/Reports';
 import Sales from '@/pages/Sales';
+import Customers from '@/pages/Customers';
 import Stock from '@/pages/Stock';
 import Transfers from '@/pages/Transfers';
 import Help from '@/pages/Help';
@@ -72,6 +73,7 @@ export function App() {
           />
           <Route path="cash" element={<Cash />} />
           <Route path="sales" element={<Sales />} />
+          <Route path="customers" element={<Customers />} />
           <Route
             path="reports"
             element={

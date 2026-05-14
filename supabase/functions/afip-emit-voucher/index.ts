@@ -30,6 +30,7 @@ import {
   CBTE_TIPO,
   COND_IVA_RECEPTOR,
   DOC_TIPO,
+  computeIvaBreakdown,
   feCAESolicitar,
   feCompUltimoAutorizado,
 } from '../_shared/afip-wsfev1.ts';
@@ -44,9 +45,15 @@ interface SaleRow {
   id: string;
   tenant_id: string;
   total: string | number;
+  discount: string | number;
   status: string;
   voided: boolean;
   created_at: string;
+}
+
+interface SaleItemForIva {
+  subtotal: string | number;
+  product_id: string;
 }
 
 interface TenantRow {
@@ -153,7 +160,7 @@ Deno.serve(async (req) => {
     // Cargar sale
     const { data: saleData, error: saleErr } = await admin
       .from('sales')
-      .select('id, tenant_id, total, status, voided, created_at')
+      .select('id, tenant_id, total, discount, status, voided, created_at')
       .eq('id', body.saleId)
       .maybeSingle();
     if (saleErr) return jsonResponse({ error: saleErr.message }, 500);
@@ -258,6 +265,34 @@ Deno.serve(async (req) => {
       const total = Number(sale.total);
       if (!Number.isFinite(total) || total <= 0) {
         throw new Error(`Sale.total inválido: ${sale.total}`);
+      }
+      const saleDiscount = Number(sale.discount ?? 0);
+
+      // A3.1 plumbing: cargar items con tax_rate y precalcular breakdown IVA.
+      // Para Factura C el resultado NO se usa (la C no discrimina IVA), pero
+      // dejamos el helper validándose con datos reales para detectar problemas
+      // antes de A3.4 (cuando emitamos A/B y sí lo mandemos al request).
+      const { data: itemRows } = await admin
+        .from('sale_items')
+        .select('subtotal, product_id, products(tax_rate)')
+        .eq('sale_id', sale.id);
+      const itemsForIva = ((itemRows ?? []) as Array<{
+        subtotal: string | number;
+        product_id: string;
+        products?: { tax_rate: string | number } | { tax_rate: string | number }[] | null;
+      }>).map((it) => {
+        // products viene como objeto si la relación es 1:1, o array si Supabase la trata como many.
+        const productRel = Array.isArray(it.products) ? it.products[0] : it.products;
+        const rate = productRel?.tax_rate != null ? Number(productRel.tax_rate) : 21;
+        return { subtotal: Number(it.subtotal), taxRate: rate };
+      });
+      try {
+        const breakdown = computeIvaBreakdown(itemsForIva, saleDiscount, total);
+        console.log(
+          `[A3.1 plumbing] Breakdown IVA: neto=${breakdown.impNeto} iva=${breakdown.impIVA} total=${breakdown.impTotal} alic=${JSON.stringify(breakdown.alicuotas)}`,
+        );
+      } catch (err) {
+        console.warn(`[A3.1 plumbing] computeIvaBreakdown falló: ${(err as Error).message}`);
       }
 
       // Fecha del comprobante: hoy (AFIP acepta ±5 días)

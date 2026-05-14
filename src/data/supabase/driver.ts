@@ -8,6 +8,8 @@ import type {
   CashMovement,
   CashRegister,
   Category,
+  Customer,
+  CustomerDocType,
   PaymentMethod,
   PermissionsMap,
   Plan,
@@ -31,6 +33,7 @@ import type {
   CashMovementInput,
   CategoryInput,
   CloseRegisterInput,
+  CustomerInput,
   DataDriver,
   LoginInput,
   OpenRegisterInput,
@@ -224,6 +227,11 @@ interface SaleRow {
   voided: boolean; created_at: string;
   status?: 'paid' | 'partial' | null;
   stock_reserved_mode?: boolean | null;
+  customer_id?: string | null;
+  customer_doc_type?: number | null;
+  customer_doc_number?: string | null;
+  customer_legal_name?: string | null;
+  customer_iva_condition?: string | null;
   sale_items?: SaleItemRow[]; sale_payments?: SalePaymentRow[];
 }
 function mapSale(r: SaleRow): Sale {
@@ -236,6 +244,28 @@ function mapSale(r: SaleRow): Sale {
     status: (r.status ?? 'paid') as Sale['status'],
     stockReservedMode: r.stock_reserved_mode ?? false,
     voided: r.voided, createdAt: r.created_at,
+    customerId: r.customer_id ?? null,
+    customerDocType: (r.customer_doc_type ?? null) as Sale['customerDocType'],
+    customerDocNumber: r.customer_doc_number ?? null,
+    customerLegalName: r.customer_legal_name ?? null,
+    customerIvaCondition: (r.customer_iva_condition ?? null) as Sale['customerIvaCondition'],
+  };
+}
+
+interface CustomerRow {
+  id: string; tenant_id: string; doc_type: number; doc_number: string;
+  legal_name: string; iva_condition: string;
+  email: string | null; notes: string | null; active: boolean;
+  created_at: string; updated_at: string;
+}
+function mapCustomer(r: CustomerRow): Customer {
+  return {
+    id: r.id, tenantId: r.tenant_id,
+    docType: r.doc_type as Customer['docType'],
+    docNumber: r.doc_number, legalName: r.legal_name,
+    ivaCondition: r.iva_condition as Customer['ivaCondition'],
+    email: r.email, notes: r.notes, active: r.active,
+    createdAt: r.created_at, updatedAt: r.updated_at,
   };
 }
 
@@ -995,6 +1025,12 @@ class SupabaseDriver implements DataDriver {
         amount: p.amount,
       })),
       p_partial: input.partial ?? false,
+      // Receptor (Factura A/B). Si null, todos los params quedan null en la RPC.
+      p_customer_id: input.receiver?.customerId ?? null,
+      p_customer_doc_type: input.receiver?.docType ?? null,
+      p_customer_doc_number: input.receiver?.docNumber ?? null,
+      p_customer_legal_name: input.receiver?.legalName ?? null,
+      p_customer_iva_condition: input.receiver?.ivaCondition ?? null,
     });
     if (rpcErr) throw new Error(rpcErr.message);
 
@@ -1421,5 +1457,124 @@ class SupabaseDriver implements DataDriver {
         qty: Number(it.qty),
       })),
     }));
+  }
+
+  // ===== CUSTOMERS (mini-CRM Sprint A3.2) =====
+
+  async listCustomers(opts?: { activeOnly?: boolean }): Promise<Customer[]> {
+    await this.requireSession();
+    let q = this.sb
+      .from('customers')
+      .select('*')
+      .order('legal_name', { ascending: true });
+    if (opts?.activeOnly !== false) {
+      q = q.eq('active', true);
+    }
+    const { data, error } = await q;
+    if (error) throw new Error(error.message);
+    return (data as CustomerRow[]).map(mapCustomer);
+  }
+
+  async searchCustomers(query: string): Promise<Customer[]> {
+    await this.requireSession();
+    const q = query.trim();
+    if (!q) return this.listCustomers({ activeOnly: true });
+    // Buscamos por doc_number (prefix) OR legal_name (ilike). Para combinar
+    // se usa .or() de PostgREST.
+    const safe = q.replace(/[%,]/g, '');
+    const { data, error } = await this.sb
+      .from('customers')
+      .select('*')
+      .eq('active', true)
+      .or(`doc_number.like.${safe}%,legal_name.ilike.%${safe}%`)
+      .order('legal_name', { ascending: true })
+      .limit(20);
+    if (error) throw new Error(error.message);
+    return (data as CustomerRow[]).map(mapCustomer);
+  }
+
+  async getCustomer(id: string): Promise<Customer | null> {
+    await this.requireSession();
+    const { data, error } = await this.sb
+      .from('customers')
+      .select('*')
+      .eq('id', id)
+      .maybeSingle();
+    if (error) throw new Error(error.message);
+    return data ? mapCustomer(data as CustomerRow) : null;
+  }
+
+  async findCustomerByDoc(docType: CustomerDocType, docNumber: string): Promise<Customer | null> {
+    await this.requireSession();
+    const { data, error } = await this.sb
+      .from('customers')
+      .select('*')
+      .eq('doc_type', docType)
+      .eq('doc_number', docNumber)
+      .eq('active', true)
+      .maybeSingle();
+    if (error) throw new Error(error.message);
+    return data ? mapCustomer(data as CustomerRow) : null;
+  }
+
+  async createCustomer(input: CustomerInput): Promise<Customer> {
+    const s = await this.requireSession();
+    const { data, error } = await this.sb
+      .from('customers')
+      .insert({
+        tenant_id: s.tenantId,
+        doc_type: input.docType,
+        doc_number: input.docNumber,
+        legal_name: input.legalName.trim(),
+        iva_condition: input.ivaCondition,
+        email: input.email ?? null,
+        notes: input.notes ?? null,
+        active: input.active ?? true,
+      })
+      .select('*')
+      .single();
+    if (error) {
+      // Codigo 23505 = unique violation (cuit duplicado activo)
+      if (error.code === '23505') {
+        throw new Error('Ya existe un cliente activo con ese número de documento.');
+      }
+      throw new Error(error.message);
+    }
+    return mapCustomer(data as CustomerRow);
+  }
+
+  async updateCustomer(id: string, input: Partial<CustomerInput>): Promise<Customer> {
+    await this.requireSession();
+    const patch: Record<string, unknown> = {};
+    if (input.docType !== undefined) patch.doc_type = input.docType;
+    if (input.docNumber !== undefined) patch.doc_number = input.docNumber;
+    if (input.legalName !== undefined) patch.legal_name = input.legalName.trim();
+    if (input.ivaCondition !== undefined) patch.iva_condition = input.ivaCondition;
+    if (input.email !== undefined) patch.email = input.email;
+    if (input.notes !== undefined) patch.notes = input.notes;
+    if (input.active !== undefined) patch.active = input.active;
+
+    const { data, error } = await this.sb
+      .from('customers')
+      .update(patch)
+      .eq('id', id)
+      .select('*')
+      .single();
+    if (error) {
+      if (error.code === '23505') {
+        throw new Error('Ya existe un cliente activo con ese número de documento.');
+      }
+      throw new Error(error.message);
+    }
+    return mapCustomer(data as CustomerRow);
+  }
+
+  async deactivateCustomer(id: string): Promise<void> {
+    await this.requireSession();
+    const { error } = await this.sb
+      .from('customers')
+      .update({ active: false })
+      .eq('id', id);
+    if (error) throw new Error(error.message);
   }
 }

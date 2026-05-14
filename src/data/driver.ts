@@ -5,12 +5,16 @@ import type {
   CashMovement,
   CashRegister,
   Category,
+  Customer,
+  CustomerDocType,
+  CustomerIvaCondition,
   PermissionsMap,
   Plan,
   PlanUsage,
   Product,
   Role,
   Sale,
+  SaleReceiver,
   StockItem,
   Subscription,
   Tenant,
@@ -89,6 +93,18 @@ export interface SaleInput {
   discount: number;
   /** Si true, la venta es una seña: paid<total OK, status='partial'. */
   partial?: boolean;
+  /** Datos del receptor para Factura A/B. null si venta anónima. */
+  receiver?: SaleReceiver | null;
+}
+
+export interface CustomerInput {
+  docType: CustomerDocType;
+  docNumber: string;
+  legalName: string;
+  ivaCondition: CustomerIvaCondition;
+  email?: string | null;
+  notes?: string | null;
+  active?: boolean;
 }
 
 export interface AddPaymentInput {
@@ -214,4 +230,15 @@ export interface DataDriver {
   // --- transfers ---
   createTransfer(input: TransferInput): Promise<Transfer>;
   listTransfers(): Promise<Transfer[]>;
+
+  // --- customers (mini-CRM para Factura A/B identificada) ---
+  listCustomers(opts?: { activeOnly?: boolean }): Promise<Customer[]>;
+  searchCustomers(query: string): Promise<Customer[]>;
+  getCustomer(id: string): Promise<Customer | null>;
+  /** Busca por (doc_type, doc_number) exacto. Útil para detectar duplicado al crear. */
+  findCustomerByDoc(docType: CustomerDocType, docNumber: string): Promise<Customer | null>;
+  createCustomer(input: CustomerInput): Promise<Customer>;
+  updateCustomer(id: string, input: Partial<CustomerInput>): Promise<Customer>;
+  /** Soft delete: setea active=false. */
+  deactivateCustomer(id: string): Promise<void>;
 }

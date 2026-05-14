@@ -72,6 +72,142 @@ export interface VoucherRequest {
   fchServDesde?: string;
   fchServHasta?: string;
   fchVtoPago?: string;
+  // Discriminación de IVA (obligatorio en Factura A/B, ausente en Factura C).
+  // Cada alícuota va como <AlicIva> dentro del bloque <Iva>.
+  iva?: IvaAlicuota[];
+}
+
+/**
+ * IDs de alícuota IVA según catálogo AFIP (método FEParamGetTiposIva).
+ * Se mapean desde el `tax_rate` del producto (porcentaje) en TrankaPos.
+ */
+export const IVA_ALICUOTA_ID = {
+  CERO: 3,        // 0%
+  DIEZ5: 4,       // 10.5%
+  VEINTIUNO: 5,   // 21%
+  VEINTISIETE: 6, // 27%
+  CINCO: 8,       // 5%
+  DOS5: 9,        // 2.5%
+} as const;
+
+/**
+ * RG 5616/2024 — monto máximo para emitir Factura B a consumidor final anónimo.
+ * Si la venta supera este valor, AFIP exige identificar al receptor (DNI/CUIT).
+ * El monto puede ser actualizado por nuevas RG — ajustar acá.
+ */
+export const AFIP_ANON_MAX_AMOUNT = 417000;
+
+/**
+ * Convierte un porcentaje (ej. 21) al Id de alícuota AFIP. Devuelve null si
+ * la tasa no es una de las soportadas por AFIP.
+ */
+export function taxRateToAlicuotaId(rate: number): number | null {
+  switch (rate) {
+    case 0: return IVA_ALICUOTA_ID.CERO;
+    case 2.5: return IVA_ALICUOTA_ID.DOS5;
+    case 5: return IVA_ALICUOTA_ID.CINCO;
+    case 10.5: return IVA_ALICUOTA_ID.DIEZ5;
+    case 21: return IVA_ALICUOTA_ID.VEINTIUNO;
+    case 27: return IVA_ALICUOTA_ID.VEINTISIETE;
+    default: return null;
+  }
+}
+
+export interface IvaAlicuota {
+  id: number;       // IVA_ALICUOTA_ID.*
+  baseImp: number;  // Base imponible (neto)
+  importe: number;  // IVA calculado sobre la base
+}
+
+export interface IvaBreakdown {
+  alicuotas: IvaAlicuota[];
+  impNeto: number;
+  impIVA: number;
+  impTotal: number;
+}
+
+/**
+ * Calcula el desglose IVA de una venta con descuento global.
+ *
+ * Asume que el `subtotal` de cada item es el PRECIO FINAL CON IVA INCLUIDO
+ * (estándar AR para retail). Desarma: base = subtotal / (1 + rate/100),
+ * iva = subtotal - base.
+ *
+ * Distribuye el descuento global proporcionalmente sobre los subtotales
+ * de línea antes de calcular alícuotas (sino las alícuotas no suman el
+ * total real del comprobante).
+ *
+ * Maneja drift de redondeo (1-2 centavos) ajustando la alícuota con mayor
+ * base para que `impTotal = impNeto + impIVA` exacto. AFIP rechaza 10063
+ * si no cuadra.
+ *
+ * @throws Error si algún item tiene tax_rate no soportado por AFIP.
+ */
+export function computeIvaBreakdown(
+  items: { subtotal: number; taxRate: number }[],
+  globalDiscount: number,
+  expectedTotal: number,
+): IvaBreakdown {
+  if (items.length === 0) {
+    return { alicuotas: [], impNeto: 0, impIVA: 0, impTotal: 0 };
+  }
+
+  // 1) Validar que todas las tasas sean soportadas por AFIP
+  for (const it of items) {
+    if (taxRateToAlicuotaId(it.taxRate) === null) {
+      throw new Error(
+        `Tasa IVA ${it.taxRate}% no soportada por AFIP. Las válidas son 0, 2.5, 5, 10.5, 21, 27.`,
+      );
+    }
+  }
+
+  // 2) Prorratear descuento global sobre los subtotales de línea
+  const sumSubtotals = items.reduce((s, it) => s + it.subtotal, 0);
+  const factor = sumSubtotals > 0 ? (sumSubtotals - globalDiscount) / sumSubtotals : 1;
+
+  // 3) Por línea: base + iva, agrupado por rate
+  const byRate = new Map<number, { base: number; iva: number }>();
+  for (const it of items) {
+    const adjusted = it.subtotal * factor;
+    const base = adjusted / (1 + it.taxRate / 100);
+    const iva = adjusted - base;
+    const cur = byRate.get(it.taxRate) ?? { base: 0, iva: 0 };
+    cur.base += base;
+    cur.iva += iva;
+    byRate.set(it.taxRate, cur);
+  }
+
+  // 4) Redondear cada grupo a 2 decimales y construir array
+  const round2 = (n: number) => Math.round(n * 100) / 100;
+  const alicuotas: IvaAlicuota[] = Array.from(byRate.entries())
+    .map(([rate, { base, iva }]) => ({
+      id: taxRateToAlicuotaId(rate)!,
+      baseImp: round2(base),
+      importe: round2(iva),
+    }))
+    .sort((a, b) => b.baseImp - a.baseImp); // ordenar por base desc para el ajuste de drift
+
+  // 5) Sumar y chequear drift contra el total esperado
+  let impNeto = round2(alicuotas.reduce((s, a) => s + a.baseImp, 0));
+  let impIVA = round2(alicuotas.reduce((s, a) => s + a.importe, 0));
+  let impTotal = round2(impNeto + impIVA);
+
+  const drift = round2(expectedTotal - impTotal);
+  if (Math.abs(drift) >= 0.01 && Math.abs(drift) < 0.10 && alicuotas.length > 0) {
+    // Ajustar la alícuota con mayor base. El drift suele ser ≤ 0.02 por línea.
+    const target = alicuotas[0];
+    // Repartimos el drift entre base e iva en proporción a la tasa
+    const rate = target.importe / (target.baseImp || 1);
+    const ivaShare = round2(drift * (rate / (1 + rate)));
+    const baseShare = round2(drift - ivaShare);
+    target.baseImp = round2(target.baseImp + baseShare);
+    target.importe = round2(target.importe + ivaShare);
+    impNeto = round2(alicuotas.reduce((s, a) => s + a.baseImp, 0));
+    impIVA = round2(alicuotas.reduce((s, a) => s + a.importe, 0));
+    impTotal = round2(impNeto + impIVA);
+  }
+
+  return { alicuotas, impNeto, impIVA, impTotal };
 }
 
 /** Códigos AFIP para condición IVA del receptor (RG 5616/2024). */
@@ -243,6 +379,22 @@ export async function feCAESolicitar(
          <ar:FchVtoPago>${v.fchVtoPago}</ar:FchVtoPago>`
       : '';
 
+  // Bloque IVA (Factura A/B). Para C va ausente.
+  const ivaBlock =
+    v.iva && v.iva.length > 0
+      ? `<ar:Iva>
+          ${v.iva
+            .map(
+              (a) => `<ar:AlicIva>
+            <ar:Id>${a.id}</ar:Id>
+            <ar:BaseImp>${num(a.baseImp)}</ar:BaseImp>
+            <ar:Importe>${num(a.importe)}</ar:Importe>
+          </ar:AlicIva>`,
+            )
+            .join('')}
+        </ar:Iva>`
+      : '';
+
   const body = `<ar:FECAESolicitar>
   ${buildAuthBlock(auth)}
   <ar:FeCAEReq>
@@ -269,6 +421,7 @@ export async function feCAESolicitar(
         <ar:MonId>${v.monId}</ar:MonId>
         <ar:MonCotiz>${v.monCotiz}</ar:MonCotiz>
         <ar:CondicionIVAReceptorId>${v.condicionIVAReceptorId}</ar:CondicionIVAReceptorId>
+        ${ivaBlock}
       </ar:FECAEDetRequest>
     </ar:FeDetReq>
   </ar:FeCAEReq>

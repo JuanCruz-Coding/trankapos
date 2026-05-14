@@ -28,6 +28,7 @@ import type {
   CashMovementInput,
   CategoryInput,
   CloseRegisterInput,
+  CustomerInput,
   DataDriver,
   LoginInput,
   OpenRegisterInput,
@@ -39,6 +40,7 @@ import type {
   UserInput,
   WarehouseInput,
 } from '../driver';
+import type { Customer, CustomerDocType } from '@/types';
 
 // Defaults para los campos nuevos del Tenant (Sprint Settings).
 // Se aplican al leer un tenant viejo que todavía no tiene estos campos.
@@ -1163,5 +1165,45 @@ export class LocalDriver implements DataDriver {
     const s = await this.requireSession();
     const all = await db.transfers.where('tenantId').equals(s.tenantId).toArray();
     return all.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  }
+
+  // ===== CUSTOMERS (Sprint A3.2) =====
+  // Stubs en modo local: el CRM no es crítico offline. AFIP requiere
+  // conexión siempre, así que customers solo se usan en flow online.
+  // Si en el futuro queremos soporte offline real, agregar tabla a Dexie.
+
+  async listCustomers(): Promise<Customer[]> {
+    await this.requireSession();
+    return [];
+  }
+
+  async searchCustomers(): Promise<Customer[]> {
+    await this.requireSession();
+    return [];
+  }
+
+  async getCustomer(_id: string): Promise<Customer | null> {
+    await this.requireSession();
+    return null;
+  }
+
+  async findCustomerByDoc(_docType: CustomerDocType, _docNumber: string): Promise<Customer | null> {
+    await this.requireSession();
+    return null;
+  }
+
+  async createCustomer(_input: CustomerInput): Promise<Customer> {
+    await this.requireSession();
+    throw new Error('La gestión de clientes requiere modo online.');
+  }
+
+  async updateCustomer(_id: string, _input: Partial<CustomerInput>): Promise<Customer> {
+    await this.requireSession();
+    throw new Error('La gestión de clientes requiere modo online.');
+  }
+
+  async deactivateCustomer(_id: string): Promise<void> {
+    await this.requireSession();
+    throw new Error('La gestión de clientes requiere modo online.');
   }
 }

@@ -16,6 +16,54 @@ export type TaxCondition =
   | 'exento'
   | 'consumidor_final';
 
+/**
+ * Condición IVA que puede tener un **receptor** de factura.
+ * Igual a TaxCondition + 'no_categorizado' (que AFIP soporta para receptores
+ * pero no para emisores). Mantener sincronizado con CHECK de customers.iva_condition.
+ */
+export type CustomerIvaCondition = TaxCondition | 'no_categorizado';
+
+export const CUSTOMER_IVA_CONDITIONS: { value: CustomerIvaCondition; label: string }[] = [
+  { value: 'responsable_inscripto', label: 'Responsable Inscripto' },
+  { value: 'monotributista', label: 'Monotributista' },
+  { value: 'exento', label: 'Exento' },
+  { value: 'consumidor_final', label: 'Consumidor Final' },
+  { value: 'no_categorizado', label: 'No Categorizado' },
+];
+
+/** Códigos AFIP de documento de identidad. */
+export type CustomerDocType = 80 | 86 | 96;
+
+export const CUSTOMER_DOC_TYPES: { value: CustomerDocType; label: string }[] = [
+  { value: 80, label: 'CUIT' },
+  { value: 86, label: 'CUIL' },
+  { value: 96, label: 'DNI' },
+];
+
+export interface Customer {
+  id: string;
+  tenantId: string;
+  docType: CustomerDocType;
+  docNumber: string;
+  legalName: string;
+  ivaCondition: CustomerIvaCondition;
+  email: string | null;
+  notes: string | null;
+  active: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** Datos del receptor a incluir en una venta. Puede provenir de la tabla customers o ser inline. */
+export interface SaleReceiver {
+  /** null si es inline (no se guarda en customers). */
+  customerId: string | null;
+  docType: CustomerDocType;
+  docNumber: string;
+  legalName: string;
+  ivaCondition: CustomerIvaCondition;
+}
+
 export const TAX_CONDITIONS: { value: TaxCondition; label: string }[] = [
   { value: 'responsable_inscripto', label: 'Responsable Inscripto' },
   { value: 'monotributista', label: 'Monotributista' },
@@ -216,6 +264,12 @@ export interface Sale {
   stockReservedMode: boolean;
   createdAt: string;
   voided: boolean;
+  // Receptor (Factura A/B identificada). null si venta anónima.
+  customerId?: string | null;
+  customerDocType?: CustomerDocType | null;
+  customerDocNumber?: string | null;
+  customerLegalName?: string | null;
+  customerIvaCondition?: CustomerIvaCondition | null;
 }
 
 export interface Transfer {

@@ -1,0 +1,330 @@
+import { useEffect, useMemo, useState, type FormEvent } from 'react';
+import { Pencil, Plus, Search, Trash2 } from 'lucide-react';
+import { Button } from '@/components/ui/Button';
+import { Input } from '@/components/ui/Input';
+import { Modal } from '@/components/ui/Modal';
+import { Empty } from '@/components/ui/Empty';
+import { PageHeader } from '@/components/ui/PageHeader';
+import { data } from '@/data';
+import { toast } from '@/stores/toast';
+import { confirmDialog } from '@/lib/dialog';
+import { formatCuit, validateDocument } from '@/lib/cuitValidator';
+import {
+  CUSTOMER_DOC_TYPES,
+  CUSTOMER_IVA_CONDITIONS,
+  type Customer,
+  type CustomerDocType,
+  type CustomerIvaCondition,
+} from '@/types';
+
+interface FormState {
+  id?: string;
+  docType: CustomerDocType;
+  docNumber: string;
+  legalName: string;
+  ivaCondition: CustomerIvaCondition;
+  email: string;
+  notes: string;
+}
+
+const emptyForm: FormState = {
+  docType: 80,
+  docNumber: '',
+  legalName: '',
+  ivaCondition: 'consumidor_final',
+  email: '',
+  notes: '',
+};
+
+export default function Customers() {
+  const [customers, setCustomers] = useState<Customer[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [search, setSearch] = useState('');
+  const [modalOpen, setModalOpen] = useState(false);
+  const [form, setForm] = useState<FormState>(emptyForm);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    void load();
+  }, []);
+
+  async function load() {
+    setLoading(true);
+    try {
+      const list = await data.listCustomers({ activeOnly: true });
+      setCustomers(list);
+    } catch (err) {
+      toast.error((err as Error).message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  const filtered = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return customers;
+    return customers.filter(
+      (c) =>
+        c.legalName.toLowerCase().includes(q) ||
+        c.docNumber.includes(q.replace(/\D/g, '')),
+    );
+  }, [customers, search]);
+
+  function openNew() {
+    setForm(emptyForm);
+    setModalOpen(true);
+  }
+
+  function openEdit(c: Customer) {
+    setForm({
+      id: c.id,
+      docType: c.docType,
+      docNumber: c.docNumber,
+      legalName: c.legalName,
+      ivaCondition: c.ivaCondition,
+      email: c.email ?? '',
+      notes: c.notes ?? '',
+    });
+    setModalOpen(true);
+  }
+
+  function update<K extends keyof FormState>(key: K, value: FormState[K]) {
+    setForm((f) => ({ ...f, [key]: value }));
+  }
+
+  async function handleSubmit(e: FormEvent) {
+    e.preventDefault();
+
+    const docErr = validateDocument(form.docType, form.docNumber);
+    if (docErr) return toast.error(docErr);
+    if (!form.legalName.trim()) return toast.error('Razón social / nombre es obligatorio.');
+
+    setSaving(true);
+    try {
+      if (form.id) {
+        await data.updateCustomer(form.id, {
+          docType: form.docType,
+          docNumber: form.docNumber,
+          legalName: form.legalName.trim(),
+          ivaCondition: form.ivaCondition,
+          email: form.email.trim() || null,
+          notes: form.notes.trim() || null,
+        });
+        toast.success('Cliente actualizado');
+      } else {
+        await data.createCustomer({
+          docType: form.docType,
+          docNumber: form.docNumber,
+          legalName: form.legalName.trim(),
+          ivaCondition: form.ivaCondition,
+          email: form.email.trim() || null,
+          notes: form.notes.trim() || null,
+        });
+        toast.success('Cliente creado');
+      }
+      setModalOpen(false);
+      await load();
+    } catch (err) {
+      toast.error((err as Error).message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function handleDelete(c: Customer) {
+    const ok = await confirmDialog(`¿Desactivar cliente "${c.legalName}"?`, {
+      text: 'No vas a poder usarlo en nuevas facturas. Las facturas anteriores no se afectan.',
+      confirmText: 'Desactivar',
+      danger: true,
+    });
+    if (!ok) return;
+    try {
+      await data.deactivateCustomer(c.id);
+      toast.success('Cliente desactivado');
+      await load();
+    } catch (err) {
+      toast.error((err as Error).message);
+    }
+  }
+
+  const ivaLabel = (v: CustomerIvaCondition) =>
+    CUSTOMER_IVA_CONDITIONS.find((c) => c.value === v)?.label ?? v;
+  const docTypeLabel = (v: CustomerDocType) =>
+    CUSTOMER_DOC_TYPES.find((d) => d.value === v)?.label ?? String(v);
+
+  return (
+    <div>
+      <PageHeader
+        title="Clientes"
+        subtitle="Datos de receptores para Factura A/B. Los clientes esporádicos podés cargarlos directo al cobrar."
+        actions={
+          <Button onClick={openNew}>
+            <Plus className="h-4 w-4" />
+            Nuevo cliente
+          </Button>
+        }
+      />
+
+      <div className="mb-3 flex items-center gap-2">
+        <div className="relative flex-1 max-w-md">
+          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+          <Input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Buscar por nombre o CUIT/DNI…"
+            className="pl-9"
+          />
+        </div>
+      </div>
+
+      {loading ? (
+        <div className="text-sm text-slate-500">Cargando…</div>
+      ) : filtered.length === 0 ? (
+        <Empty
+          title={search ? 'Sin resultados' : 'Todavía no hay clientes'}
+          description={
+            search
+              ? 'Probá con otro nombre o documento.'
+              : 'Cargá tus clientes recurrentes para emitir Factura A con un click. Los clientes esporádicos podés cargarlos directo al cobrar en el POS.'
+          }
+        />
+      ) : (
+        <div className="overflow-x-auto rounded-lg border border-slate-200 bg-white">
+          <table className="w-full text-sm">
+            <thead className="bg-slate-50 text-left text-xs uppercase text-slate-500">
+              <tr>
+                <th className="px-3 py-2">Nombre / Razón social</th>
+                <th className="px-3 py-2">Documento</th>
+                <th className="px-3 py-2">Condición IVA</th>
+                <th className="px-3 py-2">Email</th>
+                <th className="px-3 py-2 w-24"></th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100">
+              {filtered.map((c) => (
+                <tr key={c.id} className="hover:bg-slate-50">
+                  <td className="px-3 py-2 font-medium text-navy">{c.legalName}</td>
+                  <td className="px-3 py-2 font-mono text-xs">
+                    {docTypeLabel(c.docType)} {c.docType === 80 || c.docType === 86 ? formatCuit(c.docNumber) : c.docNumber}
+                  </td>
+                  <td className="px-3 py-2">{ivaLabel(c.ivaCondition)}</td>
+                  <td className="px-3 py-2 text-slate-600">{c.email ?? '—'}</td>
+                  <td className="px-3 py-2 text-right">
+                    <button
+                      onClick={() => openEdit(c)}
+                      className="rounded p-1.5 text-slate-500 hover:bg-slate-200 hover:text-navy"
+                      title="Editar"
+                    >
+                      <Pencil className="h-4 w-4" />
+                    </button>
+                    <button
+                      onClick={() => handleDelete(c)}
+                      className="ml-1 rounded p-1.5 text-slate-500 hover:bg-red-100 hover:text-red-700"
+                      title="Desactivar"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      <Modal
+        open={modalOpen}
+        onClose={() => setModalOpen(false)}
+        title={form.id ? 'Editar cliente' : 'Nuevo cliente'}
+        widthClass="max-w-lg"
+      >
+        <form onSubmit={handleSubmit} className="space-y-3">
+          <div className="grid gap-3 md:grid-cols-2">
+            <Field label="Tipo de documento">
+              <select
+                className="h-10 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm"
+                value={form.docType}
+                onChange={(e) => update('docType', Number(e.target.value) as CustomerDocType)}
+              >
+                {CUSTOMER_DOC_TYPES.map((d) => (
+                  <option key={d.value} value={d.value}>
+                    {d.label}
+                  </option>
+                ))}
+              </select>
+            </Field>
+            <Field label="Número" hint={form.docType === 80 || form.docType === 86 ? '11 dígitos' : '7-8 dígitos'}>
+              <Input
+                value={form.docNumber}
+                onChange={(e) => update('docNumber', e.target.value.replace(/\D/g, ''))}
+                maxLength={11}
+              />
+            </Field>
+          </div>
+          <Field label="Razón social / Nombre">
+            <Input
+              value={form.legalName}
+              onChange={(e) => update('legalName', e.target.value)}
+              autoFocus
+            />
+          </Field>
+          <Field label="Condición frente al IVA">
+            <select
+              className="h-10 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm"
+              value={form.ivaCondition}
+              onChange={(e) => update('ivaCondition', e.target.value as CustomerIvaCondition)}
+            >
+              {CUSTOMER_IVA_CONDITIONS.map((c) => (
+                <option key={c.value} value={c.value}>
+                  {c.label}
+                </option>
+              ))}
+            </select>
+          </Field>
+          <div className="grid gap-3 md:grid-cols-2">
+            <Field label="Email (opcional)">
+              <Input
+                type="email"
+                value={form.email}
+                onChange={(e) => update('email', e.target.value)}
+              />
+            </Field>
+            <Field label="Notas (opcional)">
+              <Input
+                value={form.notes}
+                onChange={(e) => update('notes', e.target.value)}
+              />
+            </Field>
+          </div>
+
+          <div className="flex justify-end gap-2 pt-2">
+            <Button type="button" variant="outline" onClick={() => setModalOpen(false)}>
+              Cancelar
+            </Button>
+            <Button type="submit" disabled={saving}>
+              {saving ? 'Guardando…' : form.id ? 'Guardar cambios' : 'Crear cliente'}
+            </Button>
+          </div>
+        </form>
+      </Modal>
+    </div>
+  );
+}
+
+function Field({
+  label,
+  hint,
+  children,
+}: {
+  label: string;
+  hint?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <label className="block">
+      <div className="mb-1 text-xs font-medium text-slate-700">{label}</div>
+      {children}
+      {hint && <div className="mt-1 text-[11px] text-slate-500">{hint}</div>}
+    </label>
+  );
+}
