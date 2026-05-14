@@ -27,13 +27,19 @@
 import { createClient } from 'jsr:@supabase/supabase-js@2';
 import { getTicketAccess, type AfipEnv } from '../_shared/afip-wsaa.ts';
 import {
-  CBTE_TIPO,
-  COND_IVA_RECEPTOR,
+  AFIP_ANON_MAX_AMOUNT,
   DOC_TIPO,
   computeIvaBreakdown,
   feCAESolicitar,
   feCompUltimoAutorizado,
 } from '../_shared/afip-wsfev1.ts';
+import {
+  classifyVoucher,
+  isClassificationError,
+  type EmitterTaxCondition,
+  type ReceiverDocType,
+  type ReceiverIvaCondition,
+} from '../_shared/afip-letter.ts';
 
 const ALLOWED_ORIGINS = ['https://pos.trankasoft.com', 'http://localhost:5173'];
 
@@ -49,6 +55,10 @@ interface SaleRow {
   status: string;
   voided: boolean;
   created_at: string;
+  customer_doc_type: number | null;
+  customer_doc_number: string | null;
+  customer_legal_name: string | null;
+  customer_iva_condition: string | null;
 }
 
 interface SaleItemForIva {
@@ -80,6 +90,10 @@ function buildQrUrl(args: {
   fecha: string; // YYYY-MM-DD
   importe: number;
   cae: string;
+  /** Tipo de documento del receptor (99 si anónimo). */
+  tipoDocRec?: number;
+  /** Número de documento del receptor (0 si anónimo). */
+  nroDocRec?: number;
 }): string {
   const payload = {
     ver: 1,
@@ -91,13 +105,12 @@ function buildQrUrl(args: {
     importe: args.importe,
     moneda: 'PES',
     ctz: 1,
-    tipoDocRec: 99,
-    nroDocRec: 0,
+    tipoDocRec: args.tipoDocRec ?? 99,
+    nroDocRec: args.nroDocRec ?? 0,
     tipoCodAut: 'E',
     codAut: Number(args.cae),
   };
   const json = JSON.stringify(payload);
-  // btoa requiere string ASCII. JSON.stringify nos da eso para campos numéricos/strings simples.
   const b64 = btoa(json);
   return `https://www.afip.gob.ar/fe/qr/?p=${b64}`;
 }
@@ -157,10 +170,13 @@ Deno.serve(async (req) => {
       Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!,
     );
 
-    // Cargar sale
+    // Cargar sale (incluye snapshot del receptor para clasificar la letra)
     const { data: saleData, error: saleErr } = await admin
       .from('sales')
-      .select('id, tenant_id, total, discount, status, voided, created_at')
+      .select(
+        'id, tenant_id, total, discount, status, voided, created_at, ' +
+          'customer_doc_type, customer_doc_number, customer_legal_name, customer_iva_condition',
+      )
       .eq('id', body.saleId)
       .maybeSingle();
     if (saleErr) return jsonResponse({ error: saleErr.message }, 500);
@@ -206,12 +222,36 @@ Deno.serve(async (req) => {
     if (tenErr) return jsonResponse({ error: tenErr.message }, 500);
     const tenant = tenantData as TenantRow;
 
-    // Sprint A2: solo monotributo (Factura C). Otras condiciones en A3.
-    if (tenant.tax_condition !== 'monotributista') {
+    // Clasificar el voucher según matriz fiscal (emisor + receptor).
+    // Devuelve letter A/B/C + cbteTipo + docTipo/docNro + CondIVAReceptor,
+    // o un error explicativo si la combinación no es válida.
+    const classification = classifyVoucher(
+      tenant.tax_condition as EmitterTaxCondition,
+      {
+        docType: (sale.customer_doc_type as ReceiverDocType | null) ?? null,
+        docNumber: sale.customer_doc_number,
+        legalName: sale.customer_legal_name,
+        ivaCondition: sale.customer_iva_condition as ReceiverIvaCondition | null,
+      },
+    );
+    if (isClassificationError(classification)) {
+      return jsonResponse(
+        { error: classification.message, code: classification.code },
+        400,
+      );
+    }
+
+    // RG 5616/2024: Factura B a consumidor anónimo no puede superar un monto.
+    const totalNum = Number(sale.total);
+    if (
+      classification.letter === 'B' &&
+      classification.docTipo === DOC_TIPO.CONSUMIDOR_FINAL_ANONIMO &&
+      totalNum > AFIP_ANON_MAX_AMOUNT
+    ) {
       return jsonResponse(
         {
-          error:
-            'Por ahora solo soportamos emisión para tenants Monotributistas (Factura C). El soporte de A/B llega en breve.',
+          error: `Las facturas B a consumidor anónimo por más de $${AFIP_ANON_MAX_AMOUNT.toLocaleString('es-AR')} requieren identificar al receptor (DNI o CUIT). Volvé al carrito y agregá los datos del cliente.`,
+          code: 'RECEPTOR_REQUIRED',
         },
         400,
       );
@@ -237,7 +277,7 @@ Deno.serve(async (req) => {
         tenant_id: tenantId,
         sale_id: sale.id,
         doc_type: 'factura',
-        doc_letter: 'C',
+        doc_letter: classification.letter,
         sales_point: ptoVta,
         status: 'pending',
       })
@@ -257,21 +297,17 @@ Deno.serve(async (req) => {
       });
       const auth = { ta, cuit, env };
 
-      // WSFEv1: obtener último número autorizado
-      const last = await feCompUltimoAutorizado(auth, ptoVta, CBTE_TIPO.FACTURA_C);
+      // WSFEv1: obtener último número autorizado para este tipo+PV
+      const last = await feCompUltimoAutorizado(auth, ptoVta, classification.cbteTipo);
       const nextNumber = last + 1;
 
-      // Importes para Factura C (monotributo, sin discriminar IVA)
       const total = Number(sale.total);
       if (!Number.isFinite(total) || total <= 0) {
         throw new Error(`Sale.total inválido: ${sale.total}`);
       }
       const saleDiscount = Number(sale.discount ?? 0);
 
-      // A3.1 plumbing: cargar items con tax_rate y precalcular breakdown IVA.
-      // Para Factura C el resultado NO se usa (la C no discrimina IVA), pero
-      // dejamos el helper validándose con datos reales para detectar problemas
-      // antes de A3.4 (cuando emitamos A/B y sí lo mandemos al request).
+      // Cargar items con tax_rate para calcular bloque IVA (A/B) o validar (C).
       const { data: itemRows } = await admin
         .from('sale_items')
         .select('subtotal, product_id, products(tax_rate)')
@@ -281,18 +317,33 @@ Deno.serve(async (req) => {
         product_id: string;
         products?: { tax_rate: string | number } | { tax_rate: string | number }[] | null;
       }>).map((it) => {
-        // products viene como objeto si la relación es 1:1, o array si Supabase la trata como many.
         const productRel = Array.isArray(it.products) ? it.products[0] : it.products;
         const rate = productRel?.tax_rate != null ? Number(productRel.tax_rate) : 21;
         return { subtotal: Number(it.subtotal), taxRate: rate };
       });
-      try {
+
+      // Para A/B: discriminamos IVA con el helper. Para C: no se manda bloque
+      // y ImpNeto = total, ImpIVA = 0.
+      let impNeto: number;
+      let impIVA: number;
+      let impTotal: number;
+      let ivaForRequest: { id: number; baseImp: number; importe: number }[] | undefined;
+
+      if (classification.letter === 'C') {
+        impNeto = total;
+        impIVA = 0;
+        impTotal = total;
+        ivaForRequest = undefined;
+      } else {
+        // A o B: calculamos breakdown
         const breakdown = computeIvaBreakdown(itemsForIva, saleDiscount, total);
+        impNeto = breakdown.impNeto;
+        impIVA = breakdown.impIVA;
+        impTotal = breakdown.impTotal;
+        ivaForRequest = breakdown.alicuotas;
         console.log(
-          `[A3.1 plumbing] Breakdown IVA: neto=${breakdown.impNeto} iva=${breakdown.impIVA} total=${breakdown.impTotal} alic=${JSON.stringify(breakdown.alicuotas)}`,
+          `[A3.4] Factura ${classification.letter}: neto=${impNeto} iva=${impIVA} total=${impTotal} alic=${JSON.stringify(breakdown.alicuotas)}`,
         );
-      } catch (err) {
-        console.warn(`[A3.1 plumbing] computeIvaBreakdown falló: ${(err as Error).message}`);
       }
 
       // Fecha del comprobante: hoy (AFIP acepta ±5 días)
@@ -301,22 +352,22 @@ Deno.serve(async (req) => {
       const cbteFchIso = `${cbteFch.slice(0, 4)}-${cbteFch.slice(4, 6)}-${cbteFch.slice(6, 8)}`;
 
       const resp = await feCAESolicitar(auth, ptoVta, nextNumber, {
-        cbteTipo: CBTE_TIPO.FACTURA_C,
+        cbteTipo: classification.cbteTipo,
         ptoVta,
         concepto: 1, // 1 = Productos
-        docTipo: DOC_TIPO.CONSUMIDOR_FINAL_ANONIMO,
-        docNro: '0',
+        docTipo: classification.docTipo,
+        docNro: classification.docNro,
         cbteFch,
-        impTotal: total,
-        impNeto: total,
-        impIVA: 0,
+        impTotal,
+        impNeto,
+        impIVA,
         impTotConc: 0,
         impOpEx: 0,
         impTrib: 0,
         monId: 'PES',
         monCotiz: 1,
-        // RG 5616/2024: obligatorio. Factura C a anónimo → Consumidor Final.
-        condicionIVAReceptorId: COND_IVA_RECEPTOR.CONSUMIDOR_FINAL,
+        condicionIVAReceptorId: classification.condicionIVAReceptorId,
+        iva: ivaForRequest,
       });
 
       if (resp.resultado !== 'A') {
@@ -352,15 +403,17 @@ Deno.serve(async (req) => {
         })
         .eq('id', docRow.id);
 
-      // Construir QR fiscal AFIP
+      // Construir QR fiscal AFIP — con tipo real y datos del receptor reales.
       const qrUrl = buildQrUrl({
         cuit,
         ptoVta,
-        tipoCmp: CBTE_TIPO.FACTURA_C,
+        tipoCmp: classification.cbteTipo,
         nroCmp: nextNumber,
         fecha: cbteFchIso,
-        importe: total,
+        importe: impTotal,
         cae: resp.cae,
+        tipoDocRec: classification.docTipo,
+        nroDocRec: classification.docNro === '0' ? 0 : Number(classification.docNro),
       });
 
       return jsonResponse(
@@ -371,9 +424,16 @@ Deno.serve(async (req) => {
           voucherNumber: nextNumber,
           caeDueDate: caeFchVtoIso,
           ptoVta,
-          cbteTipo: 'C',
+          cbteTipo: classification.letter,
           qrUrl,
           environment: env,
+          // Snapshot del receptor (para que el frontend muestre el bloque en A)
+          receiver: classification.docNro !== '0' ? {
+            docType: classification.docTipo,
+            docNumber: classification.docNro,
+            legalName: sale.customer_legal_name ?? null,
+            ivaCondition: sale.customer_iva_condition ?? null,
+          } : null,
         },
         200,
       );

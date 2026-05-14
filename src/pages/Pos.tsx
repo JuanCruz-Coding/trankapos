@@ -852,6 +852,13 @@ interface AfipDocState {
   cbteTipo?: string;
   qrUrl?: string;
   error?: string;
+  /** Datos del receptor para mostrar en ticket Factura A/B identificada. */
+  receiver?: {
+    docType: number;
+    docNumber: string;
+    legalName: string | null;
+    ivaCondition: string | null;
+  } | null;
 }
 
 function useAfipDocumentFor(sale: Sale | null): AfipDocState {
@@ -881,6 +888,15 @@ function useAfipDocumentFor(sale: Sale | null): AfipDocState {
             caeDueDate: existing.cae_due_date,
             ptoVta: existing.sales_point,
             cbteTipo: existing.doc_letter,
+            // Reconstruimos el receptor desde la sale (snapshot guardado).
+            receiver: sale.customerDocNumber
+              ? {
+                  docType: sale.customerDocType ?? 99,
+                  docNumber: sale.customerDocNumber,
+                  legalName: sale.customerLegalName ?? null,
+                  ivaCondition: sale.customerIvaCondition ?? null,
+                }
+              : null,
           });
           return;
         }
@@ -921,6 +937,12 @@ function useAfipDocumentFor(sale: Sale | null): AfipDocState {
           cbteTipo?: string;
           qrUrl?: string;
           error?: string;
+          receiver?: {
+            docType: number;
+            docNumber: string;
+            legalName: string | null;
+            ivaCondition: string | null;
+          } | null;
         };
         if (cancelled) return;
         if (!res.ok || !body.ok) {
@@ -935,6 +957,7 @@ function useAfipDocumentFor(sale: Sale | null): AfipDocState {
           ptoVta: body.ptoVta,
           cbteTipo: body.cbteTipo,
           qrUrl: body.qrUrl,
+          receiver: body.receiver ?? null,
         });
       } catch (err) {
         if (!cancelled) setState({ status: 'rejected', error: (err as Error).message });
@@ -999,6 +1022,24 @@ function ReceiptModal({
           <div>{new Date(sale.createdAt).toLocaleString('es-AR')}</div>
           <div>#{sale.id.slice(0, 8)}</div>
         </div>
+        {/* Bloque Receptor — visible en Factura A y B identificada */}
+        {afip.status === 'authorized' && afip.receiver && (
+          <>
+            <hr className="my-2 border-dashed" />
+            <div className="text-[10px]">
+              <div><strong>Cliente:</strong> {afip.receiver.legalName ?? 'Sin nombre'}</div>
+              <div>
+                <strong>{afip.receiver.docType === 80 ? 'CUIT' : afip.receiver.docType === 86 ? 'CUIL' : 'DNI'}:</strong>{' '}
+                {afip.receiver.docNumber}
+              </div>
+              {afip.receiver.ivaCondition && (
+                <div className="text-slate-600">
+                  {labelIvaCondition(afip.receiver.ivaCondition)}
+                </div>
+              )}
+            </div>
+          </>
+        )}
         <hr className="my-2 border-dashed" />
         {sale.items.map((it) => (
           <div key={it.id} className="mb-1">
@@ -1023,6 +1064,27 @@ function ReceiptModal({
             <span>-{formatARS(sale.discount)}</span>
           </div>
         )}
+        {/* IVA discriminado — sólo en Factura A. En B/C el precio ya incluye IVA. */}
+        {afip.status === 'authorized' && afip.cbteTipo === 'A' && (() => {
+          // Estimación: el total incluye IVA al 21% (asumiendo todos 21% en MVP).
+          // Para precisión real, la API podría devolver el breakdown en la respuesta.
+          // Por ahora lo recalculamos a partir del total.
+          const totalConIva = sale.total;
+          const baseImp = Math.round((totalConIva / 1.21) * 100) / 100;
+          const iva = Math.round((totalConIva - baseImp) * 100) / 100;
+          return (
+            <>
+              <div className="flex justify-between text-[10px] text-slate-600">
+                <span>Neto</span>
+                <span>{formatARS(baseImp)}</span>
+              </div>
+              <div className="flex justify-between text-[10px] text-slate-600">
+                <span>IVA 21%</span>
+                <span>{formatARS(iva)}</span>
+              </div>
+            </>
+          );
+        })()}
         <div className="flex justify-between text-sm font-bold">
           <span>TOTAL</span>
           <span>{formatARS(sale.total)}</span>
@@ -1089,4 +1151,15 @@ function ReceiptModal({
       </div>
     </Modal>
   );
+}
+
+function labelIvaCondition(cond: string): string {
+  switch (cond) {
+    case 'responsable_inscripto': return 'Responsable Inscripto';
+    case 'monotributista': return 'Monotributista';
+    case 'exento': return 'Exento';
+    case 'consumidor_final': return 'Consumidor Final';
+    case 'no_categorizado': return 'No Categorizado';
+    default: return cond;
+  }
 }
