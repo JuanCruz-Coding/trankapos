@@ -111,10 +111,16 @@ export default function Pos() {
     amount: number;
   } | null>(null);
 
+  // refreshKey: bump después de cada venta para forzar refetch de stock/products
+  // (useLiveQuery solo se entera de cambios en Dexie local, no de cambios remotos
+  // en Supabase. Sin esto, después de cobrar el stock visible queda desactualizado
+  // hasta refrescar la página).
+  const [refreshKey, setRefreshKey] = useState(0);
+
   const products = useLiveQuery(async () => {
     if (!session) return [];
     return data.listProducts();
-  }, [session?.tenantId]);
+  }, [session?.tenantId, refreshKey]);
 
   // El POS resta del warehouse default de la branch activa.
   const defaultWarehouse = useLiveQuery(async () => {
@@ -125,12 +131,12 @@ export default function Pos() {
   const stock = useLiveQuery(async () => {
     if (!defaultWarehouse) return [];
     return data.listStock(defaultWarehouse.id);
-  }, [defaultWarehouse?.id]);
+  }, [defaultWarehouse?.id, refreshKey]);
 
   const openRegister = useLiveQuery(async () => {
     if (!activeBranchId) return null;
     return data.currentOpenRegister(activeBranchId);
-  }, [activeBranchId, lines.length]);
+  }, [activeBranchId, lines.length, refreshKey]);
 
   const stockByProduct = useMemo(() => {
     const map = new Map<string, number>();
@@ -506,6 +512,7 @@ export default function Pos() {
           setPayModal(false);
           clear();
           setLastSale(sale);
+          setRefreshKey((k) => k + 1);
           toast.success('Venta registrada');
         }}
         onPayWithQR={(items, globalDiscount, amount) => {
@@ -526,6 +533,7 @@ export default function Pos() {
             setQrCharge(null);
             clear();
             setLastSale(sale);
+            setRefreshKey((k) => k + 1);
             toast.success('Cobro QR confirmado');
           }}
         />
