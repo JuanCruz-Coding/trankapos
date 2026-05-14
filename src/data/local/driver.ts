@@ -24,7 +24,10 @@ import type {
 } from '@/types';
 import type {
   AddPaymentInput,
+  AfipContingencySummary,
+  AfipDocumentDetail,
   AfipDocumentSummary,
+  AfipDocumentsQuery,
   BranchInput,
   CashMovementInput,
   CategoryInput,
@@ -36,6 +39,8 @@ import type {
   LoginInput,
   OpenRegisterInput,
   ProductInput,
+  RetryDocumentInput,
+  RetryResult,
   SaleInput,
   SalesQuery,
   SignupInput,
@@ -1220,5 +1225,23 @@ export class LocalDriver implements DataDriver {
   async emitCreditNote(_input: CreditNoteInput): Promise<CreditNoteResult> {
     await this.requireSession();
     throw new Error('La emisión de comprobantes AFIP requiere modo online.');
+  }
+
+  // --- AFIP A5a: contingencia / historial / retry ---
+  // Modo offline: no hay documentos AFIP. Summary en ceros, listado vacío,
+  // retry no disponible.
+  async getAfipContingencySummary(): Promise<AfipContingencySummary> {
+    await this.requireSession();
+    return { rejectedCount: 0, oldestRejectedAt: null };
+  }
+
+  async listAfipDocuments(_q: AfipDocumentsQuery): Promise<AfipDocumentDetail[]> {
+    await this.requireSession();
+    return [];
+  }
+
+  async retryAfipDocument(_input: RetryDocumentInput): Promise<RetryResult> {
+    await this.requireSession();
+    throw new Error('El reintento de comprobantes AFIP requiere modo online.');
   }
 }

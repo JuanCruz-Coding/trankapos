@@ -29,7 +29,10 @@ import type {
 } from '@/types';
 import type {
   AddPaymentInput,
+  AfipContingencySummary,
+  AfipDocumentDetail,
   AfipDocumentSummary,
+  AfipDocumentsQuery,
   BranchInput,
   CashMovementInput,
   CategoryInput,
@@ -41,6 +44,8 @@ import type {
   LoginInput,
   OpenRegisterInput,
   ProductInput,
+  RetryDocumentInput,
+  RetryResult,
   SaleInput,
   SalesQuery,
   SignupInput,
@@ -1648,5 +1653,22 @@ class SupabaseDriver implements DataDriver {
       throw new Error(`Error HTTP ${res.status}`);
     }
     return body;
+  }
+
+  // --- AFIP A5a: contingencia / historial / retry ---
+  // STUB del Paso 0 — implementación real en Pieza B del agent-team A5a.
+  async getAfipContingencySummary(): Promise<AfipContingencySummary> {
+    await this.requireSession();
+    throw new Error('getAfipContingencySummary no implementado todavía (A5a Pieza B)');
+  }
+
+  async listAfipDocuments(_q: AfipDocumentsQuery): Promise<AfipDocumentDetail[]> {
+    await this.requireSession();
+    throw new Error('listAfipDocuments no implementado todavía (A5a Pieza B)');
+  }
+
+  async retryAfipDocument(_input: RetryDocumentInput): Promise<RetryResult> {
+    await this.requireSession();
+    throw new Error('retryAfipDocument no implementado todavía (A5a Pieza B)');
   }
 }

@@ -131,6 +131,46 @@ export type CreditNoteInput =
   // NC manual sobre una factura (sin anular la venta entera).
   | { mode: 'manual'; afipDocumentId: string; reason?: string };
 
+// --- AFIP A5a: contingencia / historial / retry ---
+
+/** Resumen de contingencia para el banner de estado AFIP. */
+export interface AfipContingencySummary {
+  /** Comprobantes en estado 'rejected' del ambiente actual. */
+  rejectedCount: number;
+  /** created_at del rejected más viejo, o null si no hay. */
+  oldestRejectedAt: string | null;
+}
+
+/** Fila del historial de comprobantes AFIP (incluye campos de contingencia). */
+export interface AfipDocumentDetail extends AfipDocumentSummary {
+  retryCount: number;
+  lastRetryAt: string | null;
+  environment: 'homologation' | 'production' | null;
+  emittedAt: string | null;
+}
+
+/** Filtros para listar el historial de comprobantes. */
+export interface AfipDocumentsQuery {
+  status?: 'pending' | 'authorized' | 'rejected' | 'cancelled';
+  docType?: 'factura' | 'nota_credito' | 'nota_debito';
+  from?: string;
+  to?: string;
+  limit?: number;
+  offset?: number;
+}
+
+/** Input para reintentar la emisión de un comprobante. */
+export type RetryDocumentInput =
+  | { documentId: string }
+  | { saleId: string };
+
+/** Resultado de un reintento de emisión. */
+export interface RetryResult {
+  ok: boolean;
+  documentId?: string;
+  error?: string;
+}
+
 /** Resultado de emitir una Nota de Crédito. */
 export interface CreditNoteResult {
   ok: boolean;
@@ -286,4 +326,12 @@ export interface DataDriver {
   listAfipDocumentsForSale(saleId: string): Promise<AfipDocumentSummary[]>;
   /** Emite una Nota de Crédito (anulando la venta o manual sobre una factura). */
   emitCreditNote(input: CreditNoteInput): Promise<CreditNoteResult>;
+
+  // --- AFIP A5a: contingencia / historial / retry ---
+  /** Resumen para el banner: cuántos comprobantes quedaron rejected. */
+  getAfipContingencySummary(): Promise<AfipContingencySummary>;
+  /** Historial de comprobantes AFIP del tenant, con filtros. */
+  listAfipDocuments(q: AfipDocumentsQuery): Promise<AfipDocumentDetail[]>;
+  /** Reintenta la emisión de un comprobante rejected (o emite uno nuevo para una sale sin doc). */
+  retryAfipDocument(input: RetryDocumentInput): Promise<RetryResult>;
 }
