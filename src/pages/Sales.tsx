@@ -4,6 +4,7 @@ import { Ban, CircleDollarSign, Eye, FileMinus, Receipt, X } from 'lucide-react'
 import { Modal } from '@/components/ui/Modal';
 import { Button } from '@/components/ui/Button';
 import { PageHeader } from '@/components/ui/PageHeader';
+import { Tooltip } from '@/components/ui/Tooltip';
 import { ReceiptModal } from '@/components/pos/ReceiptModal';
 import { data } from '@/data';
 import { useAuth } from '@/stores/auth';
@@ -239,47 +240,52 @@ export default function Sales() {
                     <td className="px-4 py-3 text-right">
                       <div className="flex justify-end gap-1">
                         {!s.voided && s.status === 'partial' && (
-                          <button
-                            onClick={() => setCollectFor(s)}
-                            className="rounded-md p-2 text-emerald-600 hover:bg-emerald-50"
-                            title="Cobrar saldo"
-                          >
-                            <CircleDollarSign className="h-4 w-4" />
-                          </button>
+                          <Tooltip label="Cobrar saldo">
+                            <button
+                              onClick={() => setCollectFor(s)}
+                              className="rounded-md p-2 text-emerald-600 hover:bg-emerald-50"
+                            >
+                              <CircleDollarSign className="h-4 w-4" />
+                            </button>
+                          </Tooltip>
                         )}
-                        <button
-                          onClick={() => setView(s)}
-                          className="rounded-md p-2 text-slate-500 hover:bg-slate-100"
-                          title="Ver detalle"
-                        >
-                          <Eye className="h-4 w-4" />
-                        </button>
-                        <button
-                          onClick={() => setTicketFor(s)}
-                          className="rounded-md p-2 text-slate-500 hover:bg-slate-100"
-                          title="Ver ticket / factura"
-                        >
-                          <Receipt className="h-4 w-4" />
-                        </button>
-                        {canEmitCreditNote && canVoidSales && (
+                        <Tooltip label="Ver detalle">
                           <button
-                            onClick={() => handleEmitCreditNote(s)}
-                            disabled={isBusy}
-                            className="rounded-md p-2 text-slate-500 hover:bg-amber-50 hover:text-amber-700 disabled:opacity-40"
-                            title="Emitir Nota de Crédito"
+                            onClick={() => setView(s)}
+                            className="rounded-md p-2 text-slate-500 hover:bg-slate-100"
                           >
-                            <FileMinus className="h-4 w-4" />
+                            <Eye className="h-4 w-4" />
                           </button>
+                        </Tooltip>
+                        <Tooltip label="Ver ticket / factura">
+                          <button
+                            onClick={() => setTicketFor(s)}
+                            className="rounded-md p-2 text-slate-500 hover:bg-slate-100"
+                          >
+                            <Receipt className="h-4 w-4" />
+                          </button>
+                        </Tooltip>
+                        {canEmitCreditNote && canVoidSales && (
+                          <Tooltip label="Emitir Nota de Crédito">
+                            <button
+                              onClick={() => handleEmitCreditNote(s)}
+                              disabled={isBusy}
+                              className="rounded-md p-2 text-slate-500 hover:bg-amber-50 hover:text-amber-700 disabled:opacity-40"
+                            >
+                              <FileMinus className="h-4 w-4" />
+                            </button>
+                          </Tooltip>
                         )}
                         {!s.voided && canVoidSales && (
-                          <button
-                            onClick={() => handleVoid(s)}
-                            disabled={isBusy}
-                            className="rounded-md p-2 text-slate-500 hover:bg-red-50 hover:text-red-600 disabled:opacity-40"
-                            title="Anular venta"
-                          >
-                            <Ban className="h-4 w-4" />
-                          </button>
+                          <Tooltip label="Anular venta">
+                            <button
+                              onClick={() => handleVoid(s)}
+                              disabled={isBusy}
+                              className="rounded-md p-2 text-slate-500 hover:bg-red-50 hover:text-red-600 disabled:opacity-40"
+                            >
+                              <Ban className="h-4 w-4" />
+                            </button>
+                          </Tooltip>
                         )}
                       </div>
                     </td>
