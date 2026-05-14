@@ -12,6 +12,9 @@ import {
   ExternalLink,
   CheckCircle2,
   XCircle,
+  FileText,
+  Loader2,
+  AlertTriangle,
 } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
@@ -26,7 +29,7 @@ import { TAX_CONDITIONS, type TaxCondition, type Tenant, type TenantSettingsInpu
 import { cn } from '@/lib/utils';
 import { LOGO_REQUIREMENTS_TEXT, validateLogoFile } from '@/lib/imageUpload';
 
-type Tab = 'empresa' | 'ticket' | 'pos' | 'stock' | 'pagos';
+type Tab = 'empresa' | 'ticket' | 'pos' | 'stock' | 'pagos' | 'facturacion';
 
 const TABS: { id: Tab; label: string; icon: typeof Building2 }[] = [
   { id: 'empresa', label: 'Empresa', icon: Building2 },
@@ -34,6 +37,7 @@ const TABS: { id: Tab; label: string; icon: typeof Building2 }[] = [
   { id: 'pos', label: 'POS', icon: ShoppingCart },
   { id: 'stock', label: 'Stock', icon: Boxes },
   { id: 'pagos', label: 'Pagos', icon: CreditCard },
+  { id: 'facturacion', label: 'Facturación', icon: FileText },
 ];
 
 interface FormState {
@@ -212,6 +216,12 @@ export default function Settings() {
         <Card>
           <CardBody>
             <PagosTab />
+          </CardBody>
+        </Card>
+      ) : tab === 'facturacion' ? (
+        <Card>
+          <CardBody>
+            <FacturacionTab />
           </CardBody>
         </Card>
       ) : (
@@ -828,5 +838,352 @@ function CheckRow({
         {hint && <div className="mt-0.5 text-xs text-slate-500">{hint}</div>}
       </div>
     </label>
+  );
+}
+
+// =====================================================================
+// Tab Facturación — integración AFIP (homologación / producción)
+// =====================================================================
+interface AfipStatus {
+  configured: boolean;
+  cuit?: string;
+  salesPoint?: number;
+  environment?: 'homologation' | 'production';
+  isActive?: boolean;
+  lastTestAt?: string | null;
+  lastTestOk?: boolean | null;
+  lastTestError?: string | null;
+}
+
+function FacturacionTab() {
+  const [status, setStatus] = useState<AfipStatus | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [testing, setTesting] = useState(false);
+
+  // Form para subir nuevas credenciales
+  const [cuit, setCuit] = useState('');
+  const [salesPoint, setSalesPoint] = useState('1');
+  const [environment, setEnvironment] = useState<'homologation' | 'production'>('homologation');
+  const [certPem, setCertPem] = useState('');
+  const [keyPem, setKeyPem] = useState('');
+
+  useEffect(() => {
+    void refresh();
+  }, []);
+
+  async function refresh() {
+    setLoading(true);
+    try {
+      const sb = getSupabase();
+      const { data: row, error } = await sb
+        .from('tenant_afip_credentials')
+        .select('cuit, sales_point, environment, is_active, last_test_at, last_test_ok, last_test_error')
+        .maybeSingle();
+      if (error) throw error;
+      if (row) {
+        setStatus({
+          configured: true,
+          cuit: row.cuit,
+          salesPoint: row.sales_point,
+          environment: row.environment,
+          isActive: row.is_active,
+          lastTestAt: row.last_test_at,
+          lastTestOk: row.last_test_ok,
+          lastTestError: row.last_test_error,
+        });
+        setCuit(row.cuit);
+        setSalesPoint(String(row.sales_point));
+        setEnvironment(row.environment);
+      } else {
+        setStatus({ configured: false });
+      }
+    } catch (err) {
+      toast.error((err as Error).message);
+      setStatus({ configured: false });
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function readFileAsText(file: File): Promise<string> {
+    return await new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result ?? ''));
+      reader.onerror = () => reject(reader.error);
+      reader.readAsText(file);
+    });
+  }
+
+  async function handleCertFile(e: ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    e.target.value = '';
+    try {
+      const text = await readFileAsText(file);
+      if (!text.includes('-----BEGIN CERTIFICATE-----')) {
+        toast.error('El archivo no parece un certificado PEM.');
+        return;
+      }
+      setCertPem(text);
+    } catch (err) {
+      toast.error((err as Error).message);
+    }
+  }
+
+  async function handleKeyFile(e: ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    e.target.value = '';
+    try {
+      const text = await readFileAsText(file);
+      if (!text.includes('PRIVATE KEY')) {
+        toast.error('El archivo no parece una clave privada PEM.');
+        return;
+      }
+      setKeyPem(text);
+    } catch (err) {
+      toast.error((err as Error).message);
+    }
+  }
+
+  async function handleSave() {
+    if (!/^[0-9]{11}$/.test(cuit)) {
+      toast.error('CUIT inválido. Deben ser 11 dígitos sin guiones.');
+      return;
+    }
+    const sp = Number(salesPoint);
+    if (!Number.isInteger(sp) || sp <= 0) {
+      toast.error('Punto de venta inválido.');
+      return;
+    }
+    if (!certPem || !keyPem) {
+      toast.error('Subí el certificado y la clave privada.');
+      return;
+    }
+
+    setSaving(true);
+    try {
+      const sb = getSupabase();
+      const { data: sessionData } = await sb.auth.getSession();
+      const token = sessionData.session?.access_token;
+      if (!token) throw new Error('No autenticado');
+
+      const url = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/afip-set-credentials`;
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+          apikey: import.meta.env.VITE_SUPABASE_ANON_KEY ?? '',
+        },
+        body: JSON.stringify({
+          cuit,
+          salesPoint: sp,
+          environment,
+          certPem,
+          keyPem,
+        }),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body?.error ?? `Error HTTP ${res.status}`);
+      toast.success('Credenciales AFIP guardadas');
+      // Limpiamos los inputs sensibles para no dejarlos en memoria del browser
+      setCertPem('');
+      setKeyPem('');
+      await refresh();
+    } catch (err) {
+      toast.error((err as Error).message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function handleTest() {
+    setTesting(true);
+    try {
+      const sb = getSupabase();
+      const { data: sessionData } = await sb.auth.getSession();
+      const token = sessionData.session?.access_token;
+      if (!token) throw new Error('No autenticado');
+
+      const url = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/afip-test-connection`;
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+          apikey: import.meta.env.VITE_SUPABASE_ANON_KEY ?? '',
+        },
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body?.error ?? `Error HTTP ${res.status}`);
+      if (body.ok) {
+        toast.success(`Conexión AFIP OK (token vence ${new Date(body.tokenExpiresAt).toLocaleString('es-AR')})`);
+      } else {
+        toast.error(`AFIP rechazó: ${body.error}`);
+      }
+      await refresh();
+    } catch (err) {
+      toast.error((err as Error).message);
+    } finally {
+      setTesting(false);
+    }
+  }
+
+  if (loading) {
+    return <div className="text-sm text-slate-500">Cargando estado AFIP…</div>;
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="rounded-lg border border-slate-200 p-4">
+        <div className="flex items-start gap-3">
+          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-indigo-100 text-indigo-700">
+            <FileText className="h-5 w-5" />
+          </div>
+          <div className="flex-1">
+            <div className="flex flex-wrap items-center gap-2">
+              <h3 className="font-display text-base font-bold text-navy">AFIP — Factura Electrónica</h3>
+              {status?.configured ? (
+                status.lastTestOk === true ? (
+                  <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-700">
+                    <CheckCircle2 className="h-3 w-3" />
+                    Conexión OK
+                  </span>
+                ) : status.lastTestOk === false ? (
+                  <span className="inline-flex items-center gap-1 rounded-full bg-red-50 px-2 py-0.5 text-xs font-medium text-red-700">
+                    <XCircle className="h-3 w-3" />
+                    Conexión falló
+                  </span>
+                ) : (
+                  <span className="inline-flex items-center gap-1 rounded-full bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-700">
+                    <AlertTriangle className="h-3 w-3" />
+                    Sin probar
+                  </span>
+                )
+              ) : (
+                <span className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600">
+                  <XCircle className="h-3 w-3" />
+                  Sin configurar
+                </span>
+              )}
+              {status?.environment && (
+                <span className={cn(
+                  'rounded-full px-2 py-0.5 text-xs font-medium',
+                  status.environment === 'production'
+                    ? 'bg-emerald-50 text-emerald-700'
+                    : 'bg-amber-50 text-amber-700',
+                )}>
+                  {status.environment === 'production' ? 'Producción' : 'Homologación'}
+                </span>
+              )}
+            </div>
+            <p className="mt-1 text-sm text-slate-600">
+              Conectá tu CUIT y certificado AFIP para emitir comprobantes fiscales (Factura A/B/C,
+              Notas de Crédito/Débito) directo desde el POS. Generá el certificado en el portal de
+              AFIP con tu Clave Fiscal (servicio "Administración de Certificados Digitales").
+            </p>
+
+            {status?.configured && (
+              <div className="mt-3 rounded-lg bg-slate-50 p-3 text-xs text-slate-600">
+                <div><strong>CUIT:</strong> {status.cuit ?? '—'}</div>
+                <div><strong>Punto de venta:</strong> {status.salesPoint ?? '—'}</div>
+                {status.lastTestAt && (
+                  <div>
+                    <strong>Último test:</strong>{' '}
+                    {new Date(status.lastTestAt).toLocaleString('es-AR')}
+                    {status.lastTestOk === false && status.lastTestError && (
+                      <div className="mt-1 break-words text-red-700">
+                        {status.lastTestError}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* Form de carga */}
+      <div className="rounded-lg border border-slate-200 p-4">
+        <h4 className="mb-3 font-display text-sm font-bold text-navy">
+          {status?.configured ? 'Actualizar credenciales' : 'Cargar credenciales'}
+        </h4>
+        <div className="grid gap-4 md:grid-cols-2">
+          <Field label="CUIT" hint="11 dígitos sin guiones (ej. 20123456789)">
+            <Input value={cuit} onChange={(e) => setCuit(e.target.value.replace(/\D/g, ''))} maxLength={11} />
+          </Field>
+          <Field label="Punto de venta" hint="El que diste de alta en AFIP">
+            <Input
+              type="number"
+              min="1"
+              value={salesPoint}
+              onChange={(e) => setSalesPoint(e.target.value)}
+            />
+          </Field>
+          <Field label="Ambiente" className="md:col-span-2">
+            <select
+              className="h-10 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm"
+              value={environment}
+              onChange={(e) => setEnvironment(e.target.value as 'homologation' | 'production')}
+            >
+              <option value="homologation">Homologación (pruebas)</option>
+              <option value="production">Producción (comprobantes reales)</option>
+            </select>
+          </Field>
+          <Field label="Certificado (.crt / .pem)" hint="Archivo PEM generado en AFIP">
+            <div className="space-y-1">
+              <input
+                type="file"
+                accept=".crt,.pem,.cer,application/x-x509-ca-cert,application/x-pem-file"
+                onChange={handleCertFile}
+                className="block w-full text-sm text-slate-600 file:mr-3 file:rounded-md file:border-0 file:bg-slate-100 file:px-3 file:py-2 file:text-sm file:font-medium file:text-slate-700 hover:file:bg-slate-200"
+              />
+              {certPem && (
+                <div className="text-xs text-emerald-700">
+                  ✓ Certificado cargado ({certPem.length} bytes)
+                </div>
+              )}
+            </div>
+          </Field>
+          <Field label="Clave privada (.key)" hint="Archivo PEM de tu clave privada">
+            <div className="space-y-1">
+              <input
+                type="file"
+                accept=".key,.pem"
+                onChange={handleKeyFile}
+                className="block w-full text-sm text-slate-600 file:mr-3 file:rounded-md file:border-0 file:bg-slate-100 file:px-3 file:py-2 file:text-sm file:font-medium file:text-slate-700 hover:file:bg-slate-200"
+              />
+              {keyPem && (
+                <div className="text-xs text-emerald-700">
+                  ✓ Clave cargada ({keyPem.length} bytes)
+                </div>
+              )}
+            </div>
+          </Field>
+        </div>
+
+        <div className="mt-4 flex flex-wrap gap-2">
+          <Button onClick={handleSave} disabled={saving || !certPem || !keyPem}>
+            <Save className="h-4 w-4" />
+            {saving ? 'Guardando…' : 'Guardar credenciales'}
+          </Button>
+          {status?.configured && (
+            <Button variant="outline" onClick={handleTest} disabled={testing}>
+              {testing ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />}
+              {testing ? 'Probando…' : 'Probar conexión'}
+            </Button>
+          )}
+        </div>
+
+        <p className="mt-3 text-xs text-slate-500">
+          🔒 El certificado y la clave se guardan <strong>encriptados</strong> en nuestra base.
+          La clave de cifrado vive solo en el servidor, no en la base. Solo el owner puede
+          configurar AFIP.
+        </p>
+      </div>
+    </div>
   );
 }
