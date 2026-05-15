@@ -34,6 +34,8 @@ import type {
   CloseRegisterInput,
   CreditNoteInput,
   CreditNoteResult,
+  AfipPadronResult,
+  ConsultAfipPadronInput,
   CustomerInput,
   DataDriver,
   GenerateCsrInput,
@@ -1261,5 +1263,11 @@ export class LocalDriver implements DataDriver {
   ): Promise<UploadAfipCertificateResult> {
     await this.requireSession();
     throw new Error('El onboarding AFIP requiere modo online.');
+  }
+
+  // --- AFIP A7: consulta padrón ---
+  async consultAfipPadron(_input: ConsultAfipPadronInput): Promise<AfipPadronResult> {
+    await this.requireSession();
+    throw new Error('La consulta al padrón AFIP requiere modo online.');
   }
 }

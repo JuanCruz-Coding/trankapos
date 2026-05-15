@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type FormEvent } from 'react';
-import { Plus, Search, UserCircle2, UserPlus } from 'lucide-react';
+import { Building2, Plus, Search, UserCircle2, UserPlus } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import { Modal } from '@/components/ui/Modal';
@@ -47,6 +47,7 @@ export function ReceiverSelectorModal({ open, onClose, onConfirm }: Props) {
   const [searching, setSearching] = useState(false);
   const [form, setForm] = useState<FormState>(emptyForm);
   const [saving, setSaving] = useState(false);
+  const [padronLoading, setPadronLoading] = useState(false);
 
   // Reset al abrir
   useEffect(() => {
@@ -90,6 +91,32 @@ export function ReceiverSelectorModal({ open, onClose, onConfirm }: Props) {
 
   function updateForm<K extends keyof FormState>(key: K, value: FormState[K]) {
     setForm((f) => ({ ...f, [key]: value }));
+  }
+
+  // Solo aplica a CUIT (80) con 11 dígitos exactos.
+  const canConsultPadron = form.docType === 80 && /^[0-9]{11}$/.test(form.docNumber);
+
+  async function handleConsultPadron() {
+    if (!canConsultPadron) return;
+    setPadronLoading(true);
+    try {
+      const result = await data.consultAfipPadron({ cuit: form.docNumber });
+      if (!result.ok || !result.persona) {
+        toast.error(result.error ?? 'No se pudo consultar el padrón AFIP.');
+        return;
+      }
+      const { persona } = result;
+      setForm((f) => ({
+        ...f,
+        legalName: persona.legalName,
+        ivaCondition: persona.ivaCondition,
+      }));
+      toast.success('Datos cargados desde AFIP');
+    } catch (err) {
+      toast.error((err as Error).message);
+    } finally {
+      setPadronLoading(false);
+    }
   }
 
   function validateForm(): string | null {
@@ -215,6 +242,9 @@ export function ReceiverSelectorModal({ open, onClose, onConfirm }: Props) {
           submitDisabled={saving}
           docHint={docHint}
           helpText="Se guarda en tu lista de clientes. Vas a poder reusarlo en otras ventas."
+          onConsultPadron={handleConsultPadron}
+          canConsultPadron={canConsultPadron}
+          padronLoading={padronLoading}
         />
       )}
 
@@ -227,6 +257,9 @@ export function ReceiverSelectorModal({ open, onClose, onConfirm }: Props) {
           submitDisabled={false}
           docHint={docHint}
           helpText="No se guarda en tu lista de clientes. Solo queda en la factura."
+          onConsultPadron={handleConsultPadron}
+          canConsultPadron={canConsultPadron}
+          padronLoading={padronLoading}
         />
       )}
     </Modal>
@@ -265,6 +298,9 @@ function ReceiverForm({
   submitDisabled,
   docHint,
   helpText,
+  onConsultPadron,
+  canConsultPadron,
+  padronLoading,
 }: {
   form: FormState;
   onChange: <K extends keyof FormState>(key: K, value: FormState[K]) => void;
@@ -273,6 +309,9 @@ function ReceiverForm({
   submitDisabled: boolean;
   docHint: string;
   helpText: string;
+  onConsultPadron: () => void;
+  canConsultPadron: boolean;
+  padronLoading: boolean;
 }) {
   return (
     <form onSubmit={onSubmit} className="space-y-3">
@@ -299,6 +338,25 @@ function ReceiverForm({
           />
         </Field>
       </div>
+      {form.docType === 80 && (
+        <div>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={onConsultPadron}
+            disabled={!canConsultPadron || padronLoading}
+            title={
+              canConsultPadron
+                ? 'Autocompletar razón social y condición IVA desde el padrón AFIP'
+                : 'Cargá un CUIT de 11 dígitos para consultar el padrón'
+            }
+          >
+            <Building2 className="h-4 w-4" />
+            {padronLoading ? 'Consultando…' : 'Buscar en AFIP'}
+          </Button>
+        </div>
+      )}
       <Field label="Razón social / Nombre">
         <Input
           value={form.legalName}

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type FormEvent } from 'react';
-import { Pencil, Plus, Search, Trash2 } from 'lucide-react';
+import { Building2, Pencil, Plus, Search, Trash2 } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import { Modal } from '@/components/ui/Modal';
@@ -43,6 +43,7 @@ export default function Customers() {
   const [modalOpen, setModalOpen] = useState(false);
   const [form, setForm] = useState<FormState>(emptyForm);
   const [saving, setSaving] = useState(false);
+  const [padronLoading, setPadronLoading] = useState(false);
 
   useEffect(() => {
     void load();
@@ -90,6 +91,41 @@ export default function Customers() {
 
   function update<K extends keyof FormState>(key: K, value: FormState[K]) {
     setForm((f) => ({ ...f, [key]: value }));
+  }
+
+  // Solo aplica a CUIT (80) con 11 dígitos exactos. El padrón AFIP (ws_sr_padron_a5)
+  // indexa por CUIT — CUIL (86) y DNI (96) no se consultan.
+  const canConsultPadron = form.docType === 80 && /^[0-9]{11}$/.test(form.docNumber);
+
+  async function handleConsultPadron() {
+    if (!canConsultPadron) return;
+    setPadronLoading(true);
+    try {
+      const result = await data.consultAfipPadron({ cuit: form.docNumber });
+      if (!result.ok || !result.persona) {
+        toast.error(result.error ?? 'No se pudo consultar el padrón AFIP.');
+        return;
+      }
+      const { persona } = result;
+      setForm((f) => {
+        const next: FormState = {
+          ...f,
+          legalName: persona.legalName,
+          ivaCondition: persona.ivaCondition,
+        };
+        // Sumamos el domicilio fiscal a notas SOLO si el campo está vacío,
+        // para no pisar texto que el comercio haya cargado a mano.
+        if (persona.address && !f.notes.trim()) {
+          next.notes = `Domicilio fiscal AFIP: ${persona.address}`;
+        }
+        return next;
+      });
+      toast.success('Datos cargados desde AFIP');
+    } catch (err) {
+      toast.error((err as Error).message);
+    } finally {
+      setPadronLoading(false);
+    }
   }
 
   async function handleSubmit(e: FormEvent) {
@@ -261,6 +297,25 @@ export default function Customers() {
               />
             </Field>
           </div>
+          {form.docType === 80 && (
+            <div>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={handleConsultPadron}
+                disabled={!canConsultPadron || padronLoading}
+                title={
+                  canConsultPadron
+                    ? 'Autocompletar razón social y condición IVA desde el padrón AFIP'
+                    : 'Cargá un CUIT de 11 dígitos para consultar el padrón'
+                }
+              >
+                <Building2 className="h-4 w-4" />
+                {padronLoading ? 'Consultando…' : 'Buscar en AFIP'}
+              </Button>
+            </div>
+          )}
           <Field label="Razón social / Nombre">
             <Input
               value={form.legalName}

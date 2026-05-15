@@ -35,8 +35,10 @@ import type {
   AfipDocumentsQuery,
   BranchInput,
   CashMovementInput,
+  AfipPadronResult,
   CategoryInput,
   CloseRegisterInput,
+  ConsultAfipPadronInput,
   CreditNoteInput,
   CreditNoteResult,
   CustomerInput,
@@ -1790,6 +1792,31 @@ class SupabaseDriver implements DataDriver {
       body: JSON.stringify(input),
     });
     const body = (await res.json().catch(() => ({}))) as UploadAfipCertificateResult;
+    if (!res.ok && body.error === undefined) {
+      throw new Error(`Error HTTP ${res.status}`);
+    }
+    return body;
+  }
+
+  // --- AFIP A7: consulta padrón ---
+
+  async consultAfipPadron(input: ConsultAfipPadronInput): Promise<AfipPadronResult> {
+    await this.requireSession();
+    const { data: sessionData } = await this.sb.auth.getSession();
+    const token = sessionData.session?.access_token;
+    if (!token) throw new Error('No autenticado');
+
+    const url = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/afip-consult-padron`;
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+        apikey: import.meta.env.VITE_SUPABASE_ANON_KEY ?? '',
+      },
+      body: JSON.stringify(input),
+    });
+    const body = (await res.json().catch(() => ({}))) as AfipPadronResult;
     if (!res.ok && body.error === undefined) {
       throw new Error(`Error HTTP ${res.status}`);
     }

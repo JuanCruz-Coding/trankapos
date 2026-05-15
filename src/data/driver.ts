@@ -208,6 +208,31 @@ export interface UploadAfipCertificateResult {
   error?: string;
 }
 
+// --- AFIP A7: consulta padrón (ws_sr_padron_a5) ---
+
+export interface ConsultAfipPadronInput {
+  /** CUIT del receptor, 11 dígitos sin guiones. */
+  cuit: string;
+}
+
+/** Datos del receptor devueltos por el padrón AFIP. */
+export interface AfipPadronPersona {
+  cuit: string;
+  /** Razón social (persona jurídica) o nombre+apellido (persona física). */
+  legalName: string;
+  /** Condición IVA mapeada al enum del proyecto. */
+  ivaCondition: CustomerIvaCondition;
+  /** Domicilio fiscal formateado "Calle 123, Ciudad, Provincia" (o null si no figura). */
+  address: string | null;
+}
+
+/** Resultado de consultar el padrón. */
+export interface AfipPadronResult {
+  ok: boolean;
+  persona?: AfipPadronPersona;
+  error?: string;
+}
+
 /** Resultado de emitir una Nota de Crédito. */
 export interface CreditNoteResult {
   ok: boolean;
@@ -386,4 +411,12 @@ export interface DataDriver {
    * public key del cert coincida con la key privada guardada.
    */
   uploadAfipCertificate(input: UploadAfipCertificateInput): Promise<UploadAfipCertificateResult>;
+
+  // --- AFIP A7: consulta padrón ---
+  /**
+   * Consulta el padrón AFIP (ws_sr_padron_a5) por CUIT. Devuelve razón social,
+   * condición IVA y domicilio del receptor. Útil para autocompletar el form
+   * de Customer y validar antes de emitir Factura A.
+   */
+  consultAfipPadron(input: ConsultAfipPadronInput): Promise<AfipPadronResult>;
 }
