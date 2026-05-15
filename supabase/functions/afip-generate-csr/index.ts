@@ -134,7 +134,10 @@ Deno.serve(async (req) => {
         { name: 'countryName', value: 'AR' },
         { name: 'organizationName', value: body.legalName.trim() },
         { name: 'commonName', value: body.alias },
-        { shortName: 'serialNumber', value: 'CUIT ' + body.cuit },
+        // node-forge no reconoce 'serialNumber' como shortName (el shortName
+        // real es 'SN', y forge solo registra los más comunes). Hay que
+        // pasarlo por `name`. Subject AFIP requerido: /serialNumber=CUIT NNN.
+        { name: 'serialNumber', value: 'CUIT ' + body.cuit },
       ]);
       csr.sign(keys.privateKey, forge.md.sha256.create());
       csrPem = forge.pki.certificationRequestToPem(csr);
