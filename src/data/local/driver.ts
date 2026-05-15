@@ -36,6 +36,8 @@ import type {
   CreditNoteResult,
   CustomerInput,
   DataDriver,
+  GenerateCsrInput,
+  GenerateCsrResult,
   LoginInput,
   OpenRegisterInput,
   ProductInput,
@@ -45,6 +47,8 @@ import type {
   SalesQuery,
   SignupInput,
   TransferInput,
+  UploadAfipCertificateInput,
+  UploadAfipCertificateResult,
   UserInput,
   WarehouseInput,
 } from '../driver';
@@ -1243,5 +1247,19 @@ export class LocalDriver implements DataDriver {
   async retryAfipDocument(_input: RetryDocumentInput): Promise<RetryResult> {
     await this.requireSession();
     throw new Error('El reintento de comprobantes AFIP requiere modo online.');
+  }
+
+  // --- AFIP A6: onboarding via wizard ---
+  // Modo offline: no se puede onboardear AFIP (requiere generar key + persistir cifrada).
+  async generateAfipCsr(_input: GenerateCsrInput): Promise<GenerateCsrResult> {
+    await this.requireSession();
+    throw new Error('El onboarding AFIP requiere modo online.');
+  }
+
+  async uploadAfipCertificate(
+    _input: UploadAfipCertificateInput,
+  ): Promise<UploadAfipCertificateResult> {
+    await this.requireSession();
+    throw new Error('El onboarding AFIP requiere modo online.');
   }
 }

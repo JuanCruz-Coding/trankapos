@@ -41,6 +41,8 @@ import type {
   CreditNoteResult,
   CustomerInput,
   DataDriver,
+  GenerateCsrInput,
+  GenerateCsrResult,
   LoginInput,
   OpenRegisterInput,
   ProductInput,
@@ -50,6 +52,8 @@ import type {
   SalesQuery,
   SignupInput,
   TransferInput,
+  UploadAfipCertificateInput,
+  UploadAfipCertificateResult,
   UserInput,
   WarehouseInput,
 } from '../driver';
@@ -1722,6 +1726,70 @@ class SupabaseDriver implements DataDriver {
       body: JSON.stringify(input),
     });
     const body = (await res.json().catch(() => ({}))) as RetryResult;
+    if (!res.ok && body.error === undefined) {
+      throw new Error(`Error HTTP ${res.status}`);
+    }
+    return body;
+  }
+
+  // --- AFIP A6: onboarding via wizard (genera CSR en el server) ---
+
+  async generateAfipCsr(input: GenerateCsrInput): Promise<GenerateCsrResult> {
+    await this.requireSession();
+    const { data: sessionData } = await this.sb.auth.getSession();
+    const token = sessionData.session?.access_token;
+    if (!token) throw new Error('No autenticado');
+
+    const url = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/afip-generate-csr`;
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+        apikey: import.meta.env.VITE_SUPABASE_ANON_KEY ?? '',
+      },
+      body: JSON.stringify(input),
+    });
+    const body = (await res.json().catch(() => ({}))) as {
+      ok?: boolean;
+      csrPem?: string;
+      alias?: string;
+      environment?: 'homologation' | 'production';
+      error?: string;
+    };
+    if (!res.ok && body.error === undefined) {
+      throw new Error(`Error HTTP ${res.status}`);
+    }
+    if (body.error) throw new Error(body.error);
+    if (!body.csrPem || !body.alias || !body.environment) {
+      throw new Error('Respuesta inválida del servidor al generar CSR');
+    }
+    return {
+      csrPem: body.csrPem,
+      alias: body.alias,
+      environment: body.environment,
+    };
+  }
+
+  async uploadAfipCertificate(
+    input: UploadAfipCertificateInput,
+  ): Promise<UploadAfipCertificateResult> {
+    await this.requireSession();
+    const { data: sessionData } = await this.sb.auth.getSession();
+    const token = sessionData.session?.access_token;
+    if (!token) throw new Error('No autenticado');
+
+    const url = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/afip-upload-certificate`;
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+        apikey: import.meta.env.VITE_SUPABASE_ANON_KEY ?? '',
+      },
+      body: JSON.stringify(input),
+    });
+    const body = (await res.json().catch(() => ({}))) as UploadAfipCertificateResult;
     if (!res.ok && body.error === undefined) {
       throw new Error(`Error HTTP ${res.status}`);
     }

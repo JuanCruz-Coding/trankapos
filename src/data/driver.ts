@@ -171,6 +171,43 @@ export interface RetryResult {
   error?: string;
 }
 
+// --- AFIP A6: onboarding via wizard ---
+
+/** Input para generar el par RSA + CSR para AFIP. */
+export interface GenerateCsrInput {
+  /** CUIT del comercio (11 dígitos sin guiones). */
+  cuit: string;
+  /** Razón social. Va en el subject del CSR como O=<legalName>. */
+  legalName: string;
+  /** Alias del cert (CN del CSR). Lo elige el comercio, ej. 'trankapos-prod'. */
+  alias: string;
+  /** Punto de venta AFIP (>0). */
+  salesPoint: number;
+  /** Ambiente: cada uno tiene su propio par (homo y prod son cuentas AFIP distintas). */
+  environment: 'homologation' | 'production';
+}
+
+/** Resultado de generar el CSR. */
+export interface GenerateCsrResult {
+  /** CSR PEM (texto plano, es público). El comercio lo copia y lo pega en WSASS. */
+  csrPem: string;
+  alias: string;
+  environment: 'homologation' | 'production';
+}
+
+/** Input para completar el onboarding con el .crt firmado por AFIP. */
+export interface UploadAfipCertificateInput {
+  environment: 'homologation' | 'production';
+  /** Contenido completo del .crt descargado de WSASS. */
+  certPem: string;
+}
+
+/** Resultado del upload del .crt. */
+export interface UploadAfipCertificateResult {
+  ok: boolean;
+  error?: string;
+}
+
 /** Resultado de emitir una Nota de Crédito. */
 export interface CreditNoteResult {
   ok: boolean;
@@ -334,4 +371,19 @@ export interface DataDriver {
   listAfipDocuments(q: AfipDocumentsQuery): Promise<AfipDocumentDetail[]>;
   /** Reintenta la emisión de un comprobante rejected (o emite uno nuevo para una sale sin doc). */
   retryAfipDocument(input: RetryDocumentInput): Promise<RetryResult>;
+
+  // --- AFIP A6: onboarding via wizard (genera CSR en el server) ---
+  /**
+   * Genera RSA key + CSR para AFIP. El backend persiste la key encriptada en
+   * tenant_afip_credentials (cert_encrypted queda null hasta que el comercio
+   * sube el .crt firmado por AFIP). Devuelve el CSR para que el comercio lo
+   * pegue en WSASS.
+   */
+  generateAfipCsr(input: GenerateCsrInput): Promise<GenerateCsrResult>;
+  /**
+   * Sube el .crt firmado por AFIP y activa las credenciales. Solo válido si
+   * antes se generó un CSR (hay key persistida y csr_pem). Valida que la
+   * public key del cert coincida con la key privada guardada.
+   */
+  uploadAfipCertificate(input: UploadAfipCertificateInput): Promise<UploadAfipCertificateResult>;
 }

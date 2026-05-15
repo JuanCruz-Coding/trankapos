@@ -15,6 +15,8 @@ import {
   FileText,
   Loader2,
   AlertTriangle,
+  Sparkles,
+  ChevronRight,
 } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
@@ -29,6 +31,7 @@ import { TAX_CONDITIONS, type TaxCondition, type Tenant, type TenantSettingsInpu
 import { cn } from '@/lib/utils';
 import { LOGO_REQUIREMENTS_TEXT, validateLogoFile } from '@/lib/imageUpload';
 import { ProductionToggleModal } from '@/components/afip/ProductionToggleModal';
+import { AfipOnboardingWizard } from '@/components/afip/AfipOnboardingWizard';
 
 type Tab = 'empresa' | 'ticket' | 'pos' | 'stock' | 'pagos' | 'facturacion';
 
@@ -851,6 +854,8 @@ interface AfipStatus {
   salesPoint?: number;
   environment?: 'homologation' | 'production';
   isActive?: boolean;
+  alias?: string | null;
+  csrPem?: string | null;
   lastTestAt?: string | null;
   lastTestOk?: boolean | null;
   lastTestError?: string | null;
@@ -874,6 +879,19 @@ function FacturacionTab() {
   const [keyPem, setKeyPem] = useState('');
   const [showProductionModal, setShowProductionModal] = useState(false);
 
+  // A6 — wizard de onboarding
+  const [wizardOpen, setWizardOpen] = useState(false);
+  const [wizardInitialStep, setWizardInitialStep] = useState<1 | 3>(1);
+  // Si el wizard arranca en paso 3, le pasamos el CSR que está guardado.
+  const [wizardExistingCsr, setWizardExistingCsr] = useState<{
+    csrPem: string;
+    alias: string;
+    environment: 'homologation' | 'production';
+  } | undefined>(undefined);
+
+  // "Modo experto" colapsable (BYO: ya tengo .crt y .key)
+  const [expertOpen, setExpertOpen] = useState(false);
+
   useEffect(() => {
     void refresh();
   }, []);
@@ -884,7 +902,7 @@ function FacturacionTab() {
       const sb = getSupabase();
       const { data: row, error } = await sb
         .from('tenant_afip_credentials')
-        .select('cuit, sales_point, environment, is_active, last_test_at, last_test_ok, last_test_error')
+        .select('cuit, sales_point, environment, is_active, alias, csr_pem, last_test_at, last_test_ok, last_test_error')
         .maybeSingle();
       if (error) throw error;
       if (row) {
@@ -894,6 +912,8 @@ function FacturacionTab() {
           salesPoint: row.sales_point,
           environment: row.environment,
           isActive: row.is_active,
+          alias: row.alias ?? null,
+          csrPem: row.csr_pem ?? null,
           lastTestAt: row.last_test_at,
           lastTestOk: row.last_test_ok,
           lastTestError: row.last_test_error,
@@ -910,6 +930,26 @@ function FacturacionTab() {
     } finally {
       setLoading(false);
     }
+  }
+
+  function openWizardFromScratch() {
+    setWizardExistingCsr(undefined);
+    setWizardInitialStep(1);
+    setWizardOpen(true);
+  }
+
+  function openWizardResume() {
+    if (!status?.csrPem || !status.alias || !status.environment) {
+      toast.error('No se encontró el CSR pendiente. Empezá el asistente desde el principio.');
+      return;
+    }
+    setWizardExistingCsr({
+      csrPem: status.csrPem,
+      alias: status.alias,
+      environment: status.environment,
+    });
+    setWizardInitialStep(3);
+    setWizardOpen(true);
   }
 
   async function readFileAsText(file: File): Promise<string> {
@@ -1041,6 +1081,15 @@ function FacturacionTab() {
     return <div className="text-sm text-slate-500">Cargando estado AFIP…</div>;
   }
 
+  // Estado derivado A6
+  const noConfig = !status?.configured;
+  // awaitingCert: hay row pero todavía no está activo y hay CSR generado.
+  const awaitingCert =
+    Boolean(status?.configured) &&
+    status?.isActive === false &&
+    Boolean(status?.csrPem);
+  const active = Boolean(status?.configured) && status?.isActive === true;
+
   return (
     <div className="space-y-4">
       <div className="rounded-lg border border-slate-200 p-4">
@@ -1051,13 +1100,13 @@ function FacturacionTab() {
           <div className="flex-1">
             <div className="flex flex-wrap items-center gap-2">
               <h3 className="font-display text-base font-bold text-navy">AFIP — Factura Electrónica</h3>
-              {status?.configured ? (
-                status.lastTestOk === true ? (
+              {active ? (
+                status?.lastTestOk === true ? (
                   <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-700">
                     <CheckCircle2 className="h-3 w-3" />
                     Conexión OK
                   </span>
-                ) : status.lastTestOk === false ? (
+                ) : status?.lastTestOk === false ? (
                   <span className="inline-flex items-center gap-1 rounded-full bg-red-50 px-2 py-0.5 text-xs font-medium text-red-700">
                     <XCircle className="h-3 w-3" />
                     Conexión falló
@@ -1068,6 +1117,11 @@ function FacturacionTab() {
                     Sin probar
                   </span>
                 )
+              ) : awaitingCert ? (
+                <span className="inline-flex items-center gap-1 rounded-full bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-700">
+                  <AlertTriangle className="h-3 w-3" />
+                  Falta certificado
+                </span>
               ) : (
                 <span className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600">
                   <XCircle className="h-3 w-3" />
@@ -1077,15 +1131,14 @@ function FacturacionTab() {
             </div>
             <p className="mt-1 text-sm text-slate-600">
               Conectá tu CUIT y certificado AFIP para emitir comprobantes fiscales (Factura A/B/C,
-              Notas de Crédito/Débito) directo desde el POS. Generá el certificado en el portal de
-              AFIP con tu Clave Fiscal (servicio "Administración de Certificados Digitales").
+              Notas de Crédito/Débito) directo desde el POS.
             </p>
 
-            {status?.configured && (
+            {active && (
               <div className="mt-3 rounded-lg bg-slate-50 p-3 text-xs text-slate-600">
-                <div><strong>CUIT:</strong> {status.cuit ?? '—'}</div>
-                <div><strong>Punto de venta:</strong> {status.salesPoint ?? '—'}</div>
-                {status.lastTestAt && (
+                <div><strong>CUIT:</strong> {status?.cuit ?? '—'}</div>
+                <div><strong>Punto de venta:</strong> {status?.salesPoint ?? '—'}</div>
+                {status?.lastTestAt && (
                   <div>
                     <strong>Último test:</strong>{' '}
                     {new Date(status.lastTestAt).toLocaleString('es-AR')}
@@ -1102,127 +1155,276 @@ function FacturacionTab() {
         </div>
       </div>
 
-      {/* Ambiente actual — estado destacado + flujo de paso a producción */}
-      {status?.configured && status.environment && (
-        <div
-          className={cn(
-            'rounded-lg border p-4',
-            status.environment === 'production'
-              ? 'border-emerald-200 bg-emerald-50'
-              : 'border-amber-200 bg-amber-50',
-          )}
-        >
-          <div className="flex flex-wrap items-center justify-between gap-3">
+      {/* ============================================================
+           Estado 1: SIN CONFIGURAR — wizard recomendado + modo experto
+         ============================================================ */}
+      {noConfig && (
+        <>
+          <div className="rounded-lg border-2 border-brand-200 bg-gradient-to-br from-brand-50 to-white p-5">
             <div className="flex items-start gap-3">
-              {status.environment === 'production' ? (
-                <CheckCircle2 className="mt-0.5 h-5 w-5 shrink-0 text-emerald-600" />
-              ) : (
-                <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-amber-600" />
-              )}
-              <div>
-                <div
-                  className={cn(
-                    'text-sm font-bold',
-                    status.environment === 'production'
-                      ? 'text-emerald-800'
-                      : 'text-amber-800',
-                  )}
-                >
-                  {status.environment === 'production'
-                    ? 'Modo PRODUCCIÓN — comprobantes con validez fiscal'
-                    : 'Modo HOMOLOGACIÓN — los comprobantes son de prueba'}
-                </div>
-                <p
-                  className={cn(
-                    'mt-0.5 text-xs',
-                    status.environment === 'production'
-                      ? 'text-emerald-700'
-                      : 'text-amber-700',
-                  )}
-                >
-                  {status.environment === 'production'
-                    ? 'Ya estás emitiendo comprobantes reales ante AFIP.'
-                    : 'Cuando tengas el certificado de producción de AFIP, pasá a producción para emitir comprobantes con validez fiscal.'}
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-brand-100 text-brand-700">
+                <Sparkles className="h-5 w-5" />
+              </div>
+              <div className="flex-1">
+                <h4 className="font-display text-base font-bold text-navy">
+                  Configurá AFIP con el asistente
+                </h4>
+                <p className="mt-1 text-sm text-slate-600">
+                  Te guiamos paso a paso. Nosotros generamos el certificado, vos solo lo pegás en AFIP.
+                  No hace falta OpenSSL ni nada técnico.
                 </p>
+                <div className="mt-3">
+                  <Button onClick={openWizardFromScratch}>
+                    <Sparkles className="h-4 w-4" />
+                    Empezar asistente
+                  </Button>
+                </div>
               </div>
             </div>
-            {status.environment === 'homologation' && (
-              <Button onClick={() => setShowProductionModal(true)}>
-                Pasar a producción
-              </Button>
-            )}
           </div>
-        </div>
+
+          {/* Modo experto colapsable */}
+          <ExpertSection
+            open={expertOpen}
+            onToggle={() => setExpertOpen((v) => !v)}
+            title="Modo experto: ya tengo mi .crt y .key"
+            subtitle="Si generaste el certificado vos mismo con OpenSSL, podés subirlo acá."
+          >
+            <ManualUploadForm
+              cuit={cuit}
+              setCuit={setCuit}
+              salesPoint={salesPoint}
+              setSalesPoint={setSalesPoint}
+              environment={environment}
+              setEnvironment={setEnvironment}
+              certPem={certPem}
+              keyPem={keyPem}
+              onCertFile={handleCertFile}
+              onKeyFile={handleKeyFile}
+              onSave={handleSave}
+              saving={saving}
+              configured={false}
+              onTest={handleTest}
+              testing={testing}
+              showEnvironmentSelector
+            />
+          </ExpertSection>
+        </>
       )}
 
-      {/* Form de carga */}
-      <div className="rounded-lg border border-slate-200 p-4">
-        <h4 className="mb-3 font-display text-sm font-bold text-navy">
-          {status?.configured ? 'Actualizar credenciales' : 'Cargar credenciales'}
-        </h4>
-        <div className="grid gap-4 md:grid-cols-2">
-          <Field label="CUIT" hint="11 dígitos sin guiones (ej. 20123456789)">
-            <Input value={cuit} onChange={(e) => setCuit(e.target.value.replace(/\D/g, ''))} maxLength={11} />
-          </Field>
-          <Field label="Punto de venta" hint="El que diste de alta en AFIP">
-            <Input
-              type="number"
-              min="1"
-              value={salesPoint}
-              onChange={(e) => setSalesPoint(e.target.value)}
+      {/* ============================================================
+           Estado 2: AWAITING CERT — key+CSR generados, falta el .crt
+         ============================================================ */}
+      {awaitingCert && (
+        <>
+          <div className="rounded-lg border-2 border-amber-300 bg-amber-50 p-5">
+            <div className="flex items-start gap-3">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-amber-100 text-amber-700">
+                <AlertTriangle className="h-5 w-5" />
+              </div>
+              <div className="flex-1">
+                <h4 className="font-display text-base font-bold text-amber-900">
+                  Falta subir el certificado firmado por AFIP
+                </h4>
+                <p className="mt-1 text-sm text-amber-800">
+                  Ya generamos tu clave y tu solicitud (CSR). Solo falta que pegues el CSR en AFIP,
+                  descargues el <code className="rounded bg-amber-100 px-1 py-0.5 text-xs">.crt</code>{' '}
+                  y lo subas acá.
+                </p>
+                <div className="mt-3 grid gap-1 rounded-lg bg-white/60 p-3 text-xs text-amber-900">
+                  {status?.alias && (
+                    <div><strong>Alias:</strong> {status.alias}</div>
+                  )}
+                  {status?.environment && (
+                    <div><strong>Ambiente:</strong> {ENV_LABEL_ES[status.environment]}</div>
+                  )}
+                  {status?.cuit && (
+                    <div><strong>CUIT:</strong> {status.cuit}</div>
+                  )}
+                </div>
+                <div className="mt-3">
+                  <Button onClick={openWizardResume}>
+                    Continuar onboarding
+                  </Button>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <ExpertSection
+            open={expertOpen}
+            onToggle={() => setExpertOpen((v) => !v)}
+            title="Modo experto: subir .crt + .key manualmente"
+            subtitle="Si ya tenés ambos archivos generados por fuera, podés sobrescribir lo del asistente."
+          >
+            <ManualUploadForm
+              cuit={cuit}
+              setCuit={setCuit}
+              salesPoint={salesPoint}
+              setSalesPoint={setSalesPoint}
+              environment={environment}
+              setEnvironment={setEnvironment}
+              certPem={certPem}
+              keyPem={keyPem}
+              onCertFile={handleCertFile}
+              onKeyFile={handleKeyFile}
+              onSave={handleSave}
+              saving={saving}
+              configured={false}
+              onTest={handleTest}
+              testing={testing}
+              showEnvironmentSelector={false}
             />
-          </Field>
-          <Field label="Certificado (.crt / .pem)" hint="Archivo PEM generado en AFIP">
-            <div className="space-y-1">
-              <input
-                type="file"
-                accept=".crt,.pem,.cer,application/x-x509-ca-cert,application/x-pem-file"
-                onChange={handleCertFile}
-                className="block w-full text-sm text-slate-600 file:mr-3 file:rounded-md file:border-0 file:bg-slate-100 file:px-3 file:py-2 file:text-sm file:font-medium file:text-slate-700 hover:file:bg-slate-200"
-              />
-              {certPem && (
-                <div className="text-xs text-emerald-700">
-                  ✓ Certificado cargado ({certPem.length} bytes)
+          </ExpertSection>
+        </>
+      )}
+
+      {/* ============================================================
+           Estado 3: ACTIVO — bloque original (badge homo/prod + datos + test)
+         ============================================================ */}
+      {active && status?.environment && (
+        <>
+          {/* Ambiente actual — estado destacado + flujo de paso a producción */}
+          <div
+            className={cn(
+              'rounded-lg border p-4',
+              status.environment === 'production'
+                ? 'border-emerald-200 bg-emerald-50'
+                : 'border-amber-200 bg-amber-50',
+            )}
+          >
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="flex items-start gap-3">
+                {status.environment === 'production' ? (
+                  <CheckCircle2 className="mt-0.5 h-5 w-5 shrink-0 text-emerald-600" />
+                ) : (
+                  <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-amber-600" />
+                )}
+                <div>
+                  <div
+                    className={cn(
+                      'text-sm font-bold',
+                      status.environment === 'production'
+                        ? 'text-emerald-800'
+                        : 'text-amber-800',
+                    )}
+                  >
+                    {status.environment === 'production'
+                      ? 'Modo PRODUCCIÓN — comprobantes con validez fiscal'
+                      : 'Modo HOMOLOGACIÓN — los comprobantes son de prueba'}
+                  </div>
+                  <p
+                    className={cn(
+                      'mt-0.5 text-xs',
+                      status.environment === 'production'
+                        ? 'text-emerald-700'
+                        : 'text-amber-700',
+                    )}
+                  >
+                    {status.environment === 'production'
+                      ? 'Ya estás emitiendo comprobantes reales ante AFIP.'
+                      : 'Cuando tengas el certificado de producción de AFIP, pasá a producción para emitir comprobantes con validez fiscal.'}
+                  </p>
                 </div>
+              </div>
+              {status.environment === 'homologation' && (
+                <Button onClick={() => setShowProductionModal(true)}>
+                  Pasar a producción
+                </Button>
               )}
             </div>
-          </Field>
-          <Field label="Clave privada (.key)" hint="Archivo PEM de tu clave privada">
-            <div className="space-y-1">
-              <input
-                type="file"
-                accept=".key,.pem"
-                onChange={handleKeyFile}
-                className="block w-full text-sm text-slate-600 file:mr-3 file:rounded-md file:border-0 file:bg-slate-100 file:px-3 file:py-2 file:text-sm file:font-medium file:text-slate-700 hover:file:bg-slate-200"
-              />
-              {keyPem && (
-                <div className="text-xs text-emerald-700">
-                  ✓ Clave cargada ({keyPem.length} bytes)
+          </div>
+
+          {/* Form de actualización de credenciales (modo experto sobre activo) */}
+          <div className="rounded-lg border border-slate-200 p-4">
+            <h4 className="mb-3 font-display text-sm font-bold text-navy">
+              Actualizar credenciales
+            </h4>
+            <div className="grid gap-4 md:grid-cols-2">
+              <Field label="CUIT" hint="11 dígitos sin guiones (ej. 20123456789)">
+                <Input value={cuit} onChange={(e) => setCuit(e.target.value.replace(/\D/g, ''))} maxLength={11} />
+              </Field>
+              <Field label="Punto de venta" hint="El que diste de alta en AFIP">
+                <Input
+                  type="number"
+                  min="1"
+                  value={salesPoint}
+                  onChange={(e) => setSalesPoint(e.target.value)}
+                />
+              </Field>
+              <Field label="Certificado (.crt / .pem)" hint="Archivo PEM generado en AFIP">
+                <div className="space-y-1">
+                  <input
+                    type="file"
+                    accept=".crt,.pem,.cer,application/x-x509-ca-cert,application/x-pem-file"
+                    onChange={handleCertFile}
+                    className="block w-full text-sm text-slate-600 file:mr-3 file:rounded-md file:border-0 file:bg-slate-100 file:px-3 file:py-2 file:text-sm file:font-medium file:text-slate-700 hover:file:bg-slate-200"
+                  />
+                  {certPem && (
+                    <div className="text-xs text-emerald-700">
+                      ✓ Certificado cargado ({certPem.length} bytes)
+                    </div>
+                  )}
                 </div>
-              )}
+              </Field>
+              <Field label="Clave privada (.key)" hint="Archivo PEM de tu clave privada">
+                <div className="space-y-1">
+                  <input
+                    type="file"
+                    accept=".key,.pem"
+                    onChange={handleKeyFile}
+                    className="block w-full text-sm text-slate-600 file:mr-3 file:rounded-md file:border-0 file:bg-slate-100 file:px-3 file:py-2 file:text-sm file:font-medium file:text-slate-700 hover:file:bg-slate-200"
+                  />
+                  {keyPem && (
+                    <div className="text-xs text-emerald-700">
+                      ✓ Clave cargada ({keyPem.length} bytes)
+                    </div>
+                  )}
+                </div>
+              </Field>
             </div>
-          </Field>
-        </div>
 
-        <div className="mt-4 flex flex-wrap gap-2">
-          <Button onClick={handleSave} disabled={saving || !certPem || !keyPem}>
-            <Save className="h-4 w-4" />
-            {saving ? 'Guardando…' : 'Guardar credenciales'}
-          </Button>
-          {status?.configured && (
-            <Button variant="outline" onClick={handleTest} disabled={testing}>
-              {testing ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />}
-              {testing ? 'Probando…' : 'Probar conexión'}
-            </Button>
-          )}
-        </div>
+            <div className="mt-4 flex flex-wrap gap-2">
+              <Button onClick={handleSave} disabled={saving || !certPem || !keyPem}>
+                <Save className="h-4 w-4" />
+                {saving ? 'Guardando…' : 'Guardar credenciales'}
+              </Button>
+              <Button variant="outline" onClick={handleTest} disabled={testing}>
+                {testing ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />}
+                {testing ? 'Probando…' : 'Probar conexión'}
+              </Button>
+            </div>
 
-        <p className="mt-3 text-xs text-slate-500">
-          🔒 El certificado y la clave se guardan <strong>encriptados</strong> en nuestra base.
-          La clave de cifrado vive solo en el servidor, no en la base. Solo el owner puede
-          configurar AFIP.
-        </p>
-      </div>
+            <p className="mt-3 text-xs text-slate-500">
+              🔒 El certificado y la clave se guardan <strong>encriptados</strong> en nuestra base.
+              La clave de cifrado vive solo en el servidor, no en la base. Solo el owner puede
+              configurar AFIP.
+            </p>
+          </div>
+
+          {/* Regenerar certificado (con el wizard) */}
+          <ExpertSection
+            open={expertOpen}
+            onToggle={() => setExpertOpen((v) => !v)}
+            title="Regenerar certificado con el asistente"
+            subtitle="Esto reemplaza tu certificado actual. Vas a tener que volver a pasar por AFIP."
+          >
+            <div className="space-y-3 text-sm text-slate-700">
+              <div className="flex items-start gap-3 rounded-lg border border-amber-200 bg-amber-50 p-3">
+                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
+                <p className="text-xs text-amber-900">
+                  Esto va a generar una nueva clave y un nuevo CSR. Mientras no subas el .crt nuevo,
+                  vas a quedar en estado "Falta certificado" y no vas a poder facturar.
+                </p>
+              </div>
+              <Button variant="outline" onClick={openWizardFromScratch}>
+                <Sparkles className="h-4 w-4" />
+                Iniciar regeneración
+              </Button>
+            </div>
+          </ExpertSection>
+        </>
+      )}
 
       <ProductionToggleModal
         open={showProductionModal}
@@ -1231,6 +1433,196 @@ function FacturacionTab() {
           void refresh();
         }}
       />
+
+      <AfipOnboardingWizard
+        open={wizardOpen}
+        onClose={() => setWizardOpen(false)}
+        initialStep={wizardInitialStep}
+        existingCsr={wizardExistingCsr}
+        onCompleted={() => {
+          void refresh();
+        }}
+      />
+    </div>
+  );
+}
+
+const ENV_LABEL_ES: Record<'homologation' | 'production', string> = {
+  homologation: 'Homologación',
+  production: 'Producción',
+};
+
+// =====================================================================
+// Sección colapsable (modo experto / regenerar)
+// =====================================================================
+function ExpertSection({
+  open,
+  onToggle,
+  title,
+  subtitle,
+  children,
+}: {
+  open: boolean;
+  onToggle: () => void;
+  title: string;
+  subtitle: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="rounded-lg border border-slate-200">
+      <button
+        type="button"
+        onClick={onToggle}
+        className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left hover:bg-slate-50"
+      >
+        <div className="flex items-start gap-3">
+          <ChevronRight
+            className={cn(
+              'mt-0.5 h-4 w-4 shrink-0 text-slate-500 transition-transform',
+              open && 'rotate-90',
+            )}
+          />
+          <div>
+            <div className="text-sm font-semibold text-slate-900">{title}</div>
+            <div className="text-xs text-slate-500">{subtitle}</div>
+          </div>
+        </div>
+      </button>
+      {open && <div className="border-t border-slate-200 p-4">{children}</div>}
+    </div>
+  );
+}
+
+// =====================================================================
+// Form BYO de subida manual (modo experto)
+// =====================================================================
+function ManualUploadForm({
+  cuit,
+  setCuit,
+  salesPoint,
+  setSalesPoint,
+  environment,
+  setEnvironment,
+  certPem,
+  keyPem,
+  onCertFile,
+  onKeyFile,
+  onSave,
+  saving,
+  configured,
+  onTest,
+  testing,
+  showEnvironmentSelector,
+}: {
+  cuit: string;
+  setCuit: (v: string) => void;
+  salesPoint: string;
+  setSalesPoint: (v: string) => void;
+  environment: 'homologation' | 'production';
+  setEnvironment: (v: 'homologation' | 'production') => void;
+  certPem: string;
+  keyPem: string;
+  onCertFile: (e: ChangeEvent<HTMLInputElement>) => void;
+  onKeyFile: (e: ChangeEvent<HTMLInputElement>) => void;
+  onSave: () => void;
+  saving: boolean;
+  configured: boolean;
+  onTest: () => void;
+  testing: boolean;
+  showEnvironmentSelector: boolean;
+}) {
+  return (
+    <div>
+      <div className="grid gap-4 md:grid-cols-2">
+        <Field label="CUIT" hint="11 dígitos sin guiones (ej. 20123456789)">
+          <Input value={cuit} onChange={(e) => setCuit(e.target.value.replace(/\D/g, ''))} maxLength={11} />
+        </Field>
+        <Field label="Punto de venta" hint="El que diste de alta en AFIP">
+          <Input
+            type="number"
+            min="1"
+            value={salesPoint}
+            onChange={(e) => setSalesPoint(e.target.value)}
+          />
+        </Field>
+        {showEnvironmentSelector && (
+          <Field label="Ambiente" className="md:col-span-2" hint="Empezá por Homologación para probar sin riesgo">
+            <div className="grid gap-2 sm:grid-cols-2">
+              <label className={cn(
+                'flex cursor-pointer items-center gap-2 rounded-lg border p-2 text-sm',
+                environment === 'homologation' ? 'border-amber-400 bg-amber-50' : 'border-slate-200 hover:bg-slate-50',
+              )}>
+                <input
+                  type="radio"
+                  name="byoEnv"
+                  checked={environment === 'homologation'}
+                  onChange={() => setEnvironment('homologation')}
+                />
+                Homologación
+              </label>
+              <label className={cn(
+                'flex cursor-pointer items-center gap-2 rounded-lg border p-2 text-sm',
+                environment === 'production' ? 'border-emerald-400 bg-emerald-50' : 'border-slate-200 hover:bg-slate-50',
+              )}>
+                <input
+                  type="radio"
+                  name="byoEnv"
+                  checked={environment === 'production'}
+                  onChange={() => setEnvironment('production')}
+                />
+                Producción
+              </label>
+            </div>
+          </Field>
+        )}
+        <Field label="Certificado (.crt / .pem)" hint="Archivo PEM generado por AFIP">
+          <div className="space-y-1">
+            <input
+              type="file"
+              accept=".crt,.pem,.cer,application/x-x509-ca-cert,application/x-pem-file"
+              onChange={onCertFile}
+              className="block w-full text-sm text-slate-600 file:mr-3 file:rounded-md file:border-0 file:bg-slate-100 file:px-3 file:py-2 file:text-sm file:font-medium file:text-slate-700 hover:file:bg-slate-200"
+            />
+            {certPem && (
+              <div className="text-xs text-emerald-700">
+                ✓ Certificado cargado ({certPem.length} bytes)
+              </div>
+            )}
+          </div>
+        </Field>
+        <Field label="Clave privada (.key)" hint="Archivo PEM de tu clave privada">
+          <div className="space-y-1">
+            <input
+              type="file"
+              accept=".key,.pem"
+              onChange={onKeyFile}
+              className="block w-full text-sm text-slate-600 file:mr-3 file:rounded-md file:border-0 file:bg-slate-100 file:px-3 file:py-2 file:text-sm file:font-medium file:text-slate-700 hover:file:bg-slate-200"
+            />
+            {keyPem && (
+              <div className="text-xs text-emerald-700">
+                ✓ Clave cargada ({keyPem.length} bytes)
+              </div>
+            )}
+          </div>
+        </Field>
+      </div>
+
+      <div className="mt-4 flex flex-wrap gap-2">
+        <Button onClick={onSave} disabled={saving || !certPem || !keyPem}>
+          <Save className="h-4 w-4" />
+          {saving ? 'Guardando…' : 'Guardar credenciales'}
+        </Button>
+        {configured && (
+          <Button variant="outline" onClick={onTest} disabled={testing}>
+            {testing ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />}
+            {testing ? 'Probando…' : 'Probar conexión'}
+          </Button>
+        )}
+      </div>
+
+      <p className="mt-3 text-xs text-slate-500">
+        🔒 El certificado y la clave se guardan <strong>encriptados</strong> en nuestra base.
+      </p>
     </div>
   );
 }
