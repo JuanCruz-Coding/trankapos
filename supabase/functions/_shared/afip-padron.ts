@@ -61,6 +61,7 @@ export interface PadronPersona {
 export type PadronError =
   | { kind: 'not_found' }                    // CUIT no existe en padrón
   | { kind: 'not_authorized' }               // el cert no está autorizado para ws_sr_padron_a5
+  | { kind: 'constancia_blocked'; details: string[] }  // AFIP no entrega datos: el CUIT tiene reparos
   | { kind: 'afip_error'; message: string }  // otro error del WS
   | { kind: 'parse_error'; message: string };
 
@@ -78,17 +79,27 @@ function escapeXml(s: string): string {
 
 /**
  * Busca el primer `<tag>...</tag>` (case insensitive, con o sin namespace
- * prefix). Devuelve el texto INTERNO sin trim de XML hijo — útil para
- * extraer bloques o valores escalares.
+ * prefix, con o sin atributos tipo `xsi:type="..."`). Devuelve el texto
+ * INTERNO sin trim de XML hijo — útil para extraer bloques o valores escalares.
+ *
+ * GOTCHA: el WS de padrón AFIP suele devolver tags con atributos
+ * (`<razonSocial xsi:type="xs:string">FOO</razonSocial>`). El regex tolera
+ * eso con `(?:\\s[^>]*)?`. Sin esa parte, mapLegalName tira "no se pudo
+ * determinar la razón social" aunque el XML la tenga.
  */
 function extractTag(xml: string, tag: string): string | null {
-  const m = xml.match(new RegExp(`<(?:\\w+:)?${tag}>([\\s\\S]*?)<\\/(?:\\w+:)?${tag}>`, 'i'));
+  const m = xml.match(
+    new RegExp(`<(?:\\w+:)?${tag}(?:\\s[^>]*)?>([\\s\\S]*?)<\\/(?:\\w+:)?${tag}>`, 'i'),
+  );
   return m ? m[1].trim() : null;
 }
 
-/** Todas las ocurrencias de `<tag>...</tag>` (case insensitive, con o sin ns). */
+/** Todas las ocurrencias de `<tag>...</tag>` (case insensitive, con o sin ns/atributos). */
 function extractAllTags(xml: string, tag: string): string[] {
-  const re = new RegExp(`<(?:\\w+:)?${tag}>([\\s\\S]*?)<\\/(?:\\w+:)?${tag}>`, 'gi');
+  const re = new RegExp(
+    `<(?:\\w+:)?${tag}(?:\\s[^>]*)?>([\\s\\S]*?)<\\/(?:\\w+:)?${tag}>`,
+    'gi',
+  );
   const out: string[] = [];
   let m;
   while ((m = re.exec(xml)) !== null) out.push(m[1]);
@@ -218,7 +229,20 @@ export async function getPersona(
   // Parsear el bloque personaReturn.
   const personaReturn = extractTag(xml, 'personaReturn');
   if (!personaReturn) {
-    return { ok: false, error: { kind: 'parse_error', message: 'Respuesta inesperada del padrón' } };
+    return {
+      ok: false,
+      error: { kind: 'parse_error', message: 'Respuesta inesperada del padrón' },
+    };
+  }
+
+  // GOTCHA: si la CUIT tiene reparos (domicilio fiscal electrónico no
+  // constituido, actividades fuera del nomenclador, etc), AFIP devuelve
+  // `<errorConstancia>` en vez de los datos. Pasa típicamente en
+  // homologación con CUITs reales. Lo manejamos como un caso aparte.
+  const errorConstancia = extractTag(personaReturn, 'errorConstancia');
+  if (errorConstancia) {
+    const details = extractAllTags(errorConstancia, 'error').map((s) => s.trim()).filter(Boolean);
+    return { ok: false, error: { kind: 'constancia_blocked', details } };
   }
 
   try {
@@ -235,7 +259,6 @@ export async function getPersona(
       },
     };
   } catch (err) {
-    // mapLegalName puede tirar un PadronError tipado.
     if (err && typeof err === 'object' && 'kind' in (err as Record<string, unknown>)) {
       return { ok: false, error: err as PadronError };
     }

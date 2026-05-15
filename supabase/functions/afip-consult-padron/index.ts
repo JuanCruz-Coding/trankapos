@@ -184,6 +184,20 @@ Deno.serve(async (req) => {
           { ok: false, error: 'AFIP devolvió un error: ' + result.error.message },
           200,
         );
+      case 'constancia_blocked': {
+        const details = result.error.details.length > 0
+          ? ' Detalle: ' + result.error.details.join(' | ')
+          : '';
+        return jsonResponse(
+          {
+            ok: false,
+            error:
+              'AFIP no devolvió los datos del padrón para este CUIT — tiene reparos en la constancia. ' +
+              'Cargá los datos del cliente manualmente.' + details,
+          },
+          200,
+        );
+      }
       case 'parse_error':
         return jsonResponse(
           {
