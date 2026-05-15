@@ -17,6 +17,7 @@ import {
   AlertTriangle,
   Sparkles,
   ChevronRight,
+  RotateCcw,
 } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
@@ -32,8 +33,9 @@ import { cn } from '@/lib/utils';
 import { LOGO_REQUIREMENTS_TEXT, validateLogoFile } from '@/lib/imageUpload';
 import { ProductionToggleModal } from '@/components/afip/ProductionToggleModal';
 import { AfipOnboardingWizard } from '@/components/afip/AfipOnboardingWizard';
+import { ReturnReasonsEditor } from '@/components/settings/ReturnReasonsEditor';
 
-type Tab = 'empresa' | 'ticket' | 'pos' | 'stock' | 'pagos' | 'facturacion';
+type Tab = 'empresa' | 'ticket' | 'pos' | 'stock' | 'pagos' | 'facturacion' | 'devoluciones';
 
 const TABS: { id: Tab; label: string; icon: typeof Building2 }[] = [
   { id: 'empresa', label: 'Empresa', icon: Building2 },
@@ -42,6 +44,7 @@ const TABS: { id: Tab; label: string; icon: typeof Building2 }[] = [
   { id: 'stock', label: 'Stock', icon: Boxes },
   { id: 'pagos', label: 'Pagos', icon: CreditCard },
   { id: 'facturacion', label: 'Facturación', icon: FileText },
+  { id: 'devoluciones', label: 'Devoluciones', icon: RotateCcw },
 ];
 
 interface FormState {
@@ -226,6 +229,12 @@ export default function Settings() {
         <Card>
           <CardBody>
             <FacturacionTab />
+          </CardBody>
+        </Card>
+      ) : tab === 'devoluciones' ? (
+        <Card>
+          <CardBody>
+            <ReturnReasonsEditor />
           </CardBody>
         </Card>
       ) : (

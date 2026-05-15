@@ -11,6 +11,7 @@ import {
   Trash2,
   UserCircle2,
   UserPlus,
+  Wallet,
   X,
 } from 'lucide-react';
 import { ReceiverSelectorModal } from '@/components/pos/ReceiverSelectorModal';
@@ -738,13 +739,46 @@ function PaymentModal({ open, onClose, total, mpReady, tenantTaxCondition, varia
   const [receiver, setReceiver] = useState<SaleReceiver | null>(null);
   const [receiverModalOpen, setReceiverModalOpen] = useState(false);
 
+  // Saldo a favor del cliente seleccionado (Sprint DEV). Solo se carga si el
+  // receiver tiene customerId (los receptores inline / ad-hoc no tienen fila
+  // en customers, entonces no tienen saldo). Por ahora SOLO se muestra como
+  // info — aplicar el saldo desde el POS requiere un endpoint server-side
+  // atómico (descontar credit + crear sale en una sola RPC). Queda pendiente
+  // para un sprint posterior.
+  // DEV Pieza C: aplicar saldo desde el POS requiere integración server-side,
+  // queda para sprint siguiente.
+  const [customerCreditBalance, setCustomerCreditBalance] = useState<number>(0);
+
   useEffect(() => {
     if (open) {
       setPayments([{ method: 'cash', amount: total }]);
       setPartial(false);
       setReceiver(null);
+      setCustomerCreditBalance(0);
     }
   }, [open, total]);
+
+  // Refrescar saldo cuando cambia el receiver seleccionado.
+  useEffect(() => {
+    if (!open || !receiver?.customerId) {
+      setCustomerCreditBalance(0);
+      return;
+    }
+    let cancelled = false;
+    const customerId = receiver.customerId;
+    (async () => {
+      try {
+        const credit = await data.getCustomerCredit(customerId);
+        if (!cancelled) setCustomerCreditBalance(credit?.balance ?? 0);
+      } catch {
+        // No bloqueamos el cobro si falla el lookup del saldo.
+        if (!cancelled) setCustomerCreditBalance(0);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [open, receiver?.customerId]);
 
   // Previsualización de la letra de factura para el cajero.
   const letterPreview = tenantTaxCondition
@@ -869,6 +903,29 @@ function PaymentModal({ open, onClose, total, mpReady, tenantTaxCondition, varia
           </button>
         )}
       </div>
+
+      {/* Saldo a favor del cliente — solo informativo por ahora (Sprint DEV).
+          TODO Sprint DEV.fix: cuando el backend exponga una RPC atómica que
+          descuente el customer_credit y cree la sale en la misma transacción,
+          agregar un checkbox "Aplicar $X de saldo" que descuente del total y
+          quede registrado como pago. Hoy lo mostramos solo como info para que
+          el cajero ofrezca compensar manualmente con efectivo o esperar al
+          fix. */}
+      {receiver?.customerId && customerCreditBalance > 0 && (
+        <div className="mb-3 flex items-start gap-2 rounded-lg border border-emerald-200 bg-emerald-50 p-2.5 text-sm">
+          <Wallet className="mt-0.5 h-4 w-4 shrink-0 text-emerald-700" />
+          <div className="min-w-0 flex-1">
+            <div className="font-medium text-emerald-800">
+              Saldo a favor disponible:{' '}
+              <span className="tabular-nums">{formatARS(customerCreditBalance)}</span>
+            </div>
+            <div className="text-[11px] text-emerald-700">
+              Este cliente tiene saldo a favor. Por ahora se aplica desde Devoluciones; aplicar
+              al cobro en el POS se habilita en una próxima versión.
+            </div>
+          </div>
+        </div>
+      )}
 
       <div className="space-y-2">
         {payments.map((p, i) => (

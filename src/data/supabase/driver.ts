@@ -9,6 +9,8 @@ import type {
   CashRegister,
   Category,
   Customer,
+  CustomerCredit,
+  CustomerCreditMovement,
   CustomerDocType,
   PaymentMethod,
   PermissionsMap,
@@ -16,6 +18,7 @@ import type {
   PlanUsage,
   Product,
   ProductVariant,
+  ReturnReason,
   Sale,
   SaleItem,
   StockItem,
@@ -44,6 +47,8 @@ import type {
   CreditNoteResult,
   CustomerInput,
   DataDriver,
+  ExchangeSaleInput,
+  ExchangeSaleResult,
   GenerateCsrInput,
   GenerateCsrResult,
   LoginInput,
@@ -51,6 +56,9 @@ import type {
   ProductInput,
   RetryDocumentInput,
   RetryResult,
+  ReturnReasonInput,
+  ReturnSaleItemsInput,
+  ReturnSaleItemsResult,
   SaleInput,
   SalesQuery,
   SignupInput,
@@ -261,12 +269,15 @@ function mapMovement(r: MovementRow): CashMovement {
 interface SaleItemRow {
   id: string; product_id: string; name: string; barcode: string | null;
   price: string; qty: string; discount: string; subtotal: string;
+  /** Sprint DEV: cantidad ya devuelta acumulada (default 0 en migration 034). */
+  qty_returned?: string | number | null;
 }
 function mapSaleItem(r: SaleItemRow): SaleItem {
   return {
     id: r.id, productId: r.product_id, name: r.name, barcode: r.barcode,
     price: Number(r.price), qty: Number(r.qty),
     discount: Number(r.discount), subtotal: Number(r.subtotal),
+    qtyReturned: r.qty_returned != null ? Number(r.qty_returned) : 0,
   };
 }
 
@@ -348,6 +359,74 @@ function mapAfipDocument(r: AfipDocumentRow): AfipDocumentSummary {
     relatedDocId: r.related_doc_id,
     qrUrl: r.qr_url,
     errorMessage: r.error_message,
+    createdAt: r.created_at,
+  };
+}
+
+// ============================================================
+// Sprint DEV: devoluciones / saldo cliente
+// ============================================================
+interface ReturnReasonRow {
+  id: string;
+  tenant_id: string;
+  code: string;
+  label: string;
+  stock_destination: 'original' | 'specific_warehouse' | 'discard';
+  destination_warehouse_id: string | null;
+  active: boolean;
+  sort_order: number;
+  created_at: string;
+  updated_at: string;
+}
+function mapReturnReason(r: ReturnReasonRow): ReturnReason {
+  return {
+    id: r.id,
+    tenantId: r.tenant_id,
+    code: r.code,
+    label: r.label,
+    stockDestination: r.stock_destination,
+    destinationWarehouseId: r.destination_warehouse_id,
+    active: r.active,
+    sortOrder: r.sort_order,
+    createdAt: r.created_at,
+    updatedAt: r.updated_at,
+  };
+}
+
+interface CustomerCreditRow {
+  customer_id: string;
+  balance: string | number;
+  currency: string;
+  updated_at: string;
+}
+function mapCustomerCredit(r: CustomerCreditRow): CustomerCredit {
+  return {
+    customerId: r.customer_id,
+    balance: Number(r.balance),
+    currency: r.currency,
+    updatedAt: r.updated_at,
+  };
+}
+
+interface CustomerCreditMovementRow {
+  id: string;
+  customer_id: string;
+  amount: string | number;
+  reason: 'return_credit' | 'sale_payment' | 'manual_adjust' | 'fiado' | 'fiado_payment';
+  related_sale_id: string | null;
+  related_doc_id: string | null;
+  notes: string | null;
+  created_at: string;
+}
+function mapCustomerCreditMovement(r: CustomerCreditMovementRow): CustomerCreditMovement {
+  return {
+    id: r.id,
+    customerId: r.customer_id,
+    amount: Number(r.amount),
+    reason: r.reason,
+    relatedSaleId: r.related_sale_id,
+    relatedDocId: r.related_doc_id,
+    notes: r.notes,
     createdAt: r.created_at,
   };
 }
@@ -2088,5 +2167,140 @@ class SupabaseDriver implements DataDriver {
     if (!defaultVariant) return null;
 
     return { product, variant: mapProductVariant(defaultVariant as ProductVariantRow) };
+  }
+
+  // --- Sprint DEV: devoluciones / cambios / saldo cliente ---
+
+  async listReturnReasons(opts?: { activeOnly?: boolean }): Promise<ReturnReason[]> {
+    await this.requireSession();
+    let query = this.sb
+      .from('return_reasons')
+      .select('*')
+      .order('sort_order', { ascending: true });
+    if (opts?.activeOnly) query = query.eq('active', true);
+    const { data, error } = await query;
+    if (error) throw new Error(error.message);
+    return (data ?? []).map((r) => mapReturnReason(r as ReturnReasonRow));
+  }
+
+  async createReturnReason(input: ReturnReasonInput): Promise<ReturnReason> {
+    const s = await this.requireSession();
+    const { data, error } = await this.sb
+      .from('return_reasons')
+      .insert({
+        tenant_id: s.tenantId,
+        code: input.code,
+        label: input.label,
+        stock_destination: input.stockDestination,
+        destination_warehouse_id: input.destinationWarehouseId ?? null,
+        active: input.active ?? true,
+        sort_order: input.sortOrder ?? 0,
+      })
+      .select('*')
+      .single();
+    if (error) throw new Error(error.message);
+    return mapReturnReason(data as ReturnReasonRow);
+  }
+
+  async updateReturnReason(
+    id: string,
+    input: Partial<ReturnReasonInput>,
+  ): Promise<ReturnReason> {
+    await this.requireSession();
+    const patch: Record<string, unknown> = {};
+    if (input.code !== undefined) patch.code = input.code;
+    if (input.label !== undefined) patch.label = input.label;
+    if (input.stockDestination !== undefined) patch.stock_destination = input.stockDestination;
+    if (input.destinationWarehouseId !== undefined) {
+      patch.destination_warehouse_id = input.destinationWarehouseId;
+    }
+    if (input.active !== undefined) patch.active = input.active;
+    if (input.sortOrder !== undefined) patch.sort_order = input.sortOrder;
+    const { data, error } = await this.sb
+      .from('return_reasons')
+      .update(patch)
+      .eq('id', id)
+      .select('*')
+      .single();
+    if (error) throw new Error(error.message);
+    return mapReturnReason(data as ReturnReasonRow);
+  }
+
+  async deactivateReturnReason(id: string): Promise<void> {
+    await this.requireSession();
+    const { error } = await this.sb
+      .from('return_reasons')
+      .update({ active: false })
+      .eq('id', id);
+    if (error) throw new Error(error.message);
+  }
+
+  async returnSaleItems(input: ReturnSaleItemsInput): Promise<ReturnSaleItemsResult> {
+    await this.requireSession();
+    const { data: sessionData } = await this.sb.auth.getSession();
+    const token = sessionData.session?.access_token;
+    if (!token) throw new Error('No autenticado');
+
+    const url = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/afip-return-items`;
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+        apikey: import.meta.env.VITE_SUPABASE_ANON_KEY ?? '',
+      },
+      body: JSON.stringify(input),
+    });
+    const body = (await res.json().catch(() => ({}))) as ReturnSaleItemsResult;
+    if (!res.ok && body.error === undefined) {
+      throw new Error(`Error HTTP ${res.status}`);
+    }
+    return body;
+  }
+
+  async exchangeSale(input: ExchangeSaleInput): Promise<ExchangeSaleResult> {
+    await this.requireSession();
+    const { data: sessionData } = await this.sb.auth.getSession();
+    const token = sessionData.session?.access_token;
+    if (!token) throw new Error('No autenticado');
+
+    const url = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/afip-exchange-sale`;
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+        apikey: import.meta.env.VITE_SUPABASE_ANON_KEY ?? '',
+      },
+      body: JSON.stringify(input),
+    });
+    const body = (await res.json().catch(() => ({}))) as ExchangeSaleResult;
+    if (!res.ok && body.error === undefined) {
+      throw new Error(`Error HTTP ${res.status}`);
+    }
+    return body;
+  }
+
+  async getCustomerCredit(customerId: string): Promise<CustomerCredit | null> {
+    await this.requireSession();
+    const { data, error } = await this.sb
+      .from('customer_credits')
+      .select('customer_id, balance, currency, updated_at')
+      .eq('customer_id', customerId)
+      .maybeSingle();
+    if (error) throw new Error(error.message);
+    return data ? mapCustomerCredit(data as CustomerCreditRow) : null;
+  }
+
+  async listCustomerCreditMovements(customerId: string): Promise<CustomerCreditMovement[]> {
+    await this.requireSession();
+    const { data, error } = await this.sb
+      .from('customer_credit_movements')
+      .select('id, customer_id, amount, reason, related_sale_id, related_doc_id, notes, created_at')
+      .eq('customer_id', customerId)
+      .order('created_at', { ascending: false })
+      .limit(50);
+    if (error) throw new Error(error.message);
+    return (data ?? []).map((r) => mapCustomerCreditMovement(r as CustomerCreditMovementRow));
   }
 }

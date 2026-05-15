@@ -6,6 +6,8 @@ import type {
   CashRegister,
   Category,
   Customer,
+  CustomerCredit,
+  CustomerCreditMovement,
   CustomerDocType,
   CustomerIvaCondition,
   PermissionsMap,
@@ -13,6 +15,7 @@ import type {
   PlanUsage,
   Product,
   ProductVariant,
+  ReturnReason,
   Role,
   Sale,
   SaleReceiver,
@@ -129,6 +132,10 @@ export interface AfipDocumentSummary {
   qrUrl: string | null;
   errorMessage: string | null;
   createdAt: string;
+  /** Sub-tipo (Sprint DEV). null en docs antiguos no migrados. */
+  kind?: 'factura' | 'void_total' | 'void_partial' | 'exchange_nc' | 'nota_debito' | null;
+  reasonId?: string | null;
+  reasonText?: string | null;
 }
 
 /** Input para emitir una Nota de Crédito. */
@@ -192,6 +199,72 @@ export interface GenerateCsrInput {
   salesPoint: number;
   /** Ambiente: cada uno tiene su propio par (homo y prod son cuentas AFIP distintas). */
   environment: 'homologation' | 'production';
+}
+
+// --- Sprint DEV: devoluciones, cambios, saldo cliente ---
+
+export interface ReturnReasonInput {
+  code: string;
+  label: string;
+  stockDestination: 'original' | 'specific_warehouse' | 'discard';
+  destinationWarehouseId?: string | null;
+  active?: boolean;
+  sortOrder?: number;
+}
+
+/** Devolver items de una venta (sin cambio, sólo NC parcial). */
+export interface ReturnSaleItemsInput {
+  saleId: string;
+  /** Cantidades a devolver por línea (no puede superar `qty - qtyReturned`). */
+  items: { saleItemId: string; qty: number }[];
+  reasonId?: string | null;
+  reasonText?: string | null;
+  /**
+   * Cómo se devuelve el dinero al cliente:
+   * - 'cash'   → sale del cajón (movimiento out automático)
+   * - 'credit' → suma al saldo a favor del cliente (requiere customerId en la venta)
+   * - 'none'   → ya está saldado de otra forma (manual)
+   */
+  refundMode: 'cash' | 'credit' | 'none';
+}
+
+export interface ReturnSaleItemsResult {
+  ok: boolean;
+  creditNoteId?: string;
+  creditNoteAmount?: number;
+  newCustomerBalance?: number | null;
+  error?: string;
+}
+
+/** Cambio: devolver items + llevarse nuevos. Maneja diferencia automáticamente. */
+export interface ExchangeSaleInput {
+  originalSaleId: string;
+  /** Items que el cliente devuelve (qty a devolver por línea). */
+  returnedItems: { saleItemId: string; qty: number }[];
+  /** Items que el cliente se lleva (mismo shape que SaleInput.items). */
+  newItems: { productId: string; variantId?: string; qty: number; price: number; discount: number }[];
+  /** Pagos para cubrir la diferencia si lo nuevo cuesta MÁS. */
+  payments: { method: Sale['payments'][number]['method']; amount: number }[];
+  /**
+   * Cómo se cierra la diferencia si lo nuevo cuesta MENOS:
+   * - 'cash'   → devolver delta en efectivo
+   * - 'credit' → sumar al saldo del cliente
+   */
+  refundMode: 'cash' | 'credit';
+  reasonId?: string | null;
+  reasonText?: string | null;
+  /** Datos del receptor para la nueva factura. Si null, anónima. */
+  receiver?: SaleReceiver | null;
+}
+
+export interface ExchangeSaleResult {
+  ok: boolean;
+  creditNoteId?: string;
+  newSaleId?: string;
+  /** Delta en favor del cliente (positivo = se devuelve algo o crédito; negativo = cobra). */
+  difference?: number;
+  newCustomerBalance?: number | null;
+  error?: string;
 }
 
 /** Resultado de generar el CSR. */
@@ -454,4 +527,19 @@ export interface DataDriver {
    * de Customer y validar antes de emitir Factura A.
    */
   consultAfipPadron(input: ConsultAfipPadronInput): Promise<AfipPadronResult>;
+
+  // --- Sprint DEV: devoluciones / cambios / saldo cliente ---
+  listReturnReasons(opts?: { activeOnly?: boolean }): Promise<ReturnReason[]>;
+  createReturnReason(input: ReturnReasonInput): Promise<ReturnReason>;
+  updateReturnReason(id: string, input: Partial<ReturnReasonInput>): Promise<ReturnReason>;
+  /** Soft delete: setea active=false. */
+  deactivateReturnReason(id: string): Promise<void>;
+  /** Devolver items de una venta (NC parcial). */
+  returnSaleItems(input: ReturnSaleItemsInput): Promise<ReturnSaleItemsResult>;
+  /** Cambio atómico: devolver + nueva venta + cerrar diferencia. */
+  exchangeSale(input: ExchangeSaleInput): Promise<ExchangeSaleResult>;
+  /** Saldo actual del cliente (puede ser 0/null si nunca tuvo movimientos). */
+  getCustomerCredit(customerId: string): Promise<CustomerCredit | null>;
+  /** Historial de movimientos del saldo del cliente, más reciente primero. */
+  listCustomerCreditMovements(customerId: string): Promise<CustomerCreditMovement[]>;
 }

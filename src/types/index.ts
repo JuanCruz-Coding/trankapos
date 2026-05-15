@@ -269,12 +269,55 @@ export interface CashMovement {
 export interface SaleItem {
   id: string;
   productId: string;
+  /** Variante vendida. Opcional durante la transición (Sprint VAR). */
+  variantId?: string;
   name: string;
   barcode: string | null;
   price: number;
   qty: number;
   discount: number;
   subtotal: number;
+  /** Cantidad ya devuelta acumulada (Sprint DEV). 0 = nada devuelto. */
+  qtyReturned?: number;
+}
+
+/**
+ * Motivo de devolución/cambio (Sprint DEV).
+ * stock_destination define qué pasa con el item devuelto:
+ * - 'original'           → vuelve al depósito original (default)
+ * - 'specific_warehouse' → va al warehouse configurado (ej. depósito "Service")
+ * - 'discard'            → no se ingresa a ningún depósito (pérdida)
+ */
+export interface ReturnReason {
+  id: string;
+  tenantId: string;
+  code: string;
+  label: string;
+  stockDestination: 'original' | 'specific_warehouse' | 'discard';
+  destinationWarehouseId: string | null;
+  active: boolean;
+  sortOrder: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** Saldo del cliente (Sprint DEV). Positivo = a favor, negativo = fiado (no implementado). */
+export interface CustomerCredit {
+  customerId: string;
+  balance: number;
+  currency: string;
+  updatedAt: string;
+}
+
+export interface CustomerCreditMovement {
+  id: string;
+  customerId: string;
+  amount: number;
+  reason: 'return_credit' | 'sale_payment' | 'manual_adjust' | 'fiado' | 'fiado_payment';
+  relatedSaleId: string | null;
+  relatedDocId: string | null;
+  notes: string | null;
+  createdAt: string;
 }
 
 export interface SalePayment {

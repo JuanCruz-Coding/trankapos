@@ -7,11 +7,14 @@ import type {
   CashMovement,
   CashRegister,
   Category,
+  CustomerCredit,
+  CustomerCreditMovement,
   PermissionsMap,
   Plan,
   PlanUsage,
   Product,
   ProductVariant,
+  ReturnReason,
   Sale,
   SaleItem,
   StockItem,
@@ -39,6 +42,8 @@ import type {
   ConsultAfipPadronInput,
   CustomerInput,
   DataDriver,
+  ExchangeSaleInput,
+  ExchangeSaleResult,
   GenerateCsrInput,
   GenerateCsrResult,
   LoginInput,
@@ -47,6 +52,9 @@ import type {
   ProductInput,
   RetryDocumentInput,
   RetryResult,
+  ReturnReasonInput,
+  ReturnSaleItemsInput,
+  ReturnSaleItemsResult,
   SaleInput,
   SalesQuery,
   SignupInput,
@@ -1300,5 +1308,43 @@ export class LocalDriver implements DataDriver {
   ): Promise<{ product: Product; variant: ProductVariant } | null> {
     await this.requireSession();
     return null;
+  }
+
+  // --- Sprint DEV: devoluciones / cambios / saldo cliente ---
+  // Modo offline: nada de esto está soportado por ahora.
+  async listReturnReasons(_opts?: { activeOnly?: boolean }): Promise<ReturnReason[]> {
+    await this.requireSession();
+    return [];
+  }
+  async createReturnReason(_input: ReturnReasonInput): Promise<ReturnReason> {
+    await this.requireSession();
+    throw new Error('Las devoluciones requieren modo online (por ahora).');
+  }
+  async updateReturnReason(
+    _id: string,
+    _input: Partial<ReturnReasonInput>,
+  ): Promise<ReturnReason> {
+    await this.requireSession();
+    throw new Error('Las devoluciones requieren modo online (por ahora).');
+  }
+  async deactivateReturnReason(_id: string): Promise<void> {
+    await this.requireSession();
+    throw new Error('Las devoluciones requieren modo online (por ahora).');
+  }
+  async returnSaleItems(_input: ReturnSaleItemsInput): Promise<ReturnSaleItemsResult> {
+    await this.requireSession();
+    throw new Error('Las devoluciones requieren modo online (por ahora).');
+  }
+  async exchangeSale(_input: ExchangeSaleInput): Promise<ExchangeSaleResult> {
+    await this.requireSession();
+    throw new Error('Los cambios requieren modo online (por ahora).');
+  }
+  async getCustomerCredit(_customerId: string): Promise<CustomerCredit | null> {
+    await this.requireSession();
+    return null;
+  }
+  async listCustomerCreditMovements(_customerId: string): Promise<CustomerCreditMovement[]> {
+    await this.requireSession();
+    return [];
   }
 }

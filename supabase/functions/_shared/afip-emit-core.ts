@@ -811,6 +811,359 @@ export async function emitCreditNoteForFactura(
 }
 
 // ---------------------------------------------------------------------
+// emitPartialCreditNoteForFactura (Sprint DEV: devoluciones)
+// ---------------------------------------------------------------------
+
+/** Item de la NC parcial: cuántas unidades de una línea de venta se devuelven. */
+export interface PartialNcItem {
+  saleItemId: string;
+  qty: number;
+}
+
+/**
+ * Emite una Nota de Crédito PARCIAL sobre una factura ya autorizada,
+ * recalculando importes en proporción a las cantidades devueltas.
+ *
+ * Diferencias clave con emitCreditNoteForFactura (NC total):
+ *  - NO se copian los importes EXACTOS del raw_request; se recalcula
+ *    proporcionalmente sobre los `sale_items` afectados.
+ *  - Marca el doc con kind='void_partial' (la decisión del kind final
+ *    queda en el caller — afip-exchange-sale puede pisarlo a 'exchange_nc').
+ *  - Soporta `reasonId` / `reasonText` para auditoría.
+ *  - Si la emisión sale OK, ACTUALIZA `sale_items.qty_returned += qty`
+ *    para cada item devuelto (parte atómica del flujo de devolución).
+ *
+ * NO maneja stock ni refund: eso es responsabilidad del shell que llama.
+ *
+ * @param tenantId Tenant YA validado por el caller.
+ * @param facturaDocId id del afip_documents de la factura original.
+ * @param items Líneas a devolver, con la cantidad parcial.
+ */
+export async function emitPartialCreditNoteForFactura(
+  admin: SupabaseClient,
+  tenantId: string,
+  facturaDocId: string,
+  items: PartialNcItem[],
+  encryptionKey: string,
+  opts?: { reasonId?: string | null; reasonText?: string | null },
+): Promise<EmitResult & { creditNoteAmount?: number; movedItems?: PartialNcItem[] }> {
+  if (!items || items.length === 0) {
+    return { ok: false, error: 'No hay items para devolver' };
+  }
+  for (const it of items) {
+    if (!it.saleItemId) return { ok: false, error: 'saleItemId vacío en items' };
+    if (!Number.isFinite(it.qty) || it.qty <= 0) {
+      return { ok: false, error: `Cantidad inválida para saleItem ${it.saleItemId}` };
+    }
+  }
+
+  const docCols =
+    'id, tenant_id, sale_id, doc_type, doc_letter, sales_point, ' +
+    'voucher_number, cae, cae_due_date, status, related_doc_id, raw_request';
+
+  // --- Cargar y validar la factura original.
+  const { data: facturaData, error: facturaErr } = await admin
+    .from('afip_documents')
+    .select(docCols)
+    .eq('id', facturaDocId)
+    .maybeSingle();
+  if (facturaErr) return { ok: false, error: facturaErr.message };
+  const factura = facturaData as AfipDocRow | null;
+  if (!factura) return { ok: false, error: 'Factura no encontrada' };
+
+  if (factura.tenant_id !== tenantId) {
+    return { ok: false, error: 'La factura no pertenece a tu tenant' };
+  }
+  if (factura.doc_type !== 'factura') {
+    return { ok: false, error: 'El documento indicado no es una factura' };
+  }
+  if (factura.status !== 'authorized') {
+    return { ok: false, error: 'Solo se puede emitir una Nota de Crédito sobre una factura autorizada' };
+  }
+  if (factura.voucher_number == null) {
+    return { ok: false, error: 'La factura no tiene número de comprobante asignado' };
+  }
+  if (!factura.sale_id) {
+    return { ok: false, error: 'La factura no está asociada a una venta' };
+  }
+  const raw = factura.raw_request;
+  if (!raw) {
+    return {
+      ok: false,
+      error:
+        'La factura original no tiene los importes guardados (factura antigua). ' +
+        'No se puede acreditar automáticamente — emitir la NC manual.',
+    };
+  }
+
+  // --- Cargar sale_items de la venta + tax_rate del producto (para A/B).
+  const { data: itemRows, error: itemsErr } = await admin
+    .from('sale_items')
+    .select('id, sale_id, product_id, qty, subtotal, qty_returned, products(tax_rate)')
+    .eq('sale_id', factura.sale_id);
+  if (itemsErr) return { ok: false, error: itemsErr.message };
+
+  type SaleItemRow = {
+    id: string;
+    sale_id: string;
+    product_id: string;
+    qty: string | number;
+    subtotal: string | number;
+    qty_returned: string | number | null;
+    products?: { tax_rate: string | number } | { tax_rate: string | number }[] | null;
+  };
+  const saleItemsById = new Map<string, SaleItemRow>();
+  for (const it of (itemRows ?? []) as SaleItemRow[]) {
+    saleItemsById.set(it.id, it);
+  }
+
+  // --- Validar cada item devuelto: pertenece a la sale + qty disponible.
+  // También armamos el array para computeIvaBreakdown (subtotal proporcional + tax_rate).
+  const itemsForIva: { subtotal: number; taxRate: number }[] = [];
+  let impTotalCalc = 0;
+  for (const it of items) {
+    const row = saleItemsById.get(it.saleItemId);
+    if (!row) {
+      return { ok: false, error: `Item ${it.saleItemId} no pertenece a la venta facturada` };
+    }
+    const originalQty = Number(row.qty);
+    const alreadyReturned = Number(row.qty_returned ?? 0);
+    const available = originalQty - alreadyReturned;
+    if (it.qty > available + 0.0005) {
+      return {
+        ok: false,
+        error: `No se puede devolver ${it.qty} unidades (disponible: ${available}) del item ${it.saleItemId}`,
+      };
+    }
+    const originalSubtotal = Number(row.subtotal);
+    // Importe proporcional con el mismo precio unitario que la línea original.
+    const lineAmount = Math.round((originalSubtotal * (it.qty / originalQty)) * 100) / 100;
+    impTotalCalc = Math.round((impTotalCalc + lineAmount) * 100) / 100;
+
+    const productRel = Array.isArray(row.products) ? row.products[0] : row.products;
+    const taxRate = productRel?.tax_rate != null ? Number(productRel.tax_rate) : 21;
+    itemsForIva.push({ subtotal: lineAmount, taxRate });
+  }
+
+  if (impTotalCalc <= 0) {
+    return { ok: false, error: 'El importe a acreditar es 0' };
+  }
+
+  // --- Idempotencia: si ya existe NC autorizada para esta factura cuya suma
+  // de items coincida exactamente, devolverla. Acá es complejo (puede haber
+  // muchas NCs parciales sobre la misma factura). NO bloqueamos: dejamos que
+  // afip_documents acumule (los rejected/pending viejos no son problema).
+  // El check de tope "no devolver más de lo facturado" lo da qty_returned.
+
+  // --- Credenciales AFIP.
+  const { data: credsRows, error: credsErr } = await admin.rpc('afip_get_credentials', {
+    p_tenant_id: tenantId,
+    p_encryption_key: encryptionKey,
+  });
+  if (credsErr) return { ok: false, error: `Error credenciales: ${credsErr.message}` };
+  const creds = Array.isArray(credsRows) ? credsRows[0] : credsRows;
+  if (!creds) return { ok: false, error: 'AFIP no configurado para este tenant' };
+  if (!creds.is_active) return { ok: false, error: 'AFIP pausado' };
+
+  const env = creds.environment as AfipEnv;
+  const ptoVta = creds.sales_point as number;
+  const cuit = creds.cuit as string;
+
+  const cbteTipoNC = creditNoteCbteTipo(factura.doc_letter);
+
+  // --- Calcular importes finales: A/B con IVA discriminado, C plano.
+  let impNeto: number;
+  let impIVA: number;
+  let impTotal: number;
+  let ivaForRequest: IvaAlicuota[] | undefined;
+
+  if (factura.doc_letter === 'C') {
+    impTotal = impTotalCalc;
+    impNeto = impTotalCalc;
+    impIVA = 0;
+    ivaForRequest = undefined;
+  } else {
+    // En NC, NO hay descuento global a prorratear (los importes ya están
+    // a nivel de línea con el precio cobrado). Pasamos discount=0 y
+    // expectedTotal=impTotalCalc para que el helper ajuste drift.
+    const breakdown = computeIvaBreakdown(itemsForIva, 0, impTotalCalc);
+    impNeto = breakdown.impNeto;
+    impIVA = breakdown.impIVA;
+    impTotal = breakdown.impTotal;
+    ivaForRequest = breakdown.alicuotas;
+  }
+
+  // --- Insertar afip_documents pending para la NC parcial.
+  const insertPayload: Record<string, unknown> = {
+    tenant_id: tenantId,
+    sale_id: factura.sale_id,
+    doc_type: 'nota_credito',
+    doc_letter: factura.doc_letter,
+    sales_point: ptoVta,
+    related_doc_id: factura.id,
+    status: 'pending',
+    environment: env,
+    kind: 'void_partial',
+  };
+  if (opts?.reasonId !== undefined) insertPayload.reason_id = opts.reasonId;
+  if (opts?.reasonText !== undefined) insertPayload.reason_text = opts.reasonText;
+
+  const { data: ncRow, error: ncInsErr } = await admin
+    .from('afip_documents')
+    .insert(insertPayload)
+    .select('id')
+    .single();
+  if (ncInsErr) return { ok: false, error: `Error insertando afip_document NC parcial: ${ncInsErr.message}` };
+  const ncId = ncRow.id;
+
+  try {
+    // WSAA
+    const ta = await getTicketAccess({
+      admin,
+      tenantId,
+      service: 'wsfe',
+      env,
+      certPem: creds.cert_pem,
+      keyPem: creds.key_pem,
+    });
+    const auth = { ta, cuit, env };
+
+    // Último número del CbteTipo de la NC.
+    const last = await feCompUltimoAutorizado(auth, ptoVta, cbteTipoNC);
+    const nextNumber = last + 1;
+
+    const today = new Date();
+    const cbteFch = fmtDate(today);
+    const cbteFchIso = `${cbteFch.slice(0, 4)}-${cbteFch.slice(4, 6)}-${cbteFch.slice(6, 8)}`;
+
+    const cbtesAsoc: CbteAsoc[] = [
+      {
+        tipo: facturaCbteTipo(factura),
+        ptoVta: factura.sales_point,
+        nro: factura.voucher_number,
+        cuit,
+        cbteFch: raw.cbteFch,
+      },
+    ];
+
+    // Datos del receptor: se copian del raw_request de la factura original.
+    const voucherRequest: VoucherRequest = {
+      cbteTipo: cbteTipoNC,
+      ptoVta,
+      concepto: raw.concepto,
+      docTipo: raw.docTipo,
+      docNro: raw.docNro,
+      cbteFch,
+      impTotal,
+      impNeto,
+      impIVA,
+      impTotConc: 0,
+      impOpEx: 0,
+      impTrib: 0,
+      monId: raw.monId,
+      monCotiz: raw.monCotiz,
+      condicionIVAReceptorId: raw.condicionIVAReceptorId,
+      iva: ivaForRequest,
+      cbtesAsoc,
+    };
+
+    const resp = await feCAESolicitar(auth, ptoVta, nextNumber, voucherRequest);
+
+    if (resp.resultado !== 'A') {
+      const obsTxt = resp.observaciones.map((o) => `${o.code}:${o.msg}`).join(' | ');
+      const errTxt = resp.errores.map((e) => `${e.code}:${e.msg}`).join(' | ');
+      const detail = [obsTxt, errTxt].filter(Boolean).join(' || ') || `Resultado ${resp.resultado}`;
+      await admin
+        .from('afip_documents')
+        .update({
+          status: 'rejected',
+          voucher_number: nextNumber,
+          error_message: detail.slice(0, 500),
+          raw_request: voucherRequest,
+          raw_response: resp,
+        })
+        .eq('id', ncId);
+      return {
+        ok: false,
+        error: `AFIP rechazó la Nota de Crédito parcial: ${detail}`,
+        documentId: ncId,
+      };
+    }
+
+    const caeFchVtoIso = `${resp.caeFchVto.slice(0, 4)}-${resp.caeFchVto.slice(4, 6)}-${resp.caeFchVto.slice(6, 8)}`;
+    const qrUrl = buildQrUrl({
+      cuit,
+      ptoVta,
+      tipoCmp: cbteTipoNC,
+      nroCmp: nextNumber,
+      fecha: cbteFchIso,
+      importe: impTotal,
+      cae: resp.cae,
+      tipoDocRec: raw.docTipo,
+      nroDocRec: raw.docNro === '0' ? 0 : Number(raw.docNro),
+    });
+
+    await admin
+      .from('afip_documents')
+      .update({
+        status: 'authorized',
+        voucher_number: nextNumber,
+        cae: resp.cae,
+        cae_due_date: caeFchVtoIso,
+        qr_url: qrUrl,
+        raw_request: voucherRequest,
+        raw_response: resp,
+        emitted_at: new Date().toISOString(),
+      })
+      .eq('id', ncId);
+
+    // --- Actualizar qty_returned en sale_items.
+    // supabase-js no permite "col = col + valor" en update — leemos y escribimos.
+    // Los retornos son por orden del cajero (no hay concurrencia real sobre el
+    // mismo item), así que no necesitamos lock pesimista.
+    for (const it of items) {
+      const row = saleItemsById.get(it.saleItemId);
+      if (!row) continue;
+      const newQtyReturned = Number(row.qty_returned ?? 0) + it.qty;
+      const { error: updErr } = await admin
+        .from('sale_items')
+        .update({ qty_returned: newQtyReturned })
+        .eq('id', it.saleItemId);
+      if (updErr) {
+        // No tiramos: la NC ya está autorizada. Logueamos y seguimos — el
+        // operador puede ver el doc autorizado y el qty_returned se puede
+        // reconciliar en una herramienta de mantenimiento.
+        console.warn(`[emitPartialNc] qty_returned update falló para ${it.saleItemId}: ${updErr.message}`);
+      }
+    }
+
+    return {
+      ok: true,
+      documentId: ncId,
+      cae: resp.cae,
+      voucherNumber: nextNumber,
+      caeDueDate: caeFchVtoIso,
+      ptoVta,
+      cbteTipo: factura.doc_letter,
+      qrUrl,
+      environment: env,
+      creditNoteAmount: impTotal,
+      movedItems: items,
+    };
+  } catch (err) {
+    const msg = (err as Error).message;
+    await admin
+      .from('afip_documents')
+      .update({
+        status: 'rejected',
+        error_message: msg.slice(0, 500),
+      })
+      .eq('id', ncId);
+    return { ok: false, error: msg, documentId: ncId };
+  }
+}
+
+// ---------------------------------------------------------------------
 // Helpers internos de retry
 // ---------------------------------------------------------------------
 

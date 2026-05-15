@@ -5,10 +5,12 @@ import { Input } from '@/components/ui/Input';
 import { Modal } from '@/components/ui/Modal';
 import { Empty } from '@/components/ui/Empty';
 import { PageHeader } from '@/components/ui/PageHeader';
+import { CustomerCreditPanel } from '@/components/customers/CustomerCreditPanel';
 import { data } from '@/data';
 import { toast } from '@/stores/toast';
 import { confirmDialog } from '@/lib/dialog';
 import { formatCuit, validateDocument } from '@/lib/cuitValidator';
+import { formatARS } from '@/lib/currency';
 import {
   CUSTOMER_DOC_TYPES,
   CUSTOMER_IVA_CONDITIONS,
@@ -44,6 +46,9 @@ export default function Customers() {
   const [form, setForm] = useState<FormState>(emptyForm);
   const [saving, setSaving] = useState(false);
   const [padronLoading, setPadronLoading] = useState(false);
+  // Saldo a favor por cliente (Sprint DEV). Indexado por customerId.
+  // Se carga en batch para los primeros 50 clientes para no abusar del backend.
+  const [creditByCustomer, setCreditByCustomer] = useState<Record<string, number>>({});
 
   useEffect(() => {
     void load();
@@ -54,6 +59,25 @@ export default function Customers() {
     try {
       const list = await data.listCustomers({ activeOnly: true });
       setCustomers(list);
+      // Carga los saldos en paralelo para los primeros 50 visibles.
+      // Si un cliente no tiene fila en customer_credits, getCustomerCredit
+      // devuelve null (balance=0 efectivo).
+      const sample = list.slice(0, 50);
+      const credits = await Promise.all(
+        sample.map(async (c) => {
+          try {
+            const cr = await data.getCustomerCredit(c.id);
+            return [c.id, cr?.balance ?? 0] as const;
+          } catch {
+            return [c.id, 0] as const;
+          }
+        }),
+      );
+      const map: Record<string, number> = {};
+      for (const [id, balance] of credits) {
+        if (balance !== 0) map[id] = balance;
+      }
+      setCreditByCustomer(map);
     } catch (err) {
       toast.error((err as Error).message);
     } finally {
@@ -233,11 +257,14 @@ export default function Customers() {
                 <th className="px-3 py-2">Documento</th>
                 <th className="px-3 py-2">Condición IVA</th>
                 <th className="px-3 py-2">Email</th>
+                <th className="px-3 py-2">Saldo</th>
                 <th className="px-3 py-2 w-24"></th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
-              {filtered.map((c) => (
+              {filtered.map((c) => {
+                const balance = creditByCustomer[c.id] ?? 0;
+                return (
                 <tr key={c.id} className="hover:bg-slate-50">
                   <td className="px-3 py-2 font-medium text-navy">{c.legalName}</td>
                   <td className="px-3 py-2 font-mono text-xs">
@@ -245,6 +272,15 @@ export default function Customers() {
                   </td>
                   <td className="px-3 py-2">{ivaLabel(c.ivaCondition)}</td>
                   <td className="px-3 py-2 text-slate-600">{c.email ?? '—'}</td>
+                  <td className="px-3 py-2 text-right tabular-nums">
+                    {balance > 0 ? (
+                      <span className="font-semibold text-emerald-700">{formatARS(balance)}</span>
+                    ) : balance < 0 ? (
+                      <span className="font-semibold text-red-700">{formatARS(balance)}</span>
+                    ) : (
+                      <span className="text-slate-400">—</span>
+                    )}
+                  </td>
                   <td className="px-3 py-2 text-right">
                     <button
                       onClick={() => openEdit(c)}
@@ -262,7 +298,8 @@ export default function Customers() {
                     </button>
                   </td>
                 </tr>
-              ))}
+                );
+              })}
             </tbody>
           </table>
         </div>
@@ -275,6 +312,7 @@ export default function Customers() {
         widthClass="max-w-lg"
       >
         <form onSubmit={handleSubmit} className="space-y-3">
+          {form.id && <CustomerCreditPanel customerId={form.id} />}
           <div className="grid gap-3 md:grid-cols-2">
             <Field label="Tipo de documento">
               <select

@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useState, type FormEvent } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
-import { Ban, CircleDollarSign, Eye, FileMinus, Receipt, X } from 'lucide-react';
+import { Ban, CircleDollarSign, Eye, FileMinus, Receipt, RotateCcw, X } from 'lucide-react';
 import { Modal } from '@/components/ui/Modal';
 import { Button } from '@/components/ui/Button';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { Tooltip } from '@/components/ui/Tooltip';
 import { ReceiptModal } from '@/components/pos/ReceiptModal';
+import { ReturnExchangeWizard } from '@/components/sales/ReturnExchangeWizard';
 import { data } from '@/data';
 import { useAuth } from '@/stores/auth';
 import { formatARS } from '@/lib/currency';
@@ -40,6 +41,7 @@ export default function Sales() {
   const [view, setView] = useState<Sale | null>(null);
   const [ticketFor, setTicketFor] = useState<Sale | null>(null);
   const [collectFor, setCollectFor] = useState<Sale | null>(null);
+  const [returnFor, setReturnFor] = useState<Sale | null>(null);
   // Documentos AFIP por venta (factura + NC). Se cargan al cambiar la lista
   // de ventas visibles. Vacío para ventas sin facturación o en modo offline.
   const [afipDocs, setAfipDocs] = useState<Map<string, AfipDocumentSummary[]>>(new Map());
@@ -205,6 +207,13 @@ export default function Sales() {
                 const isBusy = busySaleIds.has(s.id);
                 const canEmitCreditNote =
                   !s.voided && getAuthorizedInvoice(s.id) !== null && !hasAuthorizedCreditNote(s.id);
+                // Sprint DEV: cantidad ya devuelta (suma de qtyReturned por línea).
+                const returnedCount = s.items.reduce((a, it) => a + (it.qtyReturned ?? 0), 0);
+                // Queda algo por devolver = al menos una línea con qtyReturned < qty.
+                const hasReturnable = s.items.some((it) => (it.qtyReturned ?? 0) < it.qty);
+                // El botón se muestra sólo si hay factura authorized y queda algo por devolver.
+                const canReturnOrExchange =
+                  !s.voided && getAuthorizedInvoice(s.id) !== null && hasReturnable;
                 return (
                   <tr key={s.id} className={s.voided ? 'opacity-50' : 'hover:bg-slate-50'}>
                     <td className="px-4 py-3">{formatDateTime(s.createdAt)}</td>
@@ -236,6 +245,15 @@ export default function Sales() {
                           Ok
                         </span>
                       )}
+                      {returnedCount > 0 && !s.voided && (
+                        <span
+                          className="ml-1 inline-flex items-center gap-1 rounded-full bg-amber-50 px-2 py-0.5 text-[10px] text-amber-800"
+                          title="Esta venta tiene devoluciones previas"
+                        >
+                          <RotateCcw className="h-3 w-3" />
+                          {returnedCount} {returnedCount === 1 ? 'item devuelto' : 'items devueltos'}
+                        </span>
+                      )}
                     </td>
                     <td className="px-4 py-3 text-right">
                       <div className="flex justify-end gap-1">
@@ -265,6 +283,17 @@ export default function Sales() {
                             <Receipt className="h-4 w-4" />
                           </button>
                         </Tooltip>
+                        {canReturnOrExchange && canVoidSales && (
+                          <Tooltip label="Devolver / Cambiar">
+                            <button
+                              onClick={() => setReturnFor(s)}
+                              disabled={isBusy}
+                              className="rounded-md p-2 text-slate-500 hover:bg-amber-50 hover:text-amber-700 disabled:opacity-40"
+                            >
+                              <RotateCcw className="h-4 w-4" />
+                            </button>
+                          </Tooltip>
+                        )}
                         {canEmitCreditNote && canVoidSales && (
                           <Tooltip label="Emitir Nota de Crédito">
                             <button
@@ -327,6 +356,12 @@ export default function Sales() {
           }}
         />
       )}
+      <ReturnExchangeWizard
+        open={returnFor !== null}
+        sale={returnFor}
+        onClose={() => setReturnFor(null)}
+        onCompleted={() => setRefreshKey((k) => k + 1)}
+      />
     </div>
   );
 }
