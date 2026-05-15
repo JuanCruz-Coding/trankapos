@@ -1004,10 +1004,24 @@ class SupabaseDriver implements DataDriver {
     const product = mapProduct(data);
 
     if (input.initialStock && input.initialStock.length > 0) {
+      // El trigger products_create_default_variant (migration 032) ya creó la
+      // default. La buscamos para incluir variant_id en el INSERT a stock_items
+      // (NOT NULL desde migration 030).
+      const { data: defVar, error: varErr } = await this.sb
+        .from('product_variants')
+        .select('id')
+        .eq('product_id', product.id)
+        .eq('is_default', true)
+        .single();
+      if (varErr || !defVar) {
+        await this.sb.from('products').delete().eq('id', product.id);
+        throw new Error('Producto creado pero no se encontró la variante default');
+      }
       const rows = input.initialStock.map((row) => ({
         tenant_id: s.tenantId,
         warehouse_id: row.warehouseId,
         product_id: product.id,
+        variant_id: defVar.id,
         qty: row.qty,
         min_qty: row.minQty,
       }));
