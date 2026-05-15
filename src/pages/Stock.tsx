@@ -8,8 +8,14 @@ import { PageHeader } from '@/components/ui/PageHeader';
 import { data } from '@/data';
 import { useAuth } from '@/stores/auth';
 import { toast } from '@/stores/toast';
-import type { Product } from '@/types';
+import type { Product, ProductVariant } from '@/types';
 import { usePermission } from '@/lib/permissions';
+
+/** Formatea los atributos de una variante: `{talle:"M",color:"Negro"}` → "M Negro". */
+function formatVariantAttrs(v: ProductVariant): string {
+  const vals = Object.values(v.attributes ?? {});
+  return vals.length > 0 ? vals.join(' ') : '—';
+}
 
 export default function Stock() {
   const { session } = useAuth();
@@ -19,41 +25,123 @@ export default function Stock() {
   const branches = useLiveQuery(() => data.listBranches(), [session?.tenantId]);
   const warehouses = useLiveQuery(() => data.listWarehouses(), [session?.tenantId]);
   const stock = useLiveQuery(() => data.listStock(), [session?.tenantId, refreshKey]);
+  // Sprint VAR: traemos todas las variantes una vez por sesión + refresh.
+  const variants = useLiveQuery(() => data.listVariants(), [session?.tenantId, refreshKey]);
   const [search, setSearch] = useState('');
   const [warehouseFilter, setWarehouseFilter] = useState<string>('all');
-  const [edit, setEdit] = useState<{ product: Product; warehouseId: string } | null>(null);
+  const [edit, setEdit] = useState<{
+    product: Product;
+    variant: ProductVariant | null;
+    warehouseId: string;
+  } | null>(null);
 
   const branchById = useMemo(
     () => new Map((branches ?? []).map((b) => [b.id, b])),
     [branches],
   );
 
+  // Map productId -> variantes ordenadas (default primero).
+  const variantsByProduct = useMemo(() => {
+    const map = new Map<string, ProductVariant[]>();
+    (variants ?? []).forEach((v) => {
+      const arr = map.get(v.productId) ?? [];
+      arr.push(v);
+      map.set(v.productId, arr);
+    });
+    // Default primero, después por createdAt.
+    map.forEach((arr) => {
+      arr.sort((a, b) => {
+        if (a.isDefault !== b.isDefault) return a.isDefault ? -1 : 1;
+        return a.createdAt.localeCompare(b.createdAt);
+      });
+    });
+    return map;
+  }, [variants]);
+
+  /**
+   * Filas a renderizar. Cada fila es una combinación (producto × variante × depósito).
+   * Si hay stock_items con variantId, los usamos como fuente de verdad.
+   * Para el caso transición en el que stock_items todavía no expone variantId,
+   * caemos a un join por productId que asume "todo el stock = variante default".
+   */
   const rows = useMemo(() => {
     if (!products || !stock || !warehouses) return [];
-    const byKey = new Map<string, number>();
-    const minByKey = new Map<string, number>();
-    for (const s of stock) {
-      byKey.set(`${s.productId}:${s.warehouseId}`, s.qty);
-      minByKey.set(`${s.productId}:${s.warehouseId}`, s.minQty);
-    }
     const q = search.toLowerCase();
-    return products
-      .filter((p) => (q ? p.name.toLowerCase().includes(q) || (p.barcode ?? '').includes(q) : true))
-      .map((p) => ({
-        product: p,
-        rows: warehouses
-          .filter((w) => warehouseFilter === 'all' || w.id === warehouseFilter)
-          .map((w) => ({
-            warehouse: w,
-            qty: byKey.get(`${p.id}:${w.id}`) ?? 0,
-            minQty: minByKey.get(`${p.id}:${w.id}`) ?? 0,
-          })),
-      }));
-  }, [products, stock, warehouses, search, warehouseFilter]);
+    const wantedWarehouses = warehouses.filter(
+      (w) => warehouseFilter === 'all' || w.id === warehouseFilter,
+    );
+
+    // Indexamos stock por clave: si tiene variantId usamos esa; sino productId.
+    const stockByVariantKey = new Map<string, { qty: number; minQty: number }>();
+    const stockByProductFallback = new Map<string, { qty: number; minQty: number }>();
+    for (const s of stock) {
+      if (s.variantId) {
+        stockByVariantKey.set(`${s.variantId}:${s.warehouseId}`, {
+          qty: s.qty,
+          minQty: s.minQty,
+        });
+      } else {
+        stockByProductFallback.set(`${s.productId}:${s.warehouseId}`, {
+          qty: s.qty,
+          minQty: s.minQty,
+        });
+      }
+    }
+
+    const out: Array<{
+      product: Product;
+      variant: ProductVariant | null;
+      warehouseId: string;
+      qty: number;
+      minQty: number;
+    }> = [];
+
+    for (const p of products) {
+      if (q && !p.name.toLowerCase().includes(q) && !(p.barcode ?? '').includes(q)) {
+        continue;
+      }
+      const pVariants = variantsByProduct.get(p.id) ?? [];
+      // Si todavía no hay variantes en cache (driver aún no implementado),
+      // dibujamos una fila por (producto, depósito) con variant=null usando
+      // el fallback por productId, preservando el comportamiento previo.
+      if (pVariants.length === 0) {
+        for (const w of wantedWarehouses) {
+          const s = stockByProductFallback.get(`${p.id}:${w.id}`) ?? { qty: 0, minQty: 0 };
+          out.push({
+            product: p,
+            variant: null,
+            warehouseId: w.id,
+            qty: s.qty,
+            minQty: s.minQty,
+          });
+        }
+        continue;
+      }
+      for (const v of pVariants) {
+        for (const w of wantedWarehouses) {
+          const s =
+            stockByVariantKey.get(`${v.id}:${w.id}`) ??
+            // Fallback: si la variante es default y stock no trae variantId.
+            (v.isDefault
+              ? stockByProductFallback.get(`${p.id}:${w.id}`)
+              : undefined) ??
+            { qty: 0, minQty: 0 };
+          out.push({
+            product: p,
+            variant: v,
+            warehouseId: w.id,
+            qty: s.qty,
+            minQty: s.minQty,
+          });
+        }
+      }
+    }
+    return out;
+  }, [products, stock, warehouses, search, warehouseFilter, variantsByProduct]);
 
   return (
     <div>
-      <PageHeader title="Stock" subtitle="Control de inventario por depósito" />
+      <PageHeader title="Stock" subtitle="Control de inventario por variante y depósito" />
 
       <div className="mb-4 flex flex-wrap items-center gap-2">
         <div className="relative min-w-[220px] flex-1">
@@ -88,6 +176,7 @@ export default function Stock() {
           <thead className="bg-slate-50 text-left text-xs uppercase text-slate-500">
             <tr>
               <th className="px-4 py-3">Producto</th>
+              <th className="px-4 py-3">Variante</th>
               <th className="px-4 py-3">Depósito</th>
               <th className="px-4 py-3 text-right">Stock</th>
               <th className="px-4 py-3 text-right">Mínimo</th>
@@ -95,38 +184,52 @@ export default function Stock() {
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
-            {rows.flatMap(({ product, rows: r }) =>
-              r.map(({ warehouse, qty, minQty }) => {
-                const branch = warehouse.branchId ? branchById.get(warehouse.branchId) : null;
-                return (
-                  <tr key={`${product.id}:${warehouse.id}`} className="hover:bg-slate-50">
-                    <td className="px-4 py-3">{product.name}</td>
-                    <td className="px-4 py-3 text-slate-600">
-                      {branch ? `${branch.name} · ${warehouse.name}` : `Central · ${warehouse.name}`}
-                    </td>
-                    <td
-                      className={
-                        'px-4 py-3 text-right font-semibold ' +
-                        (qty <= 0 ? 'text-red-600' : qty <= minQty ? 'text-amber-600' : '')
-                      }
-                    >
-                      {qty}
-                    </td>
-                    <td className="px-4 py-3 text-right text-slate-500">{minQty}</td>
-                    <td className="px-4 py-3 text-right">
-                      {canAdjustStock && (
-                        <button
-                          onClick={() => setEdit({ product, warehouseId: warehouse.id })}
-                          className="rounded-md p-2 text-slate-500 hover:bg-slate-100"
-                        >
-                          <Pencil className="h-4 w-4" />
-                        </button>
-                      )}
-                    </td>
-                  </tr>
-                );
-              }),
-            )}
+            {rows.map(({ product, variant, warehouseId, qty, minQty }) => {
+              const warehouse = warehouses?.find((w) => w.id === warehouseId);
+              if (!warehouse) return null;
+              const branch = warehouse.branchId ? branchById.get(warehouse.branchId) : null;
+              const variantLabel = variant
+                ? variant.isDefault && Object.keys(variant.attributes).length === 0
+                  ? '—'
+                  : formatVariantAttrs(variant)
+                : '—';
+              const rowKey = `${product.id}:${variant?.id ?? 'na'}:${warehouseId}`;
+              return (
+                <tr key={rowKey} className="hover:bg-slate-50">
+                  <td className="px-4 py-3">{product.name}</td>
+                  <td className="px-4 py-3 text-slate-600">
+                    <span>{variantLabel}</span>
+                    {variant?.sku && (
+                      <span className="ml-2 text-[10px] text-slate-400">SKU {variant.sku}</span>
+                    )}
+                  </td>
+                  <td className="px-4 py-3 text-slate-600">
+                    {branch ? `${branch.name} · ${warehouse.name}` : `Central · ${warehouse.name}`}
+                  </td>
+                  <td
+                    className={
+                      'px-4 py-3 text-right font-semibold ' +
+                      (qty <= 0 ? 'text-red-600' : qty <= minQty ? 'text-amber-600' : '')
+                    }
+                  >
+                    {qty}
+                  </td>
+                  <td className="px-4 py-3 text-right text-slate-500">{minQty}</td>
+                  <td className="px-4 py-3 text-right">
+                    {canAdjustStock && (
+                      <button
+                        onClick={() =>
+                          setEdit({ product, variant, warehouseId: warehouse.id })
+                        }
+                        className="rounded-md p-2 text-slate-500 hover:bg-slate-100"
+                      >
+                        <Pencil className="h-4 w-4" />
+                      </button>
+                    )}
+                  </td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </div>
@@ -134,14 +237,40 @@ export default function Stock() {
       {edit && (
         <AdjustModal
           product={edit.product}
+          variant={edit.variant}
           warehouseId={edit.warehouseId}
           currentQty={
-            stock?.find((s) => s.productId === edit.product.id && s.warehouseId === edit.warehouseId)
-              ?.qty ?? 0
+            // Buscamos por variantId si está, sino caemos al matching legacy por productId.
+            (edit.variant
+              ? stock?.find(
+                  (s) =>
+                    s.variantId === edit.variant!.id &&
+                    s.warehouseId === edit.warehouseId,
+                )?.qty
+              : undefined) ??
+            stock?.find(
+              (s) =>
+                s.productId === edit.product.id &&
+                s.warehouseId === edit.warehouseId &&
+                !s.variantId,
+            )?.qty ??
+            0
           }
           currentMin={
-            stock?.find((s) => s.productId === edit.product.id && s.warehouseId === edit.warehouseId)
-              ?.minQty ?? 0
+            (edit.variant
+              ? stock?.find(
+                  (s) =>
+                    s.variantId === edit.variant!.id &&
+                    s.warehouseId === edit.warehouseId,
+                )?.minQty
+              : undefined) ??
+            stock?.find(
+              (s) =>
+                s.productId === edit.product.id &&
+                s.warehouseId === edit.warehouseId &&
+                !s.variantId,
+            )?.minQty ??
+            0
           }
           onClose={() => setEdit(null)}
           onSuccess={() => setRefreshKey((k) => k + 1)}
@@ -153,6 +282,7 @@ export default function Stock() {
 
 function AdjustModal({
   product,
+  variant,
   warehouseId,
   currentQty,
   currentMin,
@@ -160,6 +290,7 @@ function AdjustModal({
   onSuccess,
 }: {
   product: Product;
+  variant: ProductVariant | null;
   warehouseId: string;
   currentQty: number;
   currentMin: number;
@@ -175,6 +306,10 @@ function AdjustModal({
     try {
       const val = Number(qty) || 0;
       const delta = mode === 'delta' ? val : val - currentQty;
+      // TODO Sprint VAR: cuando la Pieza A adapte adjustStock para aceptar
+      // variantId (por ahora la firma del driver es por productId y resuelve
+      // a la default internamente), pasarle variant?.id acá. Para productos
+      // simples (variante única default) este call site sigue funcionando bien.
       await data.adjustStock(product.id, warehouseId, delta, Number(minQty) || 0);
       toast.success('Stock actualizado');
       onSuccess();
@@ -184,11 +319,25 @@ function AdjustModal({
     }
   }
 
+  const subtitleVariant =
+    variant && !(variant.isDefault && Object.keys(variant.attributes).length === 0)
+      ? formatVariantAttrs(variant)
+      : null;
+
   return (
     <Modal open onClose={onClose} title="Ajustar stock" widthClass="max-w-sm">
       <div className="mb-3 text-sm text-slate-600">
         <div className="font-medium text-slate-900">{product.name}</div>
+        {subtitleVariant && (
+          <div className="text-xs text-slate-500">Variante: {subtitleVariant}</div>
+        )}
         <div className="text-xs text-slate-500">Stock actual: {currentQty}</div>
+        {variant && !variant.isDefault && (
+          <div className="mt-1 rounded-md bg-amber-50 px-2 py-1 text-[11px] text-amber-700">
+            Aviso: el ajuste por variante específica todavía está siendo cableado.
+            Por ahora el ajuste impacta la variante default del producto.
+          </div>
+        )}
       </div>
       <form onSubmit={handleSubmit} className="space-y-3">
         <div className="flex gap-2">

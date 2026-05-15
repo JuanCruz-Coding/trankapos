@@ -192,6 +192,35 @@ export interface Product {
   allowSaleWhenZero: boolean;
   active: boolean;
   createdAt: string;
+  /** Variantes del producto. Siempre hay al menos 1 (la default, migration 030). */
+  variants?: ProductVariant[];
+}
+
+/**
+ * Variante vendible de un producto: una combinación concreta (talla M / color Negro).
+ * Cada producto tiene mínimo 1 variante (la "default" autogenerada en migration 030
+ * para productos simples). sale_items, stock_items y transfer_items referencian la
+ * variant_id, no el product_id.
+ */
+export interface ProductVariant {
+  id: string;
+  tenantId: string;
+  productId: string;
+  sku: string | null;
+  barcode: string | null;
+  /**
+   * Shape libre, ej `{ talle: "M", color: "Negro" }`. Las claves las define el comercio
+   * cuando arma la grilla de variantes. Para la variante default es `{}`.
+   */
+  attributes: Record<string, string>;
+  /** Si null, hereda `Product.price`. */
+  priceOverride: number | null;
+  /** Si null, hereda `Product.cost`. */
+  costOverride: number | null;
+  active: boolean;
+  /** true para la variante autogenerada en migration 030. No editable manualmente. */
+  isDefault: boolean;
+  createdAt: string;
 }
 
 export interface StockItem {
@@ -199,6 +228,12 @@ export interface StockItem {
   tenantId: string;
   warehouseId: string;
   productId: string;
+  /**
+   * Variante a la que pertenece el stock. **Opcional durante la transición**:
+   * la Pieza A del Sprint VAR adapta los mappers para que venga siempre. Cuando
+   * todos los call sites lo pueblan, lo marcamos required.
+   */
+  variantId?: string;
   qty: number;
   qtyReserved: number;
   minQty: number;

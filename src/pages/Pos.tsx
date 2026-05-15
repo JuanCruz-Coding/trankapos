@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import {
   AlertCircle,
@@ -15,6 +15,7 @@ import {
 } from 'lucide-react';
 import { ReceiverSelectorModal } from '@/components/pos/ReceiverSelectorModal';
 import { ReceiptModal } from '@/components/pos/ReceiptModal';
+import { VariantPickerModal } from '@/components/pos/VariantPickerModal';
 import { determineCbteLetter } from '@/lib/afipLetter';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
@@ -30,7 +31,7 @@ import { cn } from '@/lib/utils';
 import { buildSaleFromCart, summarizeSale } from '@/lib/sales';
 import { beepError, beepSuccess, primeAudio } from '@/lib/sound';
 import { toast } from '@/stores/toast';
-import { PAYMENT_METHODS, type PaymentMethod, type Sale, type SaleReceiver, type TaxCondition, type Tenant } from '@/types';
+import { PAYMENT_METHODS, type PaymentMethod, type Product, type ProductVariant, type Sale, type SaleReceiver, type TaxCondition, type Tenant } from '@/types';
 import { QRPaymentModal } from '@/components/ui/QRPaymentModal';
 
 export default function Pos() {
@@ -142,6 +143,93 @@ export default function Pos() {
     return map;
   }, [stock]);
 
+  // Stock por variantId (cuando el driver lo populé). Para el VariantPickerModal.
+  const stockByVariant = useMemo(() => {
+    const map = new Map<string, number>();
+    (stock ?? []).forEach((s) => {
+      if (s.variantId) map.set(s.variantId, s.qty);
+    });
+    return map;
+  }, [stock]);
+
+  // --- Cache de variantes por sesión (Sprint VAR) ---
+  // Mapa productId -> variantes. Se llena bajo demanda en addProductFlow.
+  const variantsByProduct = useRef<Map<string, ProductVariant[]>>(new Map());
+  // Mapa productId -> variantId elegida para esa línea del carrito. Lo
+  // mantenemos paralelo al store del carrito (que sigue indexando por
+  // productId) para poder mandar el variantId correcto en createSale.
+  // LIMITACIÓN: como el cart deduplica por productId, no podemos tener
+  // dos variantes distintas del mismo producto en líneas separadas. Un
+  // segundo "add" de otra variante pisa la primera. TODO: revisar tras
+  // adaptación del cart store en sprint posterior.
+  const [variantIdByProduct, setVariantIdByProduct] = useState<Record<string, string>>({});
+
+  // Estado del modal de selección de variante.
+  const [variantPicker, setVariantPicker] = useState<{
+    product: Product;
+    variants: ProductVariant[];
+  } | null>(null);
+
+  /** Agrega una variante concreta al carrito y registra el mapping. */
+  const addVariantToCart = useCallback(
+    (product: Product, variant: ProductVariant) => {
+      // Override de precio si la variante define uno.
+      const productForCart: Product = {
+        ...product,
+        price: variant.priceOverride ?? product.price,
+      };
+      // El display name incluye los atributos para distinguir en el carrito.
+      const attrs = Object.entries(variant.attributes)
+        .map(([, v]) => v)
+        .join(' ');
+      if (attrs) {
+        productForCart.name = `${product.name} — ${attrs}`;
+      }
+      addProduct(productForCart);
+      setVariantIdByProduct((prev) => ({ ...prev, [product.id]: variant.id }));
+      beepSuccess();
+    },
+    [addProduct],
+  );
+
+  /**
+   * Flow de agregar producto al carrito.
+   * - Si el producto es "simple" (1 sola variante con attributes={}) →
+   *   se agrega directo, sin modal (caso 99% de kioscos).
+   * - Sino → abre VariantPickerModal.
+   */
+  const addProductFlow = useCallback(
+    async (product: Product) => {
+      try {
+        // Cache hit / miss.
+        let variants = variantsByProduct.current.get(product.id);
+        if (!variants) {
+          variants = await data.listVariants(product.id);
+          variantsByProduct.current.set(product.id, variants);
+        }
+        const activeVariants = variants.filter((v) => v.active);
+        if (activeVariants.length === 0) {
+          beepError();
+          toast.error(`"${product.name}" no tiene variantes activas`);
+          return;
+        }
+        // Bypass del modal para el caso simple.
+        if (
+          activeVariants.length === 1 &&
+          Object.keys(activeVariants[0].attributes).length === 0
+        ) {
+          addVariantToCart(product, activeVariants[0]);
+          return;
+        }
+        setVariantPicker({ product, variants });
+      } catch (err) {
+        beepError();
+        toast.error((err as Error).message);
+      }
+    },
+    [addVariantToCart],
+  );
+
   const filtered = useMemo(() => {
     if (!products) return [];
     const active = products.filter((p) => p.active);
@@ -200,20 +288,37 @@ export default function Pos() {
     const code = rawCode.trim();
     if (!code) return;
     try {
-      const product = await data.findProductByCode(code);
-      if (!product) {
+      // Sprint VAR: el código puede identificar una variante específica.
+      // Si matchea, agregamos esa variante directo (no abrimos el picker).
+      const match = await data.findVariantByCode(code);
+      if (!match) {
         beepError();
         toast.error(`Sin resultado para "${code}"`);
         return;
       }
-      const stockQty = stockByProduct.get(product.id) ?? 0;
+      const { product, variant } = match;
+      // Cacheamos en caliente: si después se busca el mismo product, no
+      // re-pegamos al backend.
+      const cached = variantsByProduct.current.get(product.id);
+      if (!cached || !cached.some((v) => v.id === variant.id)) {
+        // Refrescamos las variantes del producto para mantener el cache sano.
+        try {
+          const fresh = await data.listVariants(product.id);
+          variantsByProduct.current.set(product.id, fresh);
+        } catch {
+          // Si falla, al menos guardamos la que vino del match.
+          variantsByProduct.current.set(product.id, cached ?? [variant]);
+        }
+      }
+      const stockQty = variant.id
+        ? stockByVariant.get(variant.id) ?? stockByProduct.get(product.id) ?? 0
+        : stockByProduct.get(product.id) ?? 0;
       if (stockQty <= 0) {
         beepError();
         toast.error(`Sin stock de "${product.name}"`);
         return;
       }
-      addProduct(product);
-      beepSuccess();
+      addVariantToCart(product, variant);
     } catch (err) {
       beepError();
       toast.error((err as Error).message);
@@ -250,7 +355,14 @@ export default function Pos() {
             <p className="text-xs text-slate-500">{lines.length} items</p>
           </div>
           {lines.length > 0 && (
-            <Button size="sm" variant="ghost" onClick={clear}>
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => {
+                clear();
+                setVariantIdByProduct({});
+              }}
+            >
               <Trash2 className="h-4 w-4" /> Limpiar
             </Button>
           )}
@@ -469,8 +581,8 @@ export default function Pos() {
                         toast.error(`Sin stock de "${p.name}"`);
                         return;
                       }
-                      addProduct(p);
-                      beepSuccess();
+                      // Sprint VAR: abre picker si tiene variantes; sino, bypass.
+                      void addProductFlow(p);
                     }}
                     disabled={low}
                     className="group flex flex-col rounded-lg border border-slate-200 bg-white p-3 text-left shadow-sm transition hover:border-brand-400 hover:shadow-md disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:border-slate-200 disabled:hover:shadow-sm"
@@ -506,9 +618,11 @@ export default function Pos() {
         total={total}
         mpReady={mpReady}
         tenantTaxCondition={tenant?.taxCondition ?? null}
+        variantIdByProduct={variantIdByProduct}
         onCompleted={(sale) => {
           setPayModal(false);
           clear();
+          setVariantIdByProduct({});
           setLastSale(sale);
           setRefreshKey((k) => k + 1);
           toast.success('Venta registrada');
@@ -516,6 +630,18 @@ export default function Pos() {
         onPayWithQR={(items, globalDiscount, amount) => {
           setPayModal(false);
           setQrCharge({ items, discount: globalDiscount, amount });
+        }}
+      />
+      <VariantPickerModal
+        open={variantPicker !== null}
+        product={variantPicker?.product ?? null}
+        variants={variantPicker?.variants ?? []}
+        stockByVariant={stockByVariant}
+        onClose={() => setVariantPicker(null)}
+        onPick={(variant) => {
+          if (!variantPicker) return;
+          addVariantToCart(variantPicker.product, variant);
+          setVariantPicker(null);
         }}
       />
       {qrCharge && activeBranchId && (
@@ -530,6 +656,7 @@ export default function Pos() {
           onPaid={(sale) => {
             setQrCharge(null);
             clear();
+            setVariantIdByProduct({});
             setLastSale(sale);
             setRefreshKey((k) => k + 1);
             toast.success('Cobro QR confirmado');
@@ -589,6 +716,8 @@ interface PayProps {
   mpReady?: boolean;
   /** Condición IVA del tenant emisor para previsualizar la letra de factura. */
   tenantTaxCondition: TaxCondition | null;
+  /** Map productId -> variantId elegida (Sprint VAR). */
+  variantIdByProduct: Record<string, string>;
   onCompleted: (sale: Sale) => void;
   /** Se llama cuando se elige cobrar 100% por QR con MP conectado. */
   onPayWithQR?: (
@@ -598,7 +727,7 @@ interface PayProps {
   ) => void;
 }
 
-function PaymentModal({ open, onClose, total, mpReady, tenantTaxCondition, onCompleted, onPayWithQR }: PayProps) {
+function PaymentModal({ open, onClose, total, mpReady, tenantTaxCondition, variantIdByProduct, onCompleted, onPayWithQR }: PayProps) {
   const { session, activeBranchId } = useAuth();
   const { lines, discount } = useCart();
   const [payments, setPayments] = useState<{ method: PaymentMethod; amount: number }[]>([
@@ -682,6 +811,12 @@ function PaymentModal({ open, onClose, total, mpReady, tenantTaxCondition, onCom
         partial,
         receiver,
       });
+      // Sprint VAR: enriquecer items con variantId desde el lookup local.
+      // buildSaleFromCart no lo conoce, así que lo inyectamos acá.
+      saleInput.items = saleInput.items.map((it) => ({
+        ...it,
+        variantId: variantIdByProduct[it.productId],
+      }));
       const sale = await data.createSale(saleInput);
       onCompleted(sale);
     } catch (err) {

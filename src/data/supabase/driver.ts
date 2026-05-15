@@ -15,6 +15,7 @@ import type {
   Plan,
   PlanUsage,
   Product,
+  ProductVariant,
   Sale,
   SaleItem,
   StockItem,
@@ -57,6 +58,7 @@ import type {
   UploadAfipCertificateInput,
   UploadAfipCertificateResult,
   UserInput,
+  VariantInput,
   WarehouseInput,
 } from '../driver';
 
@@ -181,14 +183,48 @@ function mapProduct(r: ProductRow): Product {
 
 interface StockRow {
   id: string; tenant_id: string; warehouse_id: string; product_id: string;
+  variant_id: string;
   qty: string; qty_reserved: string | null; min_qty: string; updated_at: string;
 }
 function mapStock(r: StockRow): StockItem {
   return {
     id: r.id, tenantId: r.tenant_id, warehouseId: r.warehouse_id, productId: r.product_id,
+    variantId: r.variant_id,
     qty: Number(r.qty),
     qtyReserved: r.qty_reserved !== null && r.qty_reserved !== undefined ? Number(r.qty_reserved) : 0,
     minQty: Number(r.min_qty), updatedAt: r.updated_at,
+  };
+}
+
+// ============================================================
+// Variantes de producto (migration 030)
+// ============================================================
+interface ProductVariantRow {
+  id: string;
+  tenant_id: string;
+  product_id: string;
+  sku: string | null;
+  barcode: string | null;
+  attributes: Record<string, string> | null;
+  price_override: string | null;
+  cost_override: string | null;
+  active: boolean;
+  is_default: boolean;
+  created_at: string;
+}
+function mapProductVariant(r: ProductVariantRow): ProductVariant {
+  return {
+    id: r.id,
+    tenantId: r.tenant_id,
+    productId: r.product_id,
+    sku: r.sku ?? null,
+    barcode: r.barcode ?? null,
+    attributes: (r.attributes ?? {}) as Record<string, string>,
+    priceOverride: r.price_override !== null && r.price_override !== undefined ? Number(r.price_override) : null,
+    costOverride: r.cost_override !== null && r.cost_override !== undefined ? Number(r.cost_override) : null,
+    active: r.active,
+    isDefault: r.is_default,
+    createdAt: r.created_at,
   };
 }
 
@@ -1070,20 +1106,58 @@ class SupabaseDriver implements DataDriver {
 
   // ===== SALES =====
 
+  /**
+   * Resuelve la variante default de un producto. Cache local para no repetir
+   * la query si un mismo product_id aparece varias veces en la sale.
+   * Usado por createSale/createTransfer cuando el caller no manda variant_id.
+   */
+  private async resolveVariantId(
+    productId: string,
+    cache: Map<string, string>,
+  ): Promise<string> {
+    const hit = cache.get(productId);
+    if (hit) return hit;
+    const { data, error } = await this.sb
+      .from('product_variants')
+      .select('id')
+      .eq('product_id', productId)
+      .eq('is_default', true)
+      .maybeSingle();
+    if (error) throw new Error(error.message);
+    if (!data) {
+      throw new Error(
+        'No se encontró la variante default del producto. Migration 030 debe haber generado una.',
+      );
+    }
+    cache.set(productId, data.id);
+    return data.id;
+  }
+
   async createSale(input: SaleInput): Promise<Sale> {
     const s = await this.requireSession();
+
+    // Resolver variant_id para cada item. Si viene en el input se respeta;
+    // si no, se busca la variante default del producto.
+    const defaultCache = new Map<string, string>();
+    const itemsWithVariant = await Promise.all(
+      input.items.map(async (it) => {
+        const variantId = it.variantId ?? (await this.resolveVariantId(it.productId, defaultCache));
+        return {
+          product_id: it.productId,
+          variant_id: variantId,
+          qty: it.qty,
+          price: it.price,
+          discount: it.discount,
+        };
+      }),
+    );
 
     const { data: saleId, error: rpcErr } = await this.sb.rpc('create_sale_atomic', {
       p_tenant_id: s.tenantId,
       p_branch_id: input.branchId,
       p_register_id: input.registerId ?? null,
       p_discount: input.discount,
-      p_items: input.items.map((it) => ({
-        product_id: it.productId,
-        qty: it.qty,
-        price: it.price,
-        discount: it.discount,
-      })),
+      p_items: itemsWithVariant,
       p_payments: input.payments.map((p) => ({
         method: p.method,
         amount: p.amount,
@@ -1466,6 +1540,16 @@ class SupabaseDriver implements DataDriver {
   async createTransfer(input: TransferInput): Promise<Transfer> {
     const s = await this.requireSession();
 
+    // Resolver variant_id (default si no viene). Mismo patrón que createSale.
+    const defaultCache = new Map<string, string>();
+    const itemsWithVariant = await Promise.all(
+      input.items.map(async (it) => ({
+        product_id: it.productId,
+        variant_id: it.variantId ?? (await this.resolveVariantId(it.productId, defaultCache)),
+        qty: it.qty,
+      })),
+    );
+
     const { data: transferId, error: rpcErr } = await this.sb.rpc(
       'create_transfer_atomic',
       {
@@ -1473,10 +1557,7 @@ class SupabaseDriver implements DataDriver {
         p_from_warehouse_id: input.fromWarehouseId,
         p_to_warehouse_id: input.toWarehouseId,
         p_notes: input.notes ?? '',
-        p_items: input.items.map((it) => ({
-          product_id: it.productId,
-          qty: it.qty,
-        })),
+        p_items: itemsWithVariant,
       },
     );
     if (rpcErr) throw new Error(rpcErr.message);
@@ -1821,5 +1902,177 @@ class SupabaseDriver implements DataDriver {
       throw new Error(`Error HTTP ${res.status}`);
     }
     return body;
+  }
+
+  // --- Variantes (Sprint VAR / migration 030) ---
+
+  async listVariants(productId?: string): Promise<ProductVariant[]> {
+    await this.requireSession();
+    let q = this.sb
+      .from('product_variants')
+      .select('*')
+      // Default primero, después por antigüedad. El RLS ya filtra por tenant.
+      .order('is_default', { ascending: false })
+      .order('created_at', { ascending: true });
+    if (productId) q = q.eq('product_id', productId);
+    const { data, error } = await q;
+    if (error) throw new Error(error.message);
+    return (data as ProductVariantRow[]).map(mapProductVariant);
+  }
+
+  async createVariant(input: VariantInput): Promise<ProductVariant> {
+    const s = await this.requireSession();
+
+    if (!input.productId) throw new Error('productId es requerido');
+    if (input.attributes === null || input.attributes === undefined) {
+      throw new Error('attributes no puede ser null');
+    }
+
+    // Validar que el producto existe y pertenece al tenant (RLS lo cubre, pero
+    // así devolvemos un error claro en vez de un FK violation cripto).
+    const { data: prod, error: prodErr } = await this.sb
+      .from('products')
+      .select('id')
+      .eq('id', input.productId)
+      .maybeSingle();
+    if (prodErr) throw new Error(prodErr.message);
+    if (!prod) throw new Error('Producto no encontrado');
+
+    const { data, error } = await this.sb
+      .from('product_variants')
+      .insert({
+        tenant_id: s.tenantId,
+        product_id: input.productId,
+        sku: input.sku ?? null,
+        barcode: input.barcode ?? null,
+        attributes: input.attributes,
+        price_override: input.priceOverride ?? null,
+        cost_override: input.costOverride ?? null,
+        active: input.active ?? true,
+        // Nunca se crea como default por esta vía: la única default es la
+        // autogenerada en migration 030.
+        is_default: false,
+      })
+      .select('*')
+      .single();
+    if (error) {
+      if (error.code === '23505') {
+        throw new Error('Ya existe una variante con ese SKU o código de barras.');
+      }
+      throw new Error(error.message);
+    }
+    return mapProductVariant(data as ProductVariantRow);
+  }
+
+  async updateVariant(
+    id: string,
+    input: Partial<VariantInput>,
+  ): Promise<ProductVariant> {
+    await this.requireSession();
+
+    const patch: Record<string, unknown> = {};
+    if (input.sku !== undefined) patch.sku = input.sku;
+    if (input.barcode !== undefined) patch.barcode = input.barcode;
+    if (input.attributes !== undefined) patch.attributes = input.attributes;
+    if (input.priceOverride !== undefined) patch.price_override = input.priceOverride;
+    if (input.costOverride !== undefined) patch.cost_override = input.costOverride;
+    if (input.active !== undefined) patch.active = input.active;
+    // is_default no se toca por esta vía — se ignora silenciosamente si llega.
+    // No se permite cambiar product_id de una variante (rompe la identidad).
+
+    const { data, error } = await this.sb
+      .from('product_variants')
+      .update(patch)
+      .eq('id', id)
+      .select('*')
+      .single();
+    if (error) {
+      if (error.code === '23505') {
+        throw new Error('Ya existe una variante con ese SKU o código de barras.');
+      }
+      throw new Error(error.message);
+    }
+    return mapProductVariant(data as ProductVariantRow);
+  }
+
+  async deleteVariant(id: string): Promise<void> {
+    await this.requireSession();
+
+    const { data: variant, error: variantErr } = await this.sb
+      .from('product_variants')
+      .select('id, is_default')
+      .eq('id', id)
+      .maybeSingle();
+    if (variantErr) throw new Error(variantErr.message);
+    if (!variant) throw new Error('Variante no encontrada');
+    if (variant.is_default) {
+      throw new Error('No se puede eliminar la variante principal del producto.');
+    }
+
+    // FK on delete restrict en sale_items.variant_id (asumido por consistencia
+    // con products): chequeamos primero para devolver un mensaje claro.
+    const { count, error: salesErr } = await this.sb
+      .from('sale_items')
+      .select('id', { count: 'exact', head: true })
+      .eq('variant_id', id);
+    if (salesErr) throw new Error(salesErr.message);
+    if ((count ?? 0) > 0) {
+      throw new Error(
+        'Esta variante tiene ventas registradas. Desactivala en vez de eliminarla.',
+      );
+    }
+
+    const { error } = await this.sb.from('product_variants').delete().eq('id', id);
+    if (error) throw new Error(error.message);
+  }
+
+  async findVariantByCode(
+    code: string,
+  ): Promise<{ product: Product; variant: ProductVariant } | null> {
+    await this.requireSession();
+
+    // 1) Buscar por barcode de la variante (más común en POS con scanner).
+    const byBarcode = await this.sb
+      .from('product_variants')
+      .select('*')
+      .eq('barcode', code)
+      .maybeSingle();
+    if (byBarcode.error) throw new Error(byBarcode.error.message);
+    if (byBarcode.data) {
+      const variant = mapProductVariant(byBarcode.data as ProductVariantRow);
+      const product = await this.getProduct(variant.productId);
+      if (!product) return null;
+      return { product, variant };
+    }
+
+    // 2) Buscar por SKU de la variante.
+    const bySku = await this.sb
+      .from('product_variants')
+      .select('*')
+      .eq('sku', code)
+      .maybeSingle();
+    if (bySku.error) throw new Error(bySku.error.message);
+    if (bySku.data) {
+      const variant = mapProductVariant(bySku.data as ProductVariantRow);
+      const product = await this.getProduct(variant.productId);
+      if (!product) return null;
+      return { product, variant };
+    }
+
+    // 3) Fallback legacy: matchear el código contra products.barcode / .sku.
+    // Si matchea, devolvemos la variante default de ese producto.
+    const product = await this.findProductByCode(code);
+    if (!product) return null;
+
+    const { data: defaultVariant, error: dvErr } = await this.sb
+      .from('product_variants')
+      .select('*')
+      .eq('product_id', product.id)
+      .eq('is_default', true)
+      .maybeSingle();
+    if (dvErr) throw new Error(dvErr.message);
+    if (!defaultVariant) return null;
+
+    return { product, variant: mapProductVariant(defaultVariant as ProductVariantRow) };
   }
 }

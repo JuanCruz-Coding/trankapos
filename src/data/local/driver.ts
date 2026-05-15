@@ -11,6 +11,7 @@ import type {
   Plan,
   PlanUsage,
   Product,
+  ProductVariant,
   Sale,
   SaleItem,
   StockItem,
@@ -41,6 +42,7 @@ import type {
   GenerateCsrInput,
   GenerateCsrResult,
   LoginInput,
+  VariantInput,
   OpenRegisterInput,
   ProductInput,
   RetryDocumentInput,
@@ -1269,5 +1271,34 @@ export class LocalDriver implements DataDriver {
   async consultAfipPadron(_input: ConsultAfipPadronInput): Promise<AfipPadronResult> {
     await this.requireSession();
     throw new Error('La consulta al padrón AFIP requiere modo online.');
+  }
+
+  // --- Variantes (Sprint VAR) ---
+  // Modo offline: el catálogo local todavía no soporta variantes. Las queries de
+  // lista/find devuelven vacío para no romper la app; las mutaciones tiran error.
+  async listVariants(_productId?: string): Promise<ProductVariant[]> {
+    await this.requireSession();
+    return [];
+  }
+  async createVariant(_input: VariantInput): Promise<ProductVariant> {
+    await this.requireSession();
+    throw new Error('Las variantes de producto requieren modo online (por ahora).');
+  }
+  async updateVariant(
+    _id: string,
+    _input: Partial<VariantInput>,
+  ): Promise<ProductVariant> {
+    await this.requireSession();
+    throw new Error('Las variantes de producto requieren modo online (por ahora).');
+  }
+  async deleteVariant(_id: string): Promise<void> {
+    await this.requireSession();
+    throw new Error('Las variantes de producto requieren modo online (por ahora).');
+  }
+  async findVariantByCode(
+    _code: string,
+  ): Promise<{ product: Product; variant: ProductVariant } | null> {
+    await this.requireSession();
+    return null;
   }
 }

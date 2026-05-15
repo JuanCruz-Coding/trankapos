@@ -15,7 +15,9 @@ import { toast } from '@/stores/toast';
 import { CSV_TEMPLATE, parseCsv, type ParseError, type ParsedRow } from '@/lib/csvImport';
 import { productSchema, safeParse } from '@/lib/schemas';
 import { confirmDialog } from '@/lib/dialog';
-import type { Product } from '@/types';
+import { AttributeKeysInput } from '@/components/products/AttributeKeysInput';
+import { VariantEditor } from '@/components/products/VariantEditor';
+import type { Product, ProductVariant } from '@/types';
 
 interface FormState {
   id?: string;
@@ -30,6 +32,13 @@ interface FormState {
   allowSaleWhenZero: boolean;
   active: boolean;
   initialStock: Record<string, { qty: string; minQty: string }>;
+  // --- Sprint VAR ---
+  hasVariants: boolean;
+  attributeKeys: string[];
+  variants: ProductVariant[];
+  /** Snapshot de los ids reales (no temp-*) que tenía el producto al abrir el form.
+   *  Usado para diffear qué borrar al guardar. */
+  originalVariantIds: string[];
 }
 
 const emptyForm: FormState = {
@@ -44,6 +53,10 @@ const emptyForm: FormState = {
   allowSaleWhenZero: false,
   active: true,
   initialStock: {},
+  hasVariants: false,
+  attributeKeys: [],
+  variants: [],
+  originalVariantIds: [],
 };
 
 type ImportPhase = 'idle' | 'preview' | 'running' | 'done';
@@ -69,6 +82,12 @@ export default function Products() {
   const branches = useLiveQuery(() => data.listBranches(), [session?.tenantId]);
   const warehouses = useLiveQuery(() => data.listWarehouses(), [session?.tenantId]);
   const stock = useLiveQuery(() => data.listStock(), [session?.tenantId, refreshKey]);
+  // Variantes globales — usadas para mostrar el badge "N variantes" en la tabla.
+  // Es 1 sola llamada y agrupamos por productId en memoria.
+  const allVariants = useLiveQuery(
+    () => data.listVariants(),
+    [session?.tenantId, refreshKey],
+  );
 
   // Para el modal de import CSV: el stock inicial va al warehouse default de la branch activa.
   const activeDefaultWarehouse = useMemo(() => {
@@ -109,7 +128,31 @@ export default function Products() {
     setModal(true);
   }
 
-  function openEdit(p: Product) {
+  async function openEdit(p: Product) {
+    // Cargo variantes del producto. Si hay >1 o si la default tiene atributos cargados,
+    // arrancamos con hasVariants=true. La default siempre va con isDefault=true y
+    // attributes={} para productos simples.
+    let pvariants: ProductVariant[] = [];
+    try {
+      pvariants = await data.listVariants(p.id);
+    } catch {
+      // Si el driver tira (stub no implementado o error), arrancamos sin variantes y
+      // dejamos el producto como simple. El form igual se puede abrir.
+      pvariants = [];
+    }
+    const nonDefaultCount = pvariants.filter((v) => !v.isDefault).length;
+    const defaultHasAttrs = pvariants.some(
+      (v) => v.isDefault && Object.keys(v.attributes ?? {}).length > 0,
+    );
+    const hasVariants = nonDefaultCount > 0 || defaultHasAttrs;
+
+    // Las claves se infieren de las variantes existentes (unión de keys de cada
+    // attributes). Para productos simples queda [].
+    const keysSet = new Set<string>();
+    pvariants.forEach((v) => {
+      Object.keys(v.attributes ?? {}).forEach((k) => keysSet.add(k));
+    });
+
     setForm({
       id: p.id,
       name: p.name,
@@ -123,6 +166,10 @@ export default function Products() {
       allowSaleWhenZero: p.allowSaleWhenZero,
       active: p.active,
       initialStock: {},
+      hasVariants,
+      attributeKeys: Array.from(keysSet),
+      variants: pvariants,
+      originalVariantIds: pvariants.map((v) => v.id),
     });
     setModal(true);
   }
@@ -142,10 +189,26 @@ export default function Products() {
       active: form.active,
     });
     if (!parsed.ok) return toast.error(parsed.error);
+
+    // Validación de variantes (solo si hasVariants).
+    if (form.hasVariants) {
+      if (form.variants.length === 0) {
+        return toast.error('Tenés que agregar al menos una variante o desactivar "este producto tiene variantes"');
+      }
+      if (form.attributeKeys.length > 0) {
+        const missing = form.variants.find((v) =>
+          form.attributeKeys.some((k) => !(v.attributes?.[k] ?? '').trim()),
+        );
+        if (missing) {
+          return toast.error('Hay variantes con atributos sin valor. Completalas antes de guardar.');
+        }
+      }
+    }
+
     try {
+      let productId = form.id;
       if (form.id) {
         await data.updateProduct(form.id, parsed.data);
-        toast.success('Producto actualizado');
       } else {
         const initialStock = Object.entries(form.initialStock)
           .map(([warehouseId, v]) => ({
@@ -154,9 +217,56 @@ export default function Products() {
             minQty: Number(v.minQty) || 0,
           }))
           .filter((x) => x.qty > 0 || x.minQty > 0);
-        await data.createProduct({ ...parsed.data, initialStock });
-        toast.success('Producto creado');
+        const created = await data.createProduct({ ...parsed.data, initialStock });
+        productId = created.id;
       }
+
+      // --- Diff de variantes ---
+      // Solo si hasVariants. Si está apagado, el backend mantiene la default tal cual
+      // y no tocamos nada. Si pasó de hasVariants=true a false en una edición, ese
+      // toggle no borra las variantes extra (decisión conservadora — si lo desea, el
+      // comercio puede eliminarlas a mano antes de apagar el toggle).
+      if (form.hasVariants && productId) {
+        const currentIds = new Set(form.variants.map((v) => v.id));
+        // 1. Borrar las que estaban antes y ya no están (nunca la default).
+        for (const oldId of form.originalVariantIds) {
+          if (!currentIds.has(oldId) && !oldId.startsWith('temp-')) {
+            try {
+              await data.deleteVariant(oldId);
+            } catch (err) {
+              toast.error(`No se pudo eliminar una variante: ${(err as Error).message}`);
+            }
+          }
+        }
+        // 2. Crear las temp-* y actualizar las reales que cambiaron.
+        //    Nota: por simplicidad updateamos todas las reales (sin comparar campo por campo).
+        for (const v of form.variants) {
+          const input = {
+            productId,
+            sku: v.sku,
+            barcode: v.barcode,
+            attributes: v.attributes,
+            priceOverride: v.priceOverride,
+            costOverride: v.costOverride,
+            active: v.active,
+          };
+          if (v.id.startsWith('temp-')) {
+            try {
+              await data.createVariant(input);
+            } catch (err) {
+              toast.error(`No se pudo crear una variante: ${(err as Error).message}`);
+            }
+          } else {
+            try {
+              await data.updateVariant(v.id, input);
+            } catch (err) {
+              toast.error(`No se pudo actualizar una variante: ${(err as Error).message}`);
+            }
+          }
+        }
+      }
+
+      toast.success(form.id ? 'Producto actualizado' : 'Producto creado');
       setModal(false);
       bumpRefresh();
     } catch (err) {
@@ -285,6 +395,18 @@ export default function Products() {
     return map;
   }, [stock]);
 
+  // Variantes agrupadas por productId. Si tiene >1, o tiene 1 pero con attributes ≠ {},
+  // consideramos que el producto "tiene variantes" (para mostrar badge / cargar al editar).
+  const variantsByProduct = useMemo(() => {
+    const map = new Map<string, ProductVariant[]>();
+    (allVariants ?? []).forEach((v) => {
+      const list = map.get(v.productId) ?? [];
+      list.push(v);
+      map.set(v.productId, list);
+    });
+    return map;
+  }, [allVariants]);
+
   const [catModal, setCatModal] = useState(false);
   const [newCat, setNewCat] = useState('');
 
@@ -354,6 +476,13 @@ export default function Products() {
                 const marginPct = p.cost > 0 ? (marginAbs / p.cost) * 100 : null;
                 const marginColor =
                   marginAbs < 0 ? 'text-red-600' : marginAbs === 0 ? 'text-slate-500' : 'text-emerald-700';
+                const pvariants = variantsByProduct.get(p.id) ?? [];
+                // Solo cuenta como "con variantes" si hay >1 o si la default tiene attrs.
+                const nonDefaultCount = pvariants.filter((v) => !v.isDefault).length;
+                const defaultHasAttrs = pvariants.some(
+                  (v) => v.isDefault && Object.keys(v.attributes ?? {}).length > 0,
+                );
+                const variantCount = nonDefaultCount > 0 || defaultHasAttrs ? pvariants.length : 0;
                 return (
                   <tr key={p.id} className="hover:bg-slate-50">
                     <td className="px-4 py-3">
@@ -377,6 +506,14 @@ export default function Products() {
                             {p.allowSaleWhenZero && p.trackStock && (
                               <span className="rounded bg-amber-50 px-1.5 py-0.5 text-amber-700">
                                 Vende en 0
+                              </span>
+                            )}
+                            {variantCount > 0 && (
+                              <span
+                                className="rounded bg-brand-50 px-1.5 py-0.5 font-medium text-brand-700"
+                                title="Producto con variantes"
+                              >
+                                {variantCount} variante{variantCount === 1 ? '' : 's'}
                               </span>
                             )}
                           </div>
@@ -455,7 +592,12 @@ export default function Products() {
         </div>
       )}
 
-      <Modal open={modal} onClose={() => setModal(false)} title={form.id ? 'Editar producto' : 'Nuevo producto'}>
+      <Modal
+        open={modal}
+        onClose={() => setModal(false)}
+        title={form.id ? 'Editar producto' : 'Nuevo producto'}
+        widthClass={form.hasVariants ? 'max-w-4xl' : 'max-w-lg'}
+      >
         <form onSubmit={handleSubmit} className="space-y-3">
           <div>
             <label className="mb-1 block text-xs font-medium text-slate-700">Nombre</label>
@@ -620,6 +762,94 @@ export default function Products() {
               </span>
             </label>
           </div>
+          {/* --- Sprint VAR: variantes --- */}
+          <div className="space-y-2 rounded-lg border border-slate-200 bg-slate-50 p-3">
+            <label className="flex items-start gap-2 text-sm">
+              <input
+                type="checkbox"
+                checked={form.hasVariants}
+                onChange={(e) => {
+                  const checked = e.target.checked;
+                  setForm((prev) => {
+                    if (checked) {
+                      // Si no hay variantes cargadas (producto nuevo), arrancamos con
+                      // 1 variante "default" temporal vacía para que el comercio la
+                      // edite o use "Generar combinaciones".
+                      const next = { ...prev, hasVariants: true };
+                      if (prev.variants.length === 0) {
+                        next.variants = [
+                          {
+                            id: `temp-${
+                              typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+                                ? crypto.randomUUID()
+                                : Math.random().toString(36).slice(2)
+                            }`,
+                            tenantId: '',
+                            productId: prev.id ?? '',
+                            sku: null,
+                            barcode: null,
+                            attributes: {},
+                            priceOverride: null,
+                            costOverride: null,
+                            active: true,
+                            isDefault: true,
+                            createdAt: new Date().toISOString(),
+                          },
+                        ];
+                      }
+                      return next;
+                    }
+                    return { ...prev, hasVariants: false };
+                  });
+                }}
+                className="mt-0.5 h-4 w-4"
+              />
+              <span>
+                Este producto tiene variantes
+                <span className="block text-xs text-slate-500">
+                  Por ejemplo: una remera con varios talles y colores. Cada variante puede tener su propio SKU y código de barras.
+                </span>
+              </span>
+            </label>
+
+            {form.hasVariants && (
+              <div className="space-y-3 pt-2">
+                <div>
+                  <label className="mb-1 block text-xs font-medium text-slate-700">
+                    Atributos
+                  </label>
+                  <AttributeKeysInput
+                    value={form.attributeKeys}
+                    onChange={(keys) => {
+                      // Al cambiar las claves, sincronizamos los attributes de cada variante:
+                      // agregamos las nuevas con valor "" y mantenemos las viejas que sigan en uso.
+                      setForm((prev) => ({
+                        ...prev,
+                        attributeKeys: keys,
+                        variants: prev.variants.map((v) => {
+                          const next: Record<string, string> = {};
+                          for (const k of keys) {
+                            next[k] = v.attributes?.[k] ?? '';
+                          }
+                          return { ...v, attributes: next };
+                        }),
+                      }));
+                    }}
+                  />
+                </div>
+
+                <VariantEditor
+                  productId={form.id ?? null}
+                  basePrice={Number(form.price) || 0}
+                  baseCost={Number(form.cost) || 0}
+                  variants={form.variants}
+                  onChange={(variants) => setForm((prev) => ({ ...prev, variants }))}
+                  attributeKeys={form.attributeKeys}
+                />
+              </div>
+            )}
+          </div>
+
           <label className="flex items-center gap-2 text-sm">
             <input
               type="checkbox"

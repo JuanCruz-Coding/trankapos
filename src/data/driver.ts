@@ -12,6 +12,7 @@ import type {
   Plan,
   PlanUsage,
   Product,
+  ProductVariant,
   Role,
   Sale,
   SaleReceiver,
@@ -88,7 +89,13 @@ export interface CategoryInput {
 export interface SaleInput {
   branchId: string;
   registerId: string | null;
-  items: { productId: string; qty: number; price: number; discount: number }[];
+  /**
+   * Items de la venta. `variantId` es **opcional durante la transición** — si no
+   * viene, el backend resuelve a la variante default del producto. El POS
+   * adaptado debería mandarlo siempre. Cuando todas las pantallas pasen, vamos
+   * a marcarlo required.
+   */
+  items: { productId: string; variantId?: string; qty: number; price: number; discount: number }[];
   payments: { method: Sale['payments'][number]['method']; amount: number }[];
   discount: number;
   /** Si true, la venta es una seña: paid<total OK, status='partial'. */
@@ -275,7 +282,21 @@ export interface TransferInput {
   fromWarehouseId: string;
   toWarehouseId: string;
   notes: string;
-  items: { productId: string; qty: number }[];
+  /** `variantId` opcional durante la transición (fallback a default). */
+  items: { productId: string; variantId?: string; qty: number }[];
+}
+
+// --- Variantes de producto (Sprint VAR / migration 030) ---
+
+export interface VariantInput {
+  productId: string;
+  sku?: string | null;
+  barcode?: string | null;
+  attributes: Record<string, string>;
+  /** Si null/undefined, hereda Product.price. Override solo si la variante cobra distinto. */
+  priceOverride?: number | null;
+  costOverride?: number | null;
+  active?: boolean;
 }
 
 export interface SalesQuery {
@@ -343,11 +364,25 @@ export interface DataDriver {
   // --- products ---
   listProducts(): Promise<Product[]>;
   getProduct(id: string): Promise<Product | null>;
-  /** Busca por barcode primero, después por sku. Útil para escanear/tipear código. */
+  /** Busca por barcode primero, después por sku. Útil para detectar duplicados al crear. */
   findProductByCode(code: string): Promise<Product | null>;
   createProduct(input: ProductInput): Promise<Product>;
   updateProduct(id: string, input: Partial<ProductInput>): Promise<Product>;
   deleteProduct(id: string): Promise<void>;
+
+  // --- variantes (Sprint VAR) ---
+  /** Variantes del tenant, opcionalmente filtradas por producto. */
+  listVariants(productId?: string): Promise<ProductVariant[]>;
+  createVariant(input: VariantInput): Promise<ProductVariant>;
+  updateVariant(id: string, input: Partial<VariantInput>): Promise<ProductVariant>;
+  /** Falla si la variante es la default o si tiene ventas asociadas. */
+  deleteVariant(id: string): Promise<void>;
+  /**
+   * Búsqueda para el POS: chequea primero en `product_variants` (cada variante
+   * puede tener su propio EAN) y después en `products`. Devuelve el producto + la
+   * variante que matcheó (o la default si matcheó el código del producto padre).
+   */
+  findVariantByCode(code: string): Promise<{ product: Product; variant: ProductVariant } | null>;
 
   // --- stock ---
   listStock(warehouseId?: string): Promise<StockItem[]>;
