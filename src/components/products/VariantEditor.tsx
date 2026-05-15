@@ -287,39 +287,65 @@ export function VariantEditor({
           attributeKeys={attributeKeys}
           onClose={() => setComboModal(false)}
           onGenerate={(combos) => {
-            // Reemplaza solo las variantes "vacías" no-default; preserva default y las
-            // que el comercio ya cargó con datos (SKU/barcode no vacíos). Igual evita
-            // crear duplicados de combinaciones existentes.
-            const existingSigs = new Set(
-              variants.map((v) =>
-                attributeKeys.map((k) => `${k}=${(v.attributes[k] ?? '').toLowerCase()}`).join('|'),
-              ),
+            // Filtra combos que ya estén presentes (basado en attrs no vacíos).
+            const existingSigsNonEmpty = new Set(
+              variants
+                .filter((v) =>
+                  attributeKeys.some((k) => (v.attributes[k] ?? '').trim() !== ''),
+                )
+                .map((v) =>
+                  attributeKeys.map((k) => `${k}=${(v.attributes[k] ?? '').toLowerCase()}`).join('|'),
+                ),
             );
-            const newOnes: ProductVariant[] = combos
-              .filter((attrs) => {
-                const sig = attributeKeys.map((k) => `${k}=${(attrs[k] ?? '').toLowerCase()}`).join('|');
-                return !existingSigs.has(sig);
-              })
-              .map((attrs) => ({
-                id: makeTempId(),
-                tenantId: '',
-                productId: _productId ?? '',
-                sku: null,
-                barcode: null,
-                attributes: attrs,
-                priceOverride: null,
-                costOverride: null,
-                active: true,
-                isDefault: false,
-                createdAt: new Date().toISOString(),
-              }));
-            if (newOnes.length === 0) {
+            const newCombos = combos.filter((attrs) => {
+              const sig = attributeKeys.map((k) => `${k}=${(attrs[k] ?? '').toLowerCase()}`).join('|');
+              return !existingSigsNonEmpty.has(sig);
+            });
+            if (newCombos.length === 0) {
               toast.error('Esas combinaciones ya existen');
               return;
             }
-            onChange([...variants, ...newOnes]);
+
+            // Si hay variantes con TODOS los attrs vacíos (típicamente la default
+            // recién creada por el toggle, o la default migration-creada en un
+            // producto que recién activa variantes), las "consumimos" asignándoles
+            // los attrs de las primeras combos. Así no quedan variantes vacías
+            // que rompan la validación al guardar.
+            const next = [...variants];
+            const emptyIndexes: number[] = [];
+            for (let i = 0; i < next.length; i++) {
+              const v = next[i];
+              if (attributeKeys.every((k) => !(v.attributes[k] ?? '').trim())) {
+                emptyIndexes.push(i);
+              }
+            }
+            const consumed = Math.min(emptyIndexes.length, newCombos.length);
+            for (let i = 0; i < consumed; i++) {
+              next[emptyIndexes[i]] = {
+                ...next[emptyIndexes[i]],
+                attributes: { ...newCombos[i] },
+              };
+            }
+
+            const remaining = newCombos.slice(consumed);
+            const newOnes: ProductVariant[] = remaining.map((attrs) => ({
+              id: makeTempId(),
+              tenantId: '',
+              productId: _productId ?? '',
+              sku: null,
+              barcode: null,
+              attributes: attrs,
+              priceOverride: null,
+              costOverride: null,
+              active: true,
+              isDefault: false,
+              createdAt: new Date().toISOString(),
+            }));
+
+            onChange([...next, ...newOnes]);
             setComboModal(false);
-            toast.success(`Se agregaron ${newOnes.length} variante(s)`);
+            const total = consumed + newOnes.length;
+            toast.success(`Se aplicaron ${total} variante${total === 1 ? '' : 's'}`);
           }}
         />
       )}
