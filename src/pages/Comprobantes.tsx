@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { RefreshCw } from 'lucide-react';
+import { Eye, RefreshCw } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { Tooltip } from '@/components/ui/Tooltip';
@@ -8,6 +8,8 @@ import { useAuth } from '@/stores/auth';
 import { formatDateTime } from '@/lib/dates';
 import { toast } from '@/stores/toast';
 import type { AfipDocumentDetail, AfipDocumentsQuery } from '@/data/driver';
+import type { Sale, Tenant } from '@/types';
+import { ReceiptModal } from '@/components/pos/ReceiptModal';
 
 const PAGE_SIZE = 50;
 
@@ -68,6 +70,34 @@ export default function Comprobantes() {
   const [refreshKey, setRefreshKey] = useState(0);
   // Documentos en proceso de reintento (deshabilita el botón de esa fila).
   const [retryingIds, setRetryingIds] = useState<Set<string>>(new Set());
+  // Sprint REPRINT: visor de comprobantes (reusa ReceiptModal con mode view).
+  const [viewingSale, setViewingSale] = useState<Sale | null>(null);
+  const [viewerTenant, setViewerTenant] = useState<Tenant | null>(null);
+  const [loadingView, setLoadingView] = useState<string | null>(null);
+
+  async function handleViewDoc(doc: AfipDocumentDetail) {
+    if (!doc.saleId) {
+      toast.error('Este comprobante no tiene una venta asociada');
+      return;
+    }
+    setLoadingView(doc.id);
+    try {
+      const [sale, t] = await Promise.all([
+        data.getSale(doc.saleId),
+        viewerTenant ? Promise.resolve(viewerTenant) : data.getTenant(),
+      ]);
+      if (!sale) {
+        toast.error('No se encontró la venta del comprobante');
+        return;
+      }
+      if (!viewerTenant) setViewerTenant(t);
+      setViewingSale(sale);
+    } catch (err) {
+      toast.error((err as Error).message);
+    } finally {
+      setLoadingView(null);
+    }
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -241,19 +271,33 @@ export default function Comprobantes() {
                       )}
                     </td>
                     <td className="px-4 py-3 text-right">
-                      {doc.status === 'rejected' && (
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          disabled={isRetrying}
-                          onClick={() => handleRetry(doc)}
-                        >
-                          <RefreshCw
-                            className={`mr-1.5 h-3.5 w-3.5 ${isRetrying ? 'animate-spin' : ''}`}
-                          />
-                          {isRetrying ? 'Reintentando…' : 'Reintentar'}
-                        </Button>
-                      )}
+                      <div className="inline-flex items-center gap-1">
+                        {doc.status === 'authorized' && doc.saleId && (
+                          <Tooltip label="Ver comprobante">
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              disabled={loadingView === doc.id}
+                              onClick={() => handleViewDoc(doc)}
+                            >
+                              <Eye className="h-3.5 w-3.5" />
+                            </Button>
+                          </Tooltip>
+                        )}
+                        {doc.status === 'rejected' && (
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            disabled={isRetrying}
+                            onClick={() => handleRetry(doc)}
+                          >
+                            <RefreshCw
+                              className={`mr-1.5 h-3.5 w-3.5 ${isRetrying ? 'animate-spin' : ''}`}
+                            />
+                            {isRetrying ? 'Reintentando…' : 'Reintentar'}
+                          </Button>
+                        )}
+                      </div>
                     </td>
                   </tr>
                 );
@@ -272,6 +316,15 @@ export default function Comprobantes() {
             </div>
           )}
         </div>
+      )}
+
+      {viewingSale && viewerTenant && (
+        <ReceiptModal
+          sale={viewingSale}
+          tenant={viewerTenant}
+          mode="view"
+          onClose={() => setViewingSale(null)}
+        />
       )}
     </div>
   );
