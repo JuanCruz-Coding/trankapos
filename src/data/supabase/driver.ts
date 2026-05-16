@@ -5,6 +5,7 @@ import type {
   AuthSession,
   Branch,
   BranchAccess,
+  BusinessMode,
   CashMovement,
   CashRegister,
   Category,
@@ -46,6 +47,7 @@ import type {
   CreditNoteInput,
   CreditNoteResult,
   CustomerInput,
+  CustomerSalesStats,
   DataDriver,
   ExchangeSaleInput,
   ExchangeSaleResult,
@@ -100,6 +102,9 @@ interface TenantRow {
   pos_partial_reserves_stock: boolean;
   refund_policy: 'cash_or_credit' | 'credit_only' | 'cash_only' | null;
   store_credit_validity_months: number | null;
+  business_mode: 'kiosk' | 'retail' | null;
+  business_subtype: string | null;
+  customer_required_fields: unknown;
   logo_url: string | null;
 }
 
@@ -131,6 +136,16 @@ function mapTenant(r: TenantRow): Tenant {
     posPartialReservesStock: r.pos_partial_reserves_stock ?? false,
     refundPolicy: r.refund_policy ?? 'cash_or_credit',
     storeCreditValidityMonths: r.store_credit_validity_months ?? null,
+    businessMode: r.business_mode ?? 'kiosk',
+    businessSubtype: (r.business_subtype ?? null) as Tenant['businessSubtype'],
+    customerRequiredFields: (r.customer_required_fields as Tenant['customerRequiredFields']) ?? {
+      docNumber: false,
+      ivaCondition: false,
+      phone: false,
+      email: false,
+      address: false,
+      birthdate: false,
+    },
     logoUrl: r.logo_url ?? null,
   };
 }
@@ -321,6 +336,9 @@ interface CustomerRow {
   id: string; tenant_id: string; doc_type: number; doc_number: string;
   legal_name: string; iva_condition: string;
   email: string | null; notes: string | null; active: boolean;
+  phone: string | null; address: string | null; city: string | null;
+  state_province: string | null; birthdate: string | null;
+  marketing_opt_in: boolean | null;
   created_at: string; updated_at: string;
 }
 function mapCustomer(r: CustomerRow): Customer {
@@ -329,7 +347,14 @@ function mapCustomer(r: CustomerRow): Customer {
     docType: r.doc_type as Customer['docType'],
     docNumber: r.doc_number, legalName: r.legal_name,
     ivaCondition: r.iva_condition as Customer['ivaCondition'],
-    email: r.email, notes: r.notes, active: r.active,
+    email: r.email, notes: r.notes,
+    phone: r.phone ?? null,
+    address: r.address ?? null,
+    city: r.city ?? null,
+    stateProvince: r.state_province ?? null,
+    birthdate: r.birthdate ?? null,
+    marketingOptIn: r.marketing_opt_in ?? false,
+    active: r.active,
     createdAt: r.created_at, updatedAt: r.updated_at,
   };
 }
@@ -488,12 +513,37 @@ class SupabaseDriver implements DataDriver {
     // La RPC mantiene el parámetro p_depot_name por compat con la signature
     // existente en el SQL (la migration 012 no lo renombra para no romper
     // backwards-compat). Conceptualmente ahora crea branch + warehouse default.
-    const { error: rpcErr } = await this.sb.rpc('create_tenant_for_owner', {
+    // Retorna el tenant_id recién creado.
+    const { data: tenantIdData, error: rpcErr } = await this.sb.rpc('create_tenant_for_owner', {
       p_tenant_name: input.tenantName,
       p_depot_name: input.branchName,
       p_owner_name: input.ownerName,
     });
     if (rpcErr) throw new Error(`Error creando tenant: ${rpcErr.message}`);
+
+    // Sprint CRM-RETAIL: la RPC create_tenant_for_owner no acepta business_mode
+    // (queda el default 'kiosk' por la migration 037). Si el onboarding pidió
+    // retail, aplicamos el preset vía RPC dedicada. business_subtype se
+    // updatea aparte porque el preset no lo toca.
+    const businessMode: BusinessMode = input.businessMode ?? 'kiosk';
+    const businessSubtype = input.businessSubtype ?? null;
+    const tenantId = (tenantIdData as string | null) ?? null;
+
+    if (businessMode === 'retail' && tenantId) {
+      const { error: presetErr } = await this.sb.rpc('tenant_apply_business_mode_preset', {
+        p_tenant_id: tenantId,
+        p_mode: 'retail',
+      });
+      if (presetErr) throw new Error(`Error aplicando preset retail: ${presetErr.message}`);
+    }
+
+    if (businessSubtype && tenantId) {
+      const { error: subtypeErr } = await this.sb
+        .from('tenants')
+        .update({ business_subtype: businessSubtype })
+        .eq('id', tenantId);
+      if (subtypeErr) throw new Error(`Error guardando subtipo: ${subtypeErr.message}`);
+    }
 
     void this.sendWelcomeEmail();
 
@@ -1777,6 +1827,12 @@ class SupabaseDriver implements DataDriver {
         iva_condition: input.ivaCondition,
         email: input.email ?? null,
         notes: input.notes ?? null,
+        phone: input.phone ?? null,
+        address: input.address ?? null,
+        city: input.city ?? null,
+        state_province: input.stateProvince ?? null,
+        birthdate: input.birthdate ?? null,
+        marketing_opt_in: input.marketingOptIn ?? false,
         active: input.active ?? true,
       })
       .select('*')
@@ -1800,6 +1856,12 @@ class SupabaseDriver implements DataDriver {
     if (input.ivaCondition !== undefined) patch.iva_condition = input.ivaCondition;
     if (input.email !== undefined) patch.email = input.email;
     if (input.notes !== undefined) patch.notes = input.notes;
+    if (input.phone !== undefined) patch.phone = input.phone;
+    if (input.address !== undefined) patch.address = input.address;
+    if (input.city !== undefined) patch.city = input.city;
+    if (input.stateProvince !== undefined) patch.state_province = input.stateProvince;
+    if (input.birthdate !== undefined) patch.birthdate = input.birthdate;
+    if (input.marketingOptIn !== undefined) patch.marketing_opt_in = input.marketingOptIn;
     if (input.active !== undefined) patch.active = input.active;
 
     const { data, error } = await this.sb
@@ -2327,5 +2389,54 @@ class SupabaseDriver implements DataDriver {
       .limit(50);
     if (error) throw new Error(error.message);
     return (data ?? []).map((r) => mapCustomerCreditMovement(r as CustomerCreditMovementRow));
+  }
+
+  // --- Sprint CRM-RETAIL: stats + listado por cliente + preset business_mode ---
+
+  async getCustomerSalesStats(customerId: string): Promise<CustomerSalesStats> {
+    const s = await this.requireSession();
+    const { data, error } = await this.sb.rpc('get_customer_sales_stats', {
+      p_tenant_id: s.tenantId,
+      p_customer_id: customerId,
+    });
+    if (error) throw new Error(error.message);
+    const row = Array.isArray(data) ? data[0] : data;
+    if (!row) {
+      return { totalSpent: 0, salesCount: 0, lastSaleAt: null, firstSaleAt: null };
+    }
+    return {
+      totalSpent: Number((row as { total_spent: string | number }).total_spent ?? 0),
+      salesCount: Number((row as { sales_count: number }).sales_count ?? 0),
+      lastSaleAt: (row as { last_sale_at: string | null }).last_sale_at ?? null,
+      firstSaleAt: (row as { first_sale_at: string | null }).first_sale_at ?? null,
+    };
+  }
+
+  async listSalesForCustomer(
+    customerId: string,
+    opts?: { limit?: number },
+  ): Promise<Sale[]> {
+    await this.requireSession();
+    const limit = opts?.limit ?? 20;
+    // Mismo SELECT que listSales: trae items + payments para que el mapper
+    // devuelva Sale completa. Filtramos por customer_id y excluimos anuladas.
+    const { data, error } = await this.sb
+      .from('sales')
+      .select('*, sale_items(*), sale_payments(method, amount)')
+      .eq('customer_id', customerId)
+      .eq('voided', false)
+      .order('created_at', { ascending: false })
+      .limit(limit);
+    if (error) throw new Error(error.message);
+    return (data ?? []).map(mapSale);
+  }
+
+  async applyBusinessModePreset(mode: BusinessMode): Promise<void> {
+    const s = await this.requireSession();
+    const { error } = await this.sb.rpc('tenant_apply_business_mode_preset', {
+      p_tenant_id: s.tenantId,
+      p_mode: mode,
+    });
+    if (error) throw new Error(error.message);
   }
 }

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type FormEvent } from 'react';
-import { Building2, Plus, Search, UserCircle2, UserPlus } from 'lucide-react';
+import { AlertTriangle, Building2, Plus, Search, UserCircle2, UserPlus } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import { Modal } from '@/components/ui/Modal';
@@ -12,10 +12,11 @@ import {
   type Customer,
   type CustomerDocType,
   type CustomerIvaCondition,
+  type CustomerRequiredFields,
   type SaleReceiver,
 } from '@/types';
 
-type View = 'search' | 'new' | 'inline';
+type View = 'search' | 'new' | 'inline' | 'complete';
 
 interface Props {
   open: boolean;
@@ -40,6 +41,52 @@ const emptyForm: FormState = {
   email: '',
 };
 
+/** Defaults conservadores si el tenant no setteó required_fields. */
+const DEFAULT_REQUIRED: CustomerRequiredFields = {
+  docNumber: true,
+  ivaCondition: true,
+  phone: false,
+  email: false,
+  address: false,
+  birthdate: false,
+};
+
+/** Solo subset relevante al ReceiverSelector. Excluye doc/iva (que siempre se piden en el form fiscal). */
+type ExtraRequiredField = 'phone' | 'email' | 'address' | 'birthdate';
+
+const EXTRA_REQUIRED_LABELS: Record<ExtraRequiredField, string> = {
+  phone: 'Teléfono',
+  email: 'Email',
+  address: 'Domicilio',
+  birthdate: 'Fecha de nacimiento',
+};
+
+/** Estado del mini-form "completar datos faltantes". */
+interface CompleteFormState {
+  phone: string;
+  email: string;
+  address: string;
+  birthdate: string;
+}
+
+/**
+ * Detecta qué campos requeridos del tenant le faltan al customer.
+ * Solo evalúa los campos extra (phone/email/address/birthdate) — docNumber e
+ * ivaCondition siempre vienen poblados desde la tabla customers (no pueden
+ * estar vacíos por constraint).
+ */
+function detectMissingFields(
+  c: Customer,
+  required: CustomerRequiredFields,
+): ExtraRequiredField[] {
+  const missing: ExtraRequiredField[] = [];
+  if (required.phone && !c.phone?.trim()) missing.push('phone');
+  if (required.email && !c.email?.trim()) missing.push('email');
+  if (required.address && !c.address?.trim()) missing.push('address');
+  if (required.birthdate && !c.birthdate?.trim()) missing.push('birthdate');
+  return missing;
+}
+
 export function ReceiverSelectorModal({ open, onClose, onConfirm }: Props) {
   const [view, setView] = useState<View>('search');
   const [search, setSearch] = useState('');
@@ -49,14 +96,41 @@ export function ReceiverSelectorModal({ open, onClose, onConfirm }: Props) {
   const [saving, setSaving] = useState(false);
   const [padronLoading, setPadronLoading] = useState(false);
 
-  // Reset al abrir
+  // Required fields del tenant — se cargan al abrir el modal.
+  const [requiredFields, setRequiredFields] =
+    useState<CustomerRequiredFields>(DEFAULT_REQUIRED);
+
+  // Estado del flow "completar datos faltantes" (cuando se elige un customer
+  // existente al que le faltan campos requeridos por el tenant).
+  const [pendingCustomer, setPendingCustomer] = useState<Customer | null>(null);
+  const [missing, setMissing] = useState<ExtraRequiredField[]>([]);
+  const [completeForm, setCompleteForm] = useState<CompleteFormState>({
+    phone: '',
+    email: '',
+    address: '',
+    birthdate: '',
+  });
+  const [completing, setCompleting] = useState(false);
+
+  // Reset al abrir + cargar requiredFields del tenant.
   useEffect(() => {
-    if (open) {
-      setView('search');
-      setSearch('');
-      setResults([]);
-      setForm(emptyForm);
-    }
+    if (!open) return;
+    setView('search');
+    setSearch('');
+    setResults([]);
+    setForm(emptyForm);
+    setPendingCustomer(null);
+    setMissing([]);
+    setCompleteForm({ phone: '', email: '', address: '', birthdate: '' });
+    (async () => {
+      try {
+        const t = await data.getTenant();
+        setRequiredFields(t.customerRequiredFields ?? DEFAULT_REQUIRED);
+      } catch {
+        // Si falla el getTenant, seguimos con defaults conservadores.
+        setRequiredFields(DEFAULT_REQUIRED);
+      }
+    })();
   }, [open]);
 
   // Debounce search
@@ -78,7 +152,7 @@ export function ReceiverSelectorModal({ open, onClose, onConfirm }: Props) {
     return () => clearTimeout(t);
   }, [search, view, open]);
 
-  function pickCustomer(c: Customer) {
+  function confirmReceiverFromCustomer(c: Customer) {
     onConfirm({
       customerId: c.id,
       docType: c.docType,
@@ -87,6 +161,76 @@ export function ReceiverSelectorModal({ open, onClose, onConfirm }: Props) {
       ivaCondition: c.ivaCondition,
     });
     onClose();
+  }
+
+  /**
+   * Al pickear un customer existente, validamos required_fields del tenant.
+   * Si le faltan datos → abrimos el mini-form para completarlos in-line, lo
+   * persistimos con updateCustomer y recién después aceptamos el receiver.
+   * Si está completo → comportamiento original.
+   */
+  function pickCustomer(c: Customer) {
+    const miss = detectMissingFields(c, requiredFields);
+    if (miss.length === 0) {
+      confirmReceiverFromCustomer(c);
+      return;
+    }
+    // Pre-cargamos el mini-form con los datos actuales del customer (que pueden
+    // ser null/'' — el cajero los completa).
+    setPendingCustomer(c);
+    setMissing(miss);
+    setCompleteForm({
+      phone: c.phone ?? '',
+      email: c.email ?? '',
+      address: c.address ?? '',
+      birthdate: c.birthdate ?? '',
+    });
+    setView('complete');
+  }
+
+  function updateCompleteField<K extends keyof CompleteFormState>(
+    key: K,
+    value: CompleteFormState[K],
+  ) {
+    setCompleteForm((f) => ({ ...f, [key]: value }));
+  }
+
+  async function handleCompleteSubmit(e: FormEvent) {
+    e.preventDefault();
+    if (!pendingCustomer) return;
+    // Validar que efectivamente se completaron los que faltaban.
+    const stillMissing = missing.filter((field) => {
+      const v = completeForm[field];
+      return !v || !v.toString().trim();
+    });
+    if (stillMissing.length > 0) {
+      toast.error(
+        `Falta completar: ${stillMissing.map((f) => EXTRA_REQUIRED_LABELS[f]).join(', ')}.`,
+      );
+      return;
+    }
+
+    setCompleting(true);
+    try {
+      // Mandamos updateCustomer solo con los campos que se completaron, para
+      // no pisar datos no editados.
+      const patch: {
+        phone?: string;
+        email?: string;
+        address?: string;
+        birthdate?: string;
+      } = {};
+      for (const field of missing) {
+        patch[field] = completeForm[field].trim();
+      }
+      const updated = await data.updateCustomer(pendingCustomer.id, patch);
+      toast.success('Datos del cliente actualizados');
+      confirmReceiverFromCustomer(updated);
+    } catch (err) {
+      toast.error((err as Error).message);
+    } finally {
+      setCompleting(false);
+    }
   }
 
   function updateForm<K extends keyof FormState>(key: K, value: FormState[K]) {
@@ -140,7 +284,12 @@ export function ReceiverSelectorModal({ open, onClose, onConfirm }: Props) {
         email: form.email.trim() || null,
       });
       toast.success('Cliente creado');
-      pickCustomer(created);
+      // Importante: el customer recién creado puede no tener todos los
+      // required_fields (acá solo pedimos doc/legalName/iva/email). Sin
+      // embargo, no le exigimos completarlos en este flow: el cajero podrá
+      // completarlos después desde Customers. Si quiere bloquear, debería
+      // configurar el ReceiverSelector con los campos extra (TODO).
+      confirmReceiverFromCustomer(created);
     } catch (err) {
       toast.error((err as Error).message);
     } finally {
@@ -169,18 +318,20 @@ export function ReceiverSelectorModal({ open, onClose, onConfirm }: Props) {
 
   return (
     <Modal open={open} onClose={onClose} title="Identificar cliente" widthClass="max-w-lg">
-      {/* Tabs */}
-      <div className="mb-3 flex gap-1 border-b border-slate-200">
-        <TabButton active={view === 'search'} onClick={() => setView('search')}>
-          <Search className="h-4 w-4" /> Buscar
-        </TabButton>
-        <TabButton active={view === 'new'} onClick={() => setView('new')}>
-          <UserPlus className="h-4 w-4" /> Cargar nuevo
-        </TabButton>
-        <TabButton active={view === 'inline'} onClick={() => setView('inline')}>
-          <UserCircle2 className="h-4 w-4" /> Solo esta venta
-        </TabButton>
-      </div>
+      {/* Tabs — ocultas en el flow de completar datos para evitar perder el contexto. */}
+      {view !== 'complete' && (
+        <div className="mb-3 flex gap-1 border-b border-slate-200">
+          <TabButton active={view === 'search'} onClick={() => setView('search')}>
+            <Search className="h-4 w-4" /> Buscar
+          </TabButton>
+          <TabButton active={view === 'new'} onClick={() => setView('new')}>
+            <UserPlus className="h-4 w-4" /> Cargar nuevo
+          </TabButton>
+          <TabButton active={view === 'inline'} onClick={() => setView('inline')}>
+            <UserCircle2 className="h-4 w-4" /> Solo esta venta
+          </TabButton>
+        </div>
+      )}
 
       {view === 'search' && (
         <div>
@@ -261,6 +412,82 @@ export function ReceiverSelectorModal({ open, onClose, onConfirm }: Props) {
           canConsultPadron={canConsultPadron}
           padronLoading={padronLoading}
         />
+      )}
+
+      {view === 'complete' && pendingCustomer && (
+        <form onSubmit={handleCompleteSubmit} className="space-y-3">
+          <div className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm">
+            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-700" />
+            <div className="min-w-0 flex-1 text-amber-900">
+              <div className="font-medium">Faltan datos del cliente</div>
+              <div className="text-xs">
+                Según la configuración del comercio,{' '}
+                <strong>{pendingCustomer.legalName}</strong> necesita completar:{' '}
+                <strong>
+                  {missing.map((f) => EXTRA_REQUIRED_LABELS[f]).join(', ')}
+                </strong>
+                . Completalos para seguir.
+              </div>
+            </div>
+          </div>
+
+          {missing.includes('phone') && (
+            <Field label="Teléfono" required>
+              <Input
+                type="tel"
+                value={completeForm.phone}
+                onChange={(e) => updateCompleteField('phone', e.target.value)}
+                placeholder="Ej: +54 11 1234-5678"
+                autoFocus
+              />
+            </Field>
+          )}
+          {missing.includes('email') && (
+            <Field label="Email" required>
+              <Input
+                type="email"
+                value={completeForm.email}
+                onChange={(e) => updateCompleteField('email', e.target.value)}
+                autoFocus={!missing.includes('phone')}
+              />
+            </Field>
+          )}
+          {missing.includes('address') && (
+            <Field label="Domicilio" required>
+              <Input
+                value={completeForm.address}
+                onChange={(e) => updateCompleteField('address', e.target.value)}
+                placeholder="Calle y número"
+              />
+            </Field>
+          )}
+          {missing.includes('birthdate') && (
+            <Field label="Fecha de nacimiento" required>
+              <Input
+                type="date"
+                value={completeForm.birthdate}
+                onChange={(e) => updateCompleteField('birthdate', e.target.value)}
+              />
+            </Field>
+          )}
+
+          <div className="flex justify-end gap-2 pt-1">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => {
+                setPendingCustomer(null);
+                setMissing([]);
+                setView('search');
+              }}
+            >
+              Volver a buscar
+            </Button>
+            <Button type="submit" disabled={completing}>
+              {completing ? 'Guardando…' : 'Guardar y usar cliente'}
+            </Button>
+          </div>
+        </form>
       )}
     </Modal>
   );
@@ -389,15 +616,20 @@ function ReceiverForm({
 function Field({
   label,
   hint,
+  required,
   children,
 }: {
   label: string;
   hint?: string;
+  required?: boolean;
   children: React.ReactNode;
 }) {
   return (
     <label className="block">
-      <div className="mb-1 text-xs font-medium text-slate-700">{label}</div>
+      <div className="mb-1 text-xs font-medium text-slate-700">
+        {label}
+        {required && <span className="ml-0.5 text-red-600" aria-label="obligatorio">*</span>}
+      </div>
       {children}
       {hint && <div className="mt-1 text-[11px] text-slate-500">{hint}</div>}
     </label>

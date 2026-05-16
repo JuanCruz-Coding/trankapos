@@ -2,6 +2,8 @@ import type {
   AuthSession,
   BranchAccess,
   Branch,
+  BusinessMode,
+  BusinessSubtype,
   CashMovement,
   CashRegister,
   Category,
@@ -34,6 +36,9 @@ export interface SignupInput {
   ownerName: string;
   email: string;
   password: string;
+  /** Sprint CRM-RETAIL: tipo de negocio elegido en onboarding. Default 'kiosk'. */
+  businessMode?: BusinessMode;
+  businessSubtype?: BusinessSubtype | null;
 }
 
 export interface LoginInput {
@@ -114,7 +119,22 @@ export interface CustomerInput {
   ivaCondition: CustomerIvaCondition;
   email?: string | null;
   notes?: string | null;
+  /** Sprint CRM-RETAIL: datos extra opcionales. */
+  phone?: string | null;
+  address?: string | null;
+  city?: string | null;
+  stateProvince?: string | null;
+  birthdate?: string | null;
+  marketingOptIn?: boolean;
   active?: boolean;
+}
+
+/** Stats de compras del cliente para mostrar en su ficha. Sprint CRM-RETAIL. */
+export interface CustomerSalesStats {
+  totalSpent: number;
+  salesCount: number;
+  lastSaleAt: string | null;
+  firstSaleAt: string | null;
 }
 
 /** Documento fiscal AFIP asociado a una venta (factura o nota de crédito). */
@@ -492,6 +512,12 @@ export interface DataDriver {
   updateCustomer(id: string, input: Partial<CustomerInput>): Promise<Customer>;
   /** Soft delete: setea active=false. */
   deactivateCustomer(id: string): Promise<void>;
+  /** Sprint CRM-RETAIL: stats agregadas del cliente para mostrar en su ficha. */
+  getCustomerSalesStats(customerId: string): Promise<CustomerSalesStats>;
+  /** Sprint CRM-RETAIL: ventas no anuladas del cliente, últimas primero. */
+  listSalesForCustomer(customerId: string, opts?: { limit?: number }): Promise<Sale[]>;
+  /** Sprint CRM-RETAIL: aplica preset al cambiar el modo del negocio. */
+  applyBusinessModePreset(mode: BusinessMode): Promise<void>;
 
   // --- AFIP: documentos fiscales y notas de crédito ---
   /** Documentos AFIP (factura + NC/ND) asociados a una venta. */

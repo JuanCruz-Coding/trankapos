@@ -4,6 +4,7 @@ import type {
   AuthSession,
   Branch,
   BranchAccess,
+  BusinessMode,
   CashMovement,
   CashRegister,
   Category,
@@ -41,6 +42,7 @@ import type {
   AfipPadronResult,
   ConsultAfipPadronInput,
   CustomerInput,
+  CustomerSalesStats,
   DataDriver,
   ExchangeSaleInput,
   ExchangeSaleResult,
@@ -96,6 +98,16 @@ function withTenantDefaults(t: Partial<Tenant> & Pick<Tenant, 'id' | 'name' | 'c
     posPartialReservesStock: t.posPartialReservesStock ?? false,
     refundPolicy: t.refundPolicy ?? 'cash_or_credit',
     storeCreditValidityMonths: t.storeCreditValidityMonths ?? null,
+    businessMode: t.businessMode ?? 'kiosk',
+    businessSubtype: t.businessSubtype ?? null,
+    customerRequiredFields: t.customerRequiredFields ?? {
+      docNumber: false,
+      ivaCondition: false,
+      phone: false,
+      email: false,
+      address: false,
+      birthdate: false,
+    },
     logoUrl: t.logoUrl ?? null,
   };
 }
@@ -172,11 +184,36 @@ export class LocalDriver implements DataDriver {
     const warehouseId = uuid();
     const ts = now();
 
+    // Sprint CRM-RETAIL: si el onboarding pidió retail, replicamos el preset
+    // que aplica el trigger SQL (refund_policy=credit_only,
+    // store_credit_validity_months=6, customer_required_fields con doc + cuit
+    // + phone obligatorios).
+    const businessMode: BusinessMode = input.businessMode ?? 'kiosk';
+    const businessSubtype = input.businessSubtype ?? null;
+    const retailOverrides: Partial<Tenant> =
+      businessMode === 'retail'
+        ? {
+            refundPolicy: 'credit_only',
+            storeCreditValidityMonths: 6,
+            customerRequiredFields: {
+              docNumber: true,
+              ivaCondition: true,
+              phone: true,
+              email: false,
+              address: false,
+              birthdate: false,
+            },
+          }
+        : {};
+
     const tenant: Tenant = withTenantDefaults({
       id: tenantId,
       name: input.tenantName,
       createdAt: ts,
       legalName: input.tenantName,
+      businessMode,
+      businessSubtype,
+      ...retailOverrides,
     });
     const branch: Branch = {
       id: branchId,
@@ -1348,5 +1385,19 @@ export class LocalDriver implements DataDriver {
   async listCustomerCreditMovements(_customerId: string): Promise<CustomerCreditMovement[]> {
     await this.requireSession();
     return [];
+  }
+
+  // --- Sprint CRM-RETAIL: stats + listado por cliente + preset business_mode ---
+  async getCustomerSalesStats(_customerId: string): Promise<CustomerSalesStats> {
+    await this.requireSession();
+    return { totalSpent: 0, salesCount: 0, lastSaleAt: null, firstSaleAt: null };
+  }
+  async listSalesForCustomer(_customerId: string, _opts?: { limit?: number }): Promise<Sale[]> {
+    await this.requireSession();
+    return [];
+  }
+  async applyBusinessModePreset(_mode: BusinessMode): Promise<void> {
+    await this.requireSession();
+    throw new Error('El cambio de modo del negocio requiere modo online.');
   }
 }

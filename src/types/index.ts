@@ -49,10 +49,47 @@ export interface Customer {
   ivaCondition: CustomerIvaCondition;
   email: string | null;
   notes: string | null;
+  /** Sprint CRM-RETAIL: datos extra para retail / marketing. */
+  phone: string | null;
+  address: string | null;
+  city: string | null;
+  stateProvince: string | null;
+  birthdate: string | null;
+  marketingOptIn: boolean;
   active: boolean;
   createdAt: string;
   updatedAt: string;
 }
+
+/** Configuración granular de qué campos del cliente son obligatorios al cargarlo. */
+export interface CustomerRequiredFields {
+  docNumber: boolean;
+  ivaCondition: boolean;
+  phone: boolean;
+  email: boolean;
+  address: boolean;
+  birthdate: boolean;
+}
+
+export type BusinessMode = 'kiosk' | 'retail';
+export type BusinessSubtype =
+  | 'food'
+  | 'clothing'
+  | 'electronics'
+  | 'home'
+  | 'pharmacy'
+  | 'bookstore'
+  | 'other';
+
+export const BUSINESS_SUBTYPES: { value: BusinessSubtype; label: string }[] = [
+  { value: 'clothing', label: 'Ropa / Indumentaria' },
+  { value: 'electronics', label: 'Electrodomésticos / Electrónica' },
+  { value: 'home', label: 'Hogar / Decoración' },
+  { value: 'pharmacy', label: 'Farmacia / Perfumería' },
+  { value: 'bookstore', label: 'Librería / Papelería' },
+  { value: 'food', label: 'Comestibles' },
+  { value: 'other', label: 'Otro' },
+];
 
 /** Datos del receptor a incluir en una venta. Puede provenir de la tabla customers o ser inline. */
 export interface SaleReceiver {
@@ -109,6 +146,10 @@ export interface Tenant {
   refundPolicy: 'cash_or_credit' | 'credit_only' | 'cash_only';
   /** Meses de vigencia del vale generado por devolución. null = sin vencimiento. */
   storeCreditValidityMonths: number | null;
+  // CRM / modo de negocio (Sprint CRM-RETAIL)
+  businessMode: BusinessMode;
+  businessSubtype: BusinessSubtype | null;
+  customerRequiredFields: CustomerRequiredFields;
   // Branding
   logoUrl: string | null;
 }
@@ -137,6 +178,9 @@ export interface TenantSettingsInput {
   posPartialReservesStock?: boolean;
   refundPolicy?: 'cash_or_credit' | 'credit_only' | 'cash_only';
   storeCreditValidityMonths?: number | null;
+  businessMode?: BusinessMode;
+  businessSubtype?: BusinessSubtype | null;
+  customerRequiredFields?: CustomerRequiredFields;
 }
 
 export interface User {

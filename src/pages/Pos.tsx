@@ -32,7 +32,7 @@ import { cn } from '@/lib/utils';
 import { buildSaleFromCart, summarizeSale } from '@/lib/sales';
 import { beepError, beepSuccess, primeAudio } from '@/lib/sound';
 import { toast } from '@/stores/toast';
-import { PAYMENT_METHODS, type PaymentMethod, type Product, type ProductVariant, type Sale, type SaleReceiver, type TaxCondition, type Tenant } from '@/types';
+import { PAYMENT_METHODS, type BusinessMode, type PaymentMethod, type Product, type ProductVariant, type Sale, type SaleReceiver, type TaxCondition, type Tenant } from '@/types';
 import { QRPaymentModal } from '@/components/ui/QRPaymentModal';
 
 export default function Pos() {
@@ -619,6 +619,7 @@ export default function Pos() {
         total={total}
         mpReady={mpReady}
         tenantTaxCondition={tenant?.taxCondition ?? null}
+        businessMode={tenant?.businessMode ?? 'kiosk'}
         variantIdByProduct={variantIdByProduct}
         onCompleted={(sale) => {
           setPayModal(false);
@@ -717,6 +718,8 @@ interface PayProps {
   mpReady?: boolean;
   /** Condición IVA del tenant emisor para previsualizar la letra de factura. */
   tenantTaxCondition: TaxCondition | null;
+  /** Modo del negocio. En retail mostramos un CTA prominente de "Identificar cliente". */
+  businessMode: BusinessMode;
   /** Map productId -> variantId elegida (Sprint VAR). */
   variantIdByProduct: Record<string, string>;
   onCompleted: (sale: Sale) => void;
@@ -728,7 +731,7 @@ interface PayProps {
   ) => void;
 }
 
-function PaymentModal({ open, onClose, total, mpReady, tenantTaxCondition, variantIdByProduct, onCompleted, onPayWithQR }: PayProps) {
+function PaymentModal({ open, onClose, total, mpReady, tenantTaxCondition, businessMode, variantIdByProduct, onCompleted, onPayWithQR }: PayProps) {
   const { session, activeBranchId } = useAuth();
   const { lines, discount } = useCart();
   const [payments, setPayments] = useState<{ method: PaymentMethod; amount: number }[]>([
@@ -872,8 +875,18 @@ function PaymentModal({ open, onClose, total, mpReady, tenantTaxCondition, varia
         )}
       </div>
 
-      {/* Receptor (opcional). Si no se selecciona, queda como consumidor final anónimo. */}
-      <div className="mb-3 rounded-lg border border-slate-200 p-2.5 text-sm">
+      {/* Receptor (opcional). Si no se selecciona, queda como consumidor final anónimo.
+          Sprint CRM-RETAIL: en modo retail mostramos el CTA prominente con colores
+          brand para empujar al cajero a identificar al cliente (lo necesita para
+          historial, fidelidad, etc.). En kiosco queda discreto. */}
+      <div
+        className={
+          'mb-3 rounded-lg text-sm ' +
+          (!receiver && businessMode === 'retail'
+            ? 'border-2 border-brand-300 bg-brand-50 p-3'
+            : 'border border-slate-200 p-2.5')
+        }
+      >
         {receiver ? (
           <div className="flex items-start gap-2">
             <UserCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-600" />
@@ -892,6 +905,20 @@ function PaymentModal({ open, onClose, total, mpReady, tenantTaxCondition, varia
               <X className="h-3.5 w-3.5" />
             </button>
           </div>
+        ) : businessMode === 'retail' ? (
+          <button
+            type="button"
+            onClick={() => setReceiverModalOpen(true)}
+            className="flex w-full items-center gap-2 text-left font-semibold text-brand-700 hover:text-brand-800"
+          >
+            <UserPlus className="h-5 w-5 shrink-0" />
+            <span className="flex-1">
+              Identificar cliente
+              <span className="block text-[11px] font-normal text-brand-600">
+                Sumá la venta a su historial.
+              </span>
+            </span>
+          </button>
         ) : (
           <button
             type="button"

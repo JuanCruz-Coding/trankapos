@@ -51,6 +51,16 @@ export async function seedIfEmpty(): Promise<void> {
     posPartialReservesStock: false,
     refundPolicy: 'cash_or_credit',
     storeCreditValidityMonths: null,
+    businessMode: 'kiosk',
+    businessSubtype: null,
+    customerRequiredFields: {
+      docNumber: false,
+      ivaCondition: false,
+      phone: false,
+      email: false,
+      address: false,
+      birthdate: false,
+    },
     logoUrl: null,
   };
 

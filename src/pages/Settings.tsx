@@ -28,13 +28,23 @@ import { getSupabase } from '@/lib/supabase';
 import { useAuth } from '@/stores/auth';
 import { toast } from '@/stores/toast';
 import { confirmDialog } from '@/lib/dialog';
-import { TAX_CONDITIONS, type TaxCondition, type Tenant, type TenantSettingsInput } from '@/types';
+import {
+  TAX_CONDITIONS,
+  type BusinessMode,
+  type BusinessSubtype,
+  type CustomerRequiredFields,
+  type TaxCondition,
+  type Tenant,
+  type TenantSettingsInput,
+} from '@/types';
 import { cn } from '@/lib/utils';
 import { LOGO_REQUIREMENTS_TEXT, validateLogoFile } from '@/lib/imageUpload';
 import { ProductionToggleModal } from '@/components/afip/ProductionToggleModal';
 import { AfipOnboardingWizard } from '@/components/afip/AfipOnboardingWizard';
 import { ReturnReasonsEditor } from '@/components/settings/ReturnReasonsEditor';
 import { RefundPolicyPanel } from '@/components/settings/RefundPolicyPanel';
+import { BusinessModeSwitch } from '@/components/settings/BusinessModeSwitch';
+import { CustomerRequiredFieldsEditor } from '@/components/settings/CustomerRequiredFieldsEditor';
 
 type Tab = 'empresa' | 'ticket' | 'pos' | 'stock' | 'pagos' | 'facturacion' | 'devoluciones';
 
@@ -72,6 +82,9 @@ interface FormState {
   stockAlertsEnabled: boolean;
   refundPolicy: 'cash_or_credit' | 'credit_only' | 'cash_only';
   storeCreditValidityMonths: number | null;
+  businessMode: BusinessMode;
+  businessSubtype: BusinessSubtype | null;
+  customerRequiredFields: CustomerRequiredFields;
   logoUrl: string | null;
 }
 
@@ -100,6 +113,9 @@ function tenantToForm(t: Tenant): FormState {
     stockAlertsEnabled: t.stockAlertsEnabled,
     refundPolicy: t.refundPolicy,
     storeCreditValidityMonths: t.storeCreditValidityMonths,
+    businessMode: t.businessMode,
+    businessSubtype: t.businessSubtype,
+    customerRequiredFields: t.customerRequiredFields,
     logoUrl: t.logoUrl,
   };
 }
@@ -125,6 +141,21 @@ export default function Settings() {
       cancelled = true;
     };
   }, []);
+
+  /**
+   * Recarga el tenant desde el driver. Se usa cuando un sub-componente hace
+   * un cambio fuera del flujo del form principal (ej: BusinessModeSwitch
+   * llama directo al driver y avisa con onChanged).
+   */
+  async function reloadTenant() {
+    try {
+      const t = await data.getTenant();
+      setForm(tenantToForm(t));
+      setDirty(false);
+    } catch (err) {
+      toast.error((err as Error).message);
+    }
+  }
 
   function update<K extends keyof FormState>(key: K, value: FormState[K]) {
     setForm((f) => (f ? { ...f, [key]: value } : f));
@@ -173,6 +204,7 @@ export default function Settings() {
         stockAlertsEnabled: form.stockAlertsEnabled,
         refundPolicy: form.refundPolicy,
         storeCreditValidityMonths: form.storeCreditValidityMonths,
+        customerRequiredFields: form.customerRequiredFields,
       };
       const updated = await data.updateTenantSettings(input);
       setForm(tenantToForm(updated));
@@ -265,6 +297,7 @@ export default function Settings() {
                   form={form}
                   update={update}
                   onLogoChange={(url) => setForm((f) => (f ? { ...f, logoUrl: url } : f))}
+                  onTenantChanged={reloadTenant}
                 />
               )}
               {tab === 'ticket' && <TicketTab form={form} update={update} />}
@@ -497,7 +530,11 @@ function EmpresaTab({
   form,
   update,
   onLogoChange,
-}: TabProps & { onLogoChange: (url: string | null) => void }) {
+  onTenantChanged,
+}: TabProps & {
+  onLogoChange: (url: string | null) => void;
+  onTenantChanged: () => void;
+}) {
   return (
     <div className="space-y-4">
       <LogoUploader logoUrl={form.logoUrl} onChange={onLogoChange} />
@@ -561,6 +598,21 @@ function EmpresaTab({
           onChange={(e) => update('city', e.target.value)}
         />
       </Field>
+      </div>
+
+      {/* Sprint CRM-RETAIL — modo del negocio + campos del cliente requeridos */}
+      <div className="rounded-lg border border-slate-200 bg-white p-4">
+        <BusinessModeSwitch
+          currentMode={form.businessMode}
+          currentSubtype={form.businessSubtype}
+          onChanged={onTenantChanged}
+        />
+      </div>
+      <div className="rounded-lg border border-slate-200 bg-white p-4">
+        <CustomerRequiredFieldsEditor
+          value={form.customerRequiredFields}
+          onChange={(v) => update('customerRequiredFields', v)}
+        />
       </div>
     </div>
   );

@@ -6,6 +6,7 @@ import { Modal } from '@/components/ui/Modal';
 import { Empty } from '@/components/ui/Empty';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { CustomerCreditPanel } from '@/components/customers/CustomerCreditPanel';
+import { CustomerSalesPanel } from '@/components/customers/CustomerSalesPanel';
 import { data } from '@/data';
 import { toast } from '@/stores/toast';
 import { confirmDialog } from '@/lib/dialog';
@@ -17,6 +18,8 @@ import {
   type Customer,
   type CustomerDocType,
   type CustomerIvaCondition,
+  type CustomerRequiredFields,
+  type Tenant,
 } from '@/types';
 
 interface FormState {
@@ -27,6 +30,13 @@ interface FormState {
   ivaCondition: CustomerIvaCondition;
   email: string;
   notes: string;
+  // Sprint CRM-RETAIL: campos extendidos.
+  phone: string;
+  address: string;
+  city: string;
+  stateProvince: string;
+  birthdate: string;
+  marketingOptIn: boolean;
 }
 
 const emptyForm: FormState = {
@@ -36,10 +46,37 @@ const emptyForm: FormState = {
   ivaCondition: 'consumidor_final',
   email: '',
   notes: '',
+  phone: '',
+  address: '',
+  city: '',
+  stateProvince: '',
+  birthdate: '',
+  marketingOptIn: false,
+};
+
+/** Defaults conservadores si el tenant todavía no setteó los required_fields. */
+const DEFAULT_REQUIRED: CustomerRequiredFields = {
+  docNumber: true,
+  ivaCondition: true,
+  phone: false,
+  email: false,
+  address: false,
+  birthdate: false,
+};
+
+/** Etiquetas para los mensajes de error de required_fields. */
+const REQUIRED_LABELS: Record<keyof CustomerRequiredFields, string> = {
+  docNumber: 'Número de documento',
+  ivaCondition: 'Condición frente al IVA',
+  phone: 'Teléfono',
+  email: 'Email',
+  address: 'Domicilio',
+  birthdate: 'Fecha de nacimiento',
 };
 
 export default function Customers() {
   const [customers, setCustomers] = useState<Customer[]>([]);
+  const [tenant, setTenant] = useState<Tenant | null>(null);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [modalOpen, setModalOpen] = useState(false);
@@ -50,6 +87,11 @@ export default function Customers() {
   // Se carga en batch para los primeros 50 clientes para no abusar del backend.
   const [creditByCustomer, setCreditByCustomer] = useState<Record<string, number>>({});
 
+  // Required fields del tenant. Lo cargamos junto con el tenant. Si no llegó
+  // todavía o no está configurado, usamos los defaults conservadores.
+  const requiredFields = tenant?.customerRequiredFields ?? DEFAULT_REQUIRED;
+  const businessMode = tenant?.businessMode ?? 'kiosk';
+
   useEffect(() => {
     void load();
   }, []);
@@ -57,8 +99,12 @@ export default function Customers() {
   async function load() {
     setLoading(true);
     try {
-      const list = await data.listCustomers({ activeOnly: true });
+      const [list, t] = await Promise.all([
+        data.listCustomers({ activeOnly: true }),
+        data.getTenant().catch(() => null),
+      ]);
       setCustomers(list);
+      setTenant(t);
       // Carga los saldos en paralelo para los primeros 50 visibles.
       // Si un cliente no tiene fila en customer_credits, getCustomerCredit
       // devuelve null (balance=0 efectivo).
@@ -109,6 +155,12 @@ export default function Customers() {
       ivaCondition: c.ivaCondition,
       email: c.email ?? '',
       notes: c.notes ?? '',
+      phone: c.phone ?? '',
+      address: c.address ?? '',
+      city: c.city ?? '',
+      stateProvince: c.stateProvince ?? '',
+      birthdate: c.birthdate ?? '',
+      marketingOptIn: c.marketingOptIn ?? false,
     });
     setModalOpen(true);
   }
@@ -142,6 +194,11 @@ export default function Customers() {
         if (persona.address && !f.notes.trim()) {
           next.notes = `Domicilio fiscal AFIP: ${persona.address}`;
         }
+        // Si el form de domicilio está vacío y el padrón trae uno, lo cargamos
+        // para que el comercio no tenga que copiarlo a mano.
+        if (persona.address && !f.address.trim()) {
+          next.address = persona.address;
+        }
         return next;
       });
       toast.success('Datos cargados desde AFIP');
@@ -152,6 +209,37 @@ export default function Customers() {
     }
   }
 
+  /**
+   * Valida los required_fields del tenant contra el form actual.
+   * Devuelve un mensaje de error (en español) si algún required está vacío.
+   */
+  function validateRequiredFields(): string | null {
+    const missing: string[] = [];
+    if (requiredFields.docNumber && !form.docNumber.trim()) {
+      missing.push(REQUIRED_LABELS.docNumber);
+    }
+    if (requiredFields.ivaCondition && !form.ivaCondition) {
+      missing.push(REQUIRED_LABELS.ivaCondition);
+    }
+    if (requiredFields.phone && !form.phone.trim()) {
+      missing.push(REQUIRED_LABELS.phone);
+    }
+    if (requiredFields.email && !form.email.trim()) {
+      missing.push(REQUIRED_LABELS.email);
+    }
+    if (requiredFields.address && !form.address.trim()) {
+      missing.push(REQUIRED_LABELS.address);
+    }
+    if (requiredFields.birthdate && !form.birthdate.trim()) {
+      missing.push(REQUIRED_LABELS.birthdate);
+    }
+    if (missing.length === 0) return null;
+    if (missing.length === 1) {
+      return `El campo ${missing[0]} es obligatorio según la configuración del comercio.`;
+    }
+    return `Faltan campos obligatorios: ${missing.join(', ')}.`;
+  }
+
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
 
@@ -159,27 +247,30 @@ export default function Customers() {
     if (docErr) return toast.error(docErr);
     if (!form.legalName.trim()) return toast.error('Razón social / nombre es obligatorio.');
 
+    const reqErr = validateRequiredFields();
+    if (reqErr) return toast.error(reqErr);
+
     setSaving(true);
     try {
+      const payload = {
+        docType: form.docType,
+        docNumber: form.docNumber,
+        legalName: form.legalName.trim(),
+        ivaCondition: form.ivaCondition,
+        email: form.email.trim() || null,
+        notes: form.notes.trim() || null,
+        phone: form.phone.trim() || null,
+        address: form.address.trim() || null,
+        city: form.city.trim() || null,
+        stateProvince: form.stateProvince.trim() || null,
+        birthdate: form.birthdate.trim() || null,
+        marketingOptIn: form.marketingOptIn,
+      };
       if (form.id) {
-        await data.updateCustomer(form.id, {
-          docType: form.docType,
-          docNumber: form.docNumber,
-          legalName: form.legalName.trim(),
-          ivaCondition: form.ivaCondition,
-          email: form.email.trim() || null,
-          notes: form.notes.trim() || null,
-        });
+        await data.updateCustomer(form.id, payload);
         toast.success('Cliente actualizado');
       } else {
-        await data.createCustomer({
-          docType: form.docType,
-          docNumber: form.docNumber,
-          legalName: form.legalName.trim(),
-          ivaCondition: form.ivaCondition,
-          email: form.email.trim() || null,
-          notes: form.notes.trim() || null,
-        });
+        await data.createCustomer(payload);
         toast.success('Cliente creado');
       }
       setModalOpen(false);
@@ -309,9 +400,13 @@ export default function Customers() {
         open={modalOpen}
         onClose={() => setModalOpen(false)}
         title={form.id ? 'Editar cliente' : 'Nuevo cliente'}
-        widthClass="max-w-lg"
+        widthClass="max-w-2xl"
       >
         <form onSubmit={handleSubmit} className="space-y-3">
+          {/* Panel de historial de compras: solo en edit (necesita customerId). */}
+          {form.id && (
+            <CustomerSalesPanel customerId={form.id} businessMode={businessMode} />
+          )}
           {form.id && <CustomerCreditPanel customerId={form.id} />}
           <div className="grid gap-3 md:grid-cols-2">
             <Field label="Tipo de documento">
@@ -327,7 +422,11 @@ export default function Customers() {
                 ))}
               </select>
             </Field>
-            <Field label="Número" hint={form.docType === 80 || form.docType === 86 ? '11 dígitos' : '7-8 dígitos'}>
+            <Field
+              label="Número"
+              hint={form.docType === 80 || form.docType === 86 ? '11 dígitos' : '7-8 dígitos'}
+              required={requiredFields.docNumber}
+            >
               <Input
                 value={form.docNumber}
                 onChange={(e) => update('docNumber', e.target.value.replace(/\D/g, ''))}
@@ -354,14 +453,14 @@ export default function Customers() {
               </Button>
             </div>
           )}
-          <Field label="Razón social / Nombre">
+          <Field label="Razón social / Nombre" required>
             <Input
               value={form.legalName}
               onChange={(e) => update('legalName', e.target.value)}
               autoFocus
             />
           </Field>
-          <Field label="Condición frente al IVA">
+          <Field label="Condición frente al IVA" required={requiredFields.ivaCondition}>
             <select
               className="h-10 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm"
               value={form.ivaCondition}
@@ -375,20 +474,73 @@ export default function Customers() {
             </select>
           </Field>
           <div className="grid gap-3 md:grid-cols-2">
-            <Field label="Email (opcional)">
+            <Field label="Email" required={requiredFields.email}>
               <Input
                 type="email"
                 value={form.email}
                 onChange={(e) => update('email', e.target.value)}
               />
             </Field>
-            <Field label="Notas (opcional)">
+            <Field label="Teléfono" required={requiredFields.phone}>
               <Input
-                value={form.notes}
-                onChange={(e) => update('notes', e.target.value)}
+                type="tel"
+                value={form.phone}
+                onChange={(e) => update('phone', e.target.value)}
+                placeholder="Ej: +54 11 1234-5678"
               />
             </Field>
           </div>
+          <div className="grid gap-3 md:grid-cols-2">
+            <Field label="Domicilio" required={requiredFields.address}>
+              <Input
+                value={form.address}
+                onChange={(e) => update('address', e.target.value)}
+                placeholder="Calle y número"
+              />
+            </Field>
+            <Field label="Fecha de nacimiento" required={requiredFields.birthdate}>
+              <Input
+                type="date"
+                value={form.birthdate}
+                onChange={(e) => update('birthdate', e.target.value)}
+              />
+            </Field>
+          </div>
+          <div className="grid gap-3 md:grid-cols-2">
+            <Field label="Ciudad">
+              <Input
+                value={form.city}
+                onChange={(e) => update('city', e.target.value)}
+              />
+            </Field>
+            <Field label="Provincia">
+              <Input
+                value={form.stateProvince}
+                onChange={(e) => update('stateProvince', e.target.value)}
+              />
+            </Field>
+          </div>
+          <Field label="Notas (opcional)">
+            <Input
+              value={form.notes}
+              onChange={(e) => update('notes', e.target.value)}
+            />
+          </Field>
+
+          <label className="flex items-start gap-2 rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm">
+            <input
+              type="checkbox"
+              checked={form.marketingOptIn}
+              onChange={(e) => update('marketingOptIn', e.target.checked)}
+              className="mt-0.5 h-4 w-4"
+            />
+            <span>
+              <strong>Acepta recibir comunicaciones de marketing</strong>
+              <span className="block text-xs text-slate-500">
+                Tildalo solo si el cliente te dio consentimiento explícito (Ley 25.326).
+              </span>
+            </span>
+          </label>
 
           <div className="flex justify-end gap-2 pt-2">
             <Button type="button" variant="outline" onClick={() => setModalOpen(false)}>
@@ -407,15 +559,21 @@ export default function Customers() {
 function Field({
   label,
   hint,
+  required,
   children,
 }: {
   label: string;
   hint?: string;
+  /** Si true, muestra asterisco rojo al lado del label (campo obligatorio). */
+  required?: boolean;
   children: React.ReactNode;
 }) {
   return (
     <label className="block">
-      <div className="mb-1 text-xs font-medium text-slate-700">{label}</div>
+      <div className="mb-1 text-xs font-medium text-slate-700">
+        {label}
+        {required && <span className="ml-0.5 text-red-600" aria-label="obligatorio">*</span>}
+      </div>
       {children}
       {hint && <div className="mt-1 text-[11px] text-slate-500">{hint}</div>}
     </label>
