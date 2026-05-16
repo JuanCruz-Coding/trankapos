@@ -1,0 +1,42 @@
+/*
+ * Estilos @media print para la página Etiquetas.
+ *
+ * Coexiste con el bloque de impresión del ticket en src/index.css. Aquel
+ * bloque oculta TODO el body y solo muestra #receipt-print. Acá hacemos lo
+ * mismo pero para #labels-print: cuando se imprime desde la pantalla de
+ * etiquetas, solo sale el sheet de etiquetas — nada del chrome de la app.
+ *
+ * Importante: en la página Labels NO existe #receipt-print, así que las reglas
+ * del ticket no afectan. Y en POS/ventas NO existe #labels-print, así que estas
+ * reglas no afectan tampoco.
+ */
+
+@media print {
+  /* Cancelamos la regla `body * { visibility: hidden }` de index.css para los
+     descendientes de #labels-print. Suficiente con setear visibility: visible
+     en el subárbol; el resto del body queda hidden como ya estaba. */
+  #labels-print,
+  #labels-print * {
+    visibility: visible !important;
+  }
+
+  #labels-print {
+    position: fixed !important;
+    left: 0 !important;
+    top: 0 !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    background: white !important;
+    color: black !important;
+    z-index: 9999 !important;
+  }
+
+  html,
+  body {
+    background: white !important;
+  }
+}
+
+/* El @page con size y margin lo inyectamos dinámicamente desde Labels.tsx
+   solo cuando se dispara la impresión, así no pisamos el @page del ticket
+   (src/index.css, `size: 80mm auto`) que sigue cargado en otras pages. */

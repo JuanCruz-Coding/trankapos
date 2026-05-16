@@ -9,6 +9,7 @@ import Login from '@/pages/Login';
 import Signup from '@/pages/Signup';
 import Pos from '@/pages/Pos';
 import Products from '@/pages/Products';
+import Labels from '@/pages/Labels';
 import Branches from '@/pages/Branches';
 import Warehouses from '@/pages/Warehouses';
 import Users from '@/pages/Users';
@@ -63,6 +64,14 @@ export function App() {
             }
           />
           <Route path="products" element={<Products />} />
+          <Route
+            path="labels"
+            element={
+              <ProtectedRoute permission="manage_products">
+                <Labels />
+              </ProtectedRoute>
+            }
+          />
           <Route path="stock" element={<Stock />} />
           <Route
             path="transfers"
