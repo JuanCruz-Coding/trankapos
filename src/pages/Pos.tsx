@@ -1013,34 +1013,53 @@ function PaymentModal({ open, onClose, total, mpReady, tenantTaxCondition, busin
   const remaining = Math.max(roundMoney(totalWithSurcharge - paid), 0);
 
   /**
-   * Sprint PMP — cambia el método elegido de un pago. Recalcula el recargo
-   * desde el "amount base" (amount actual - surcharge actual) usando el % del
-   * nuevo medio. Si el nuevo método es un medio base (no config), el recargo
-   * pasa a 0 y amount = base.
+   * Sprint PMP — cambia el método base del pago (efectivo, débito, crédito, etc).
+   * Si la base cambia y el config asignado no pertenece a la nueva base, se
+   * limpia el config + surcharge. El amount queda en su valor base.
    */
-  function setRowMethod(i: number, value: string) {
+  function setRowBase(i: number, value: PaymentMethod) {
     setPayments((ps) =>
       ps.map((p, idx) => {
         if (idx !== i) return p;
         const baseAmount = roundMoney(p.amount - (p.surchargeAmount || 0));
-        // El value puede ser "cfg:<uuid>" (medio configurado) o un PaymentMethod base.
-        if (value.startsWith('cfg:')) {
-          const cfgId = value.slice(4);
-          const cfg = methodConfigs.find((m) => m.id === cfgId);
-          if (!cfg) return p;
-          const newSurcharge = calcSurcharge(baseAmount, cfg.surchargePct);
-          return {
-            method: cfg.paymentMethodBase,
-            amount: roundMoney(baseAmount + newSurcharge),
-            surchargeAmount: newSurcharge,
-            methodConfigId: cfg.id,
-          };
+        // Si el config actual coincide con la nueva base, lo mantenemos.
+        const currentCfg = p.methodConfigId
+          ? methodConfigs.find((m) => m.id === p.methodConfigId)
+          : null;
+        if (currentCfg && currentCfg.paymentMethodBase === value) {
+          return { ...p, method: value };
         }
         return {
-          method: value as PaymentMethod,
+          method: value,
           amount: baseAmount,
           surchargeAmount: 0,
           methodConfigId: null,
+        };
+      }),
+    );
+  }
+
+  /**
+   * Sprint PMP — asigna o limpia un plan/terminal (PaymentMethodConfig) sobre
+   * el método base actual. Si `cfgId` es null, vuelve al precio sin recargo.
+   * Si es un id válido y la base coincide, aplica el recargo del config.
+   */
+  function setRowConfig(i: number, cfgId: string | null) {
+    setPayments((ps) =>
+      ps.map((p, idx) => {
+        if (idx !== i) return p;
+        const baseAmount = roundMoney(p.amount - (p.surchargeAmount || 0));
+        if (cfgId == null) {
+          return { ...p, amount: baseAmount, surchargeAmount: 0, methodConfigId: null };
+        }
+        const cfg = methodConfigs.find((m) => m.id === cfgId);
+        if (!cfg || cfg.paymentMethodBase !== p.method) return p;
+        const newSurcharge = calcSurcharge(baseAmount, cfg.surchargePct);
+        return {
+          ...p,
+          amount: roundMoney(baseAmount + newSurcharge),
+          surchargeAmount: newSurcharge,
+          methodConfigId: cfg.id,
         };
       }),
     );
@@ -1261,48 +1280,36 @@ function PaymentModal({ open, onClose, total, mpReady, tenantTaxCondition, busin
           const cfg = p.methodConfigId
             ? methodConfigs.find((m) => m.id === p.methodConfigId)
             : null;
-          // Valor del select: 'cfg:<id>' si hay config, sino el método base.
-          const selectValue = cfg ? `cfg:${cfg.id}` : p.method;
+          // Sprint PMP — configs disponibles para la base elegida. Si hay al
+          // menos uno, mostramos el segundo dropdown "Plan / Terminal".
+          const configsForBase = methodConfigs.filter(
+            (m) => m.paymentMethodBase === p.method,
+          );
+          // Cuota: si el config tiene installments > 1, mostramos N×$Y c/u.
+          const installments = cfg?.installments ?? null;
+          const perInstallment =
+            installments && installments > 1
+              ? roundMoney(p.amount / installments)
+              : null;
           return (
-            <div key={i}>
+            <div key={i} className="space-y-1.5">
               <div className="flex items-center gap-2">
                 <select
                   className="h-10 flex-1 rounded-lg border border-slate-300 bg-white px-2 text-sm"
-                  value={selectValue}
-                  onChange={(e) => setRowMethod(i, e.target.value)}
+                  value={p.method}
+                  onChange={(e) => setRowBase(i, e.target.value as PaymentMethod)}
                 >
-                  {/* Sprint PMP — medios configurados arriba (con badge del recargo). */}
-                  {methodConfigs.length > 0 && (
-                    <optgroup label="Configurados">
-                      {methodConfigs.map((m) => {
-                        const tag =
-                          m.surchargePct === 0
-                            ? ''
-                            : m.surchargePct > 0
-                              ? `  (+${m.surchargePct}%)`
-                              : `  (${m.surchargePct}%)`;
-                        return (
-                          <option key={m.id} value={`cfg:${m.id}`}>
-                            {m.label}
-                            {tag}
-                          </option>
-                        );
-                      })}
-                    </optgroup>
-                  )}
-                  <optgroup label="Métodos base">
-                    {PAYMENT_METHODS.filter((m) => {
-                      // on_account solo si la feature está habilitada Y hay cliente identificado.
-                      if (m.value === 'on_account') {
-                        return creditSalesEnabled && Boolean(receiver?.customerId);
-                      }
-                      return true;
-                    }).map((m) => (
-                      <option key={m.value} value={m.value}>
-                        {m.label}
-                      </option>
-                    ))}
-                  </optgroup>
+                  {PAYMENT_METHODS.filter((m) => {
+                    // on_account solo si la feature está habilitada Y hay cliente identificado.
+                    if (m.value === 'on_account') {
+                      return creditSalesEnabled && Boolean(receiver?.customerId);
+                    }
+                    return true;
+                  }).map((m) => (
+                    <option key={m.value} value={m.value}>
+                      {m.label}
+                    </option>
+                  ))}
                 </select>
                 <input
                   type="number"
@@ -1321,14 +1328,46 @@ function PaymentModal({ open, onClose, total, mpReady, tenantTaxCondition, busin
                   </button>
                 )}
               </div>
+              {/* Sprint PMP — segundo dropdown: planes/terminales para la base
+                  elegida. Solo aparece si hay configs activas para esa base. */}
+              {configsForBase.length > 0 && (
+                <select
+                  className="h-9 w-full rounded-lg border border-slate-200 bg-slate-50 px-2 text-xs text-slate-700"
+                  value={cfg?.id ?? ''}
+                  onChange={(e) => setRowConfig(i, e.target.value || null)}
+                >
+                  <option value="">Sin plan (precio normal)</option>
+                  {configsForBase.map((m) => {
+                    const tag =
+                      m.surchargePct === 0
+                        ? ''
+                        : m.surchargePct > 0
+                          ? ` (+${m.surchargePct}%)`
+                          : ` (${m.surchargePct}%)`;
+                    return (
+                      <option key={m.id} value={m.id}>
+                        {m.label}
+                        {tag}
+                      </option>
+                    );
+                  })}
+                </select>
+              )}
+              {/* Sprint PMP — desglose: cuotas + recargo aplicado. */}
+              {perInstallment !== null && (
+                <div className="ml-1 text-[11px] text-slate-600">
+                  {installments} cuotas de <strong>{formatARS(perInstallment)}</strong>{' '}
+                  c/u
+                </div>
+              )}
               {p.surchargeAmount > 0 && (
-                <div className="ml-1 mt-1 text-[11px] text-amber-700">
+                <div className="ml-1 text-[11px] text-amber-700">
                   Recargo aplicado: <strong>{formatARS(p.surchargeAmount)}</strong>
                   {cfg && cfg.surchargePct !== 0 && <span> ({cfg.surchargePct}%)</span>}
                 </div>
               )}
               {p.surchargeAmount < 0 && (
-                <div className="ml-1 mt-1 text-[11px] text-emerald-700">
+                <div className="ml-1 text-[11px] text-emerald-700">
                   Descuento aplicado: <strong>{formatARS(Math.abs(p.surchargeAmount))}</strong>
                   {cfg && cfg.surchargePct !== 0 && <span> ({cfg.surchargePct}%)</span>}
                 </div>
