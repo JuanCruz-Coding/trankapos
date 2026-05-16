@@ -333,8 +333,50 @@ export interface Category {
   id: string;
   tenantId: string;
   name: string;
+  /** Sprint PROD-RETAIL: jerarquía 2 niveles (rubro → sub-rubro). null = rubro raíz. */
+  parentId: string | null;
+  sortOrder: number;
   createdAt: string;
 }
+
+/** Sprint PROD-RETAIL: marca como entidad. Reemplaza el campo text libre. */
+export interface Brand {
+  id: string;
+  tenantId: string;
+  name: string;
+  active: boolean;
+  sortOrder: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** Unidad de medida del producto. */
+export type UnitOfMeasure =
+  | 'unit'
+  | 'kg'
+  | 'g'
+  | 'l'
+  | 'ml'
+  | 'm'
+  | 'm2'
+  | 'cm'
+  | 'pair'
+  | 'box'
+  | 'dozen';
+
+export const UNITS_OF_MEASURE: { value: UnitOfMeasure; label: string }[] = [
+  { value: 'unit', label: 'Unidad' },
+  { value: 'kg', label: 'Kilogramo' },
+  { value: 'g', label: 'Gramo' },
+  { value: 'l', label: 'Litro' },
+  { value: 'ml', label: 'Mililitro' },
+  { value: 'm', label: 'Metro' },
+  { value: 'm2', label: 'Metro²' },
+  { value: 'cm', label: 'Centímetro' },
+  { value: 'pair', label: 'Par' },
+  { value: 'box', label: 'Caja' },
+  { value: 'dozen', label: 'Docena' },
+];
 
 export interface Product {
   id: string;
@@ -345,12 +387,22 @@ export interface Product {
   price: number;
   cost: number;
   categoryId: string | null;
-  /** Sprint PROMO: marca libre. Usado como scope_value en promos de scope='brand'. */
-  brand: string | null;
+  /** Sprint PROD-RETAIL: FK a brands. Reemplaza el text libre original. */
+  brandId: string | null;
   taxRate: number;
   trackStock: boolean;
   allowSaleWhenZero: boolean;
   active: boolean;
+  /** Sprint PROD-RETAIL: descripción larga (sirve para tickets y catálogo). */
+  description: string | null;
+  /** Sprint PROD-RETAIL: unidad de medida. Default 'unit'. */
+  unitOfMeasure: UnitOfMeasure;
+  /** Sprint PROD-RETAIL: etiquetas libres multi-valor. Filtros + promos por tag. */
+  tags: string[];
+  /** Sprint PROD-RETAIL: URL de la imagen principal (Storage). */
+  imageUrl: string | null;
+  /** Sprint PROD-RETAIL: temporada / colección (texto libre, ej "Verano 2026"). */
+  season: string | null;
   createdAt: string;
   /** Variantes del producto. Siempre hay al menos 1 (la default, migration 030). */
   variants?: ProductVariant[];

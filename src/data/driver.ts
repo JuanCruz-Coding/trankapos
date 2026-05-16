@@ -2,6 +2,7 @@ import type {
   AuthSession,
   BranchAccess,
   Branch,
+  Brand,
   BusinessMode,
   BusinessSubtype,
   CashMovement,
@@ -35,6 +36,7 @@ import type {
   Tenant,
   TenantSettingsInput,
   Transfer,
+  UnitOfMeasure,
   User,
   Warehouse,
 } from '@/types';
@@ -62,11 +64,25 @@ export interface ProductInput {
   price: number;
   cost: number;
   categoryId: string | null;
+  /** Sprint PROD-RETAIL: FK a brands. null si no aplica. */
+  brandId?: string | null;
   taxRate: number;
   trackStock: boolean;
   allowSaleWhenZero: boolean;
   active: boolean;
+  /** Sprint PROD-RETAIL: campos extra. Si se omite, no se modifica. */
+  description?: string | null;
+  unitOfMeasure?: UnitOfMeasure;
+  tags?: string[];
+  imageUrl?: string | null;
+  season?: string | null;
   initialStock?: { warehouseId: string; qty: number; minQty: number }[];
+}
+
+export interface BrandInput {
+  name: string;
+  active?: boolean;
+  sortOrder?: number;
 }
 
 export interface UserInput {
@@ -101,6 +117,9 @@ export interface WarehouseInput {
 
 export interface CategoryInput {
   name: string;
+  /** Sprint PROD-RETAIL: padre para sub-rubros. null = rubro raíz. Max 2 niveles. */
+  parentId?: string | null;
+  sortOrder?: number;
 }
 
 export interface SaleInput {
@@ -230,10 +249,14 @@ export interface PromoCartLine {
   variantId: string | null;
   qty: number;
   unitPrice: number;
-  /** Categoría del producto (para promos scope='category'). */
+  /**
+   * Categoría del producto (para promos scope='category'). Si la categoría
+   * tiene parentId, el engine considera que también pertenece al padre — la
+   * promo en el rubro padre aplica a productos de sus sub-rubros.
+   */
   categoryId: string | null;
-  /** Marca del producto (para promos scope='brand'). */
-  brand: string | null;
+  /** Sprint PROD-RETAIL: ID de la marca (para promos scope='brand'). */
+  brandId: string | null;
 }
 
 export interface ApplyPromotionsInput {
@@ -587,6 +610,7 @@ export interface DataDriver {
   // --- categories ---
   listCategories(): Promise<Category[]>;
   createCategory(input: CategoryInput): Promise<Category>;
+  updateCategory(id: string, input: Partial<CategoryInput>): Promise<Category>;
   deleteCategory(id: string): Promise<void>;
 
   // --- products ---
@@ -689,6 +713,12 @@ export interface DataDriver {
     input: Partial<PaymentMethodConfigInput>,
   ): Promise<PaymentMethodConfig>;
   deactivatePaymentMethod(id: string): Promise<void>;
+
+  // --- Sprint PROD-RETAIL: marcas ---
+  listBrands(opts?: { activeOnly?: boolean }): Promise<Brand[]>;
+  createBrand(input: BrandInput): Promise<Brand>;
+  updateBrand(id: string, input: Partial<BrandInput>): Promise<Brand>;
+  deactivateBrand(id: string): Promise<void>;
 
   // --- Sprint PROMO: customer groups + promociones ---
   listCustomerGroups(opts?: { activeOnly?: boolean }): Promise<CustomerGroup[]>;

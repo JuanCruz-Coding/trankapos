@@ -140,9 +140,9 @@ export async function seedIfEmpty(): Promise<void> {
   const catSnacks = uuid();
   const catLimpieza = uuid();
   const categories: Category[] = [
-    { id: catBebidas, tenantId, name: 'Bebidas', createdAt: ts },
-    { id: catSnacks, tenantId, name: 'Snacks', createdAt: ts },
-    { id: catLimpieza, tenantId, name: 'Limpieza', createdAt: ts },
+    { id: catBebidas, tenantId, name: 'Bebidas', parentId: null, sortOrder: 0, createdAt: ts },
+    { id: catSnacks, tenantId, name: 'Snacks', parentId: null, sortOrder: 1, createdAt: ts },
+    { id: catLimpieza, tenantId, name: 'Limpieza', parentId: null, sortOrder: 2, createdAt: ts },
   ];
 
   const sampleProducts = [
@@ -168,7 +168,12 @@ export async function seedIfEmpty(): Promise<void> {
     cost: p.cost,
     categoryId: p.categoryId,
     taxRate: 21,
-    brand: null,
+    brandId: null,
+    description: null,
+    unitOfMeasure: 'unit' as const,
+    tags: [],
+    imageUrl: null,
+    season: null,
     trackStock: true,
     allowSaleWhenZero: false,
     active: true,

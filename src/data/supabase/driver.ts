@@ -5,6 +5,7 @@ import type {
   AuthSession,
   Branch,
   BranchAccess,
+  Brand,
   BusinessMode,
   CashMovement,
   CashRegister,
@@ -48,6 +49,7 @@ import type {
   AfipDocumentSummary,
   AfipDocumentsQuery,
   BranchInput,
+  BrandInput,
   CashMovementInput,
   AfipPadronResult,
   ApplyPromotionsInput,
@@ -208,17 +210,57 @@ function mapWarehouse(r: WarehouseRow): Warehouse {
   };
 }
 
-interface CategoryRow { id: string; tenant_id: string; name: string; created_at: string; }
+interface CategoryRow {
+  id: string;
+  tenant_id: string;
+  name: string;
+  parent_id: string | null;
+  sort_order: number | null;
+  created_at: string;
+}
 function mapCategory(r: CategoryRow): Category {
-  return { id: r.id, tenantId: r.tenant_id, name: r.name, createdAt: r.created_at };
+  return {
+    id: r.id,
+    tenantId: r.tenant_id,
+    name: r.name,
+    parentId: r.parent_id ?? null,
+    sortOrder: r.sort_order ?? 0,
+    createdAt: r.created_at,
+  };
+}
+
+interface BrandRow {
+  id: string;
+  tenant_id: string;
+  name: string;
+  active: boolean;
+  sort_order: number | null;
+  created_at: string;
+  updated_at: string;
+}
+function mapBrand(r: BrandRow): Brand {
+  return {
+    id: r.id,
+    tenantId: r.tenant_id,
+    name: r.name,
+    active: r.active,
+    sortOrder: r.sort_order ?? 0,
+    createdAt: r.created_at,
+    updatedAt: r.updated_at,
+  };
 }
 
 interface ProductRow {
   id: string; tenant_id: string; name: string; barcode: string | null;
   sku: string | null;
   price: string; cost: string; category_id: string | null; tax_rate: string;
-  /** Sprint PROMO: marca libre. Migration 044 agrega la columna. */
-  brand: string | null;
+  /** Sprint PROD-RETAIL: FK a brands. Reemplaza el text libre. */
+  brand_id: string | null;
+  description: string | null;
+  unit_of_measure: string | null;
+  tags: string[] | null;
+  image_url: string | null;
+  season: string | null;
   track_stock: boolean; allow_sale_when_zero: boolean;
   active: boolean; created_at: string;
 }
@@ -228,10 +270,15 @@ function mapProduct(r: ProductRow): Product {
     sku: r.sku ?? null,
     price: Number(r.price), cost: Number(r.cost),
     categoryId: r.category_id, taxRate: Number(r.tax_rate),
-    brand: r.brand ?? null,
+    brandId: r.brand_id ?? null,
     trackStock: r.track_stock ?? true,
     allowSaleWhenZero: r.allow_sale_when_zero ?? false,
     active: r.active, createdAt: r.created_at,
+    description: r.description ?? null,
+    unitOfMeasure: (r.unit_of_measure as Product['unitOfMeasure']) ?? 'unit',
+    tags: r.tags ?? [],
+    imageUrl: r.image_url ?? null,
+    season: r.season ?? null,
   };
 }
 
@@ -1224,7 +1271,11 @@ class SupabaseDriver implements DataDriver {
 
   async listCategories(): Promise<Category[]> {
     await this.requireSession();
-    const { data, error } = await this.sb.from('categories').select('*').order('name');
+    const { data, error } = await this.sb
+      .from('categories')
+      .select('*')
+      .order('sort_order', { ascending: true })
+      .order('name', { ascending: true });
     if (error) throw new Error(error.message);
     return (data ?? []).map(mapCategory);
   }
@@ -1233,7 +1284,28 @@ class SupabaseDriver implements DataDriver {
     const s = await this.requireSession();
     const { data, error } = await this.sb
       .from('categories')
-      .insert({ tenant_id: s.tenantId, name: input.name })
+      .insert({
+        tenant_id: s.tenantId,
+        name: input.name,
+        parent_id: input.parentId ?? null,
+        sort_order: input.sortOrder ?? 0,
+      })
+      .select()
+      .single();
+    if (error) throw new Error(error.message);
+    return mapCategory(data);
+  }
+
+  async updateCategory(id: string, input: Partial<CategoryInput>): Promise<Category> {
+    await this.requireSession();
+    const patch: Record<string, unknown> = {};
+    if (input.name !== undefined) patch.name = input.name;
+    if (input.parentId !== undefined) patch.parent_id = input.parentId;
+    if (input.sortOrder !== undefined) patch.sort_order = input.sortOrder;
+    const { data, error } = await this.sb
+      .from('categories')
+      .update(patch)
+      .eq('id', id)
       .select()
       .single();
     if (error) throw new Error(error.message);
@@ -1290,9 +1362,6 @@ class SupabaseDriver implements DataDriver {
 
   async createProduct(input: ProductInput): Promise<Product> {
     const s = await this.requireSession();
-    // Sprint PROMO: `brand` se acepta como campo opcional aunque ProductInput
-    // todavía no lo declare en la interfaz (lo agregamos cuando la UI lo use).
-    const brand = (input as ProductInput & { brand?: string | null }).brand ?? null;
     const { data, error } = await this.sb
       .from('products')
       .insert({
@@ -1304,10 +1373,15 @@ class SupabaseDriver implements DataDriver {
         cost: input.cost,
         category_id: input.categoryId,
         tax_rate: input.taxRate,
-        brand,
+        brand_id: input.brandId ?? null,
         track_stock: input.trackStock,
         allow_sale_when_zero: input.allowSaleWhenZero,
         active: input.active,
+        description: input.description ?? null,
+        unit_of_measure: input.unitOfMeasure ?? 'unit',
+        tags: input.tags ?? [],
+        image_url: input.imageUrl ?? null,
+        season: input.season ?? null,
       })
       .select()
       .single();
@@ -1358,9 +1432,12 @@ class SupabaseDriver implements DataDriver {
     if (input.trackStock !== undefined) patch.track_stock = input.trackStock;
     if (input.allowSaleWhenZero !== undefined) patch.allow_sale_when_zero = input.allowSaleWhenZero;
     if (input.active !== undefined) patch.active = input.active;
-    // Sprint PROMO: brand opcional (no está en la interface pero la columna existe).
-    const brandPatch = (input as Partial<ProductInput> & { brand?: string | null }).brand;
-    if (brandPatch !== undefined) patch.brand = brandPatch;
+    if (input.brandId !== undefined) patch.brand_id = input.brandId;
+    if (input.description !== undefined) patch.description = input.description;
+    if (input.unitOfMeasure !== undefined) patch.unit_of_measure = input.unitOfMeasure;
+    if (input.tags !== undefined) patch.tags = input.tags;
+    if (input.imageUrl !== undefined) patch.image_url = input.imageUrl;
+    if (input.season !== undefined) patch.season = input.season;
 
     const { data, error } = await this.sb
       .from('products')
@@ -2912,6 +2989,57 @@ class SupabaseDriver implements DataDriver {
   }
 
   // ---------------------------------------------------------------------
+  // Sprint PROD-RETAIL: marcas
+  // ---------------------------------------------------------------------
+
+  async listBrands(opts?: { activeOnly?: boolean }): Promise<Brand[]> {
+    await this.requireSession();
+    let q = this.sb.from('brands').select('*').order('sort_order', { ascending: true }).order('name', { ascending: true });
+    if (opts?.activeOnly) q = q.eq('active', true);
+    const { data, error } = await q;
+    if (error) throw new Error(error.message);
+    return (data ?? []).map((r) => mapBrand(r as BrandRow));
+  }
+
+  async createBrand(input: BrandInput): Promise<Brand> {
+    const s = await this.requireSession();
+    const { data, error } = await this.sb
+      .from('brands')
+      .insert({
+        tenant_id: s.tenantId,
+        name: input.name.trim(),
+        active: input.active ?? true,
+        sort_order: input.sortOrder ?? 0,
+      })
+      .select()
+      .single();
+    if (error) throw new Error(error.message);
+    return mapBrand(data as BrandRow);
+  }
+
+  async updateBrand(id: string, input: Partial<BrandInput>): Promise<Brand> {
+    await this.requireSession();
+    const patch: Record<string, unknown> = {};
+    if (input.name !== undefined) patch.name = input.name.trim();
+    if (input.active !== undefined) patch.active = input.active;
+    if (input.sortOrder !== undefined) patch.sort_order = input.sortOrder;
+    const { data, error } = await this.sb
+      .from('brands')
+      .update(patch)
+      .eq('id', id)
+      .select()
+      .single();
+    if (error) throw new Error(error.message);
+    return mapBrand(data as BrandRow);
+  }
+
+  async deactivateBrand(id: string): Promise<void> {
+    await this.requireSession();
+    const { error } = await this.sb.from('brands').update({ active: false }).eq('id', id);
+    if (error) throw new Error(error.message);
+  }
+
+  // ---------------------------------------------------------------------
   // Sprint PROMO: customer groups + promociones
   // ---------------------------------------------------------------------
 
@@ -3126,6 +3254,16 @@ class SupabaseDriver implements DataDriver {
       return { totalDiscount: 0, applied: [] };
     }
 
+    // Sprint PROD-RETAIL: cargar parents de categorías para herencia
+    // (promo en rubro padre aplica a productos de sub-rubros).
+    const { data: catsRaw } = await this.sb
+      .from('categories')
+      .select('id, parent_id');
+    const parentOf = new Map<string, string | null>();
+    for (const c of (catsRaw ?? []) as Array<{ id: string; parent_id: string | null }>) {
+      parentOf.set(c.id, c.parent_id);
+    }
+
     // Helper: descuento que generaría esta promo sobre una line.
     function discountFor(p: Promotion, line: PromoCartLine): number {
       if (p.promoType === 'percent_off') {
@@ -3150,10 +3288,16 @@ class SupabaseDriver implements DataDriver {
           return true;
         case 'product':
           return p.scopeValue === line.productId;
-        case 'category':
-          return p.scopeValue != null && p.scopeValue === line.categoryId;
+        case 'category': {
+          // Match directo o herencia: si la categoría del producto tiene un
+          // padre y la promo está en ese padre, también aplica.
+          if (p.scopeValue == null || line.categoryId == null) return false;
+          if (p.scopeValue === line.categoryId) return true;
+          const parent = parentOf.get(line.categoryId) ?? null;
+          return parent != null && p.scopeValue === parent;
+        }
         case 'brand':
-          return p.scopeValue != null && p.scopeValue === line.brand;
+          return p.scopeValue != null && p.scopeValue === line.brandId;
         default:
           return false;
       }

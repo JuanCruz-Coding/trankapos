@@ -4,6 +4,7 @@ import type {
   AuthSession,
   Branch,
   BranchAccess,
+  Brand,
   BusinessMode,
   CashMovement,
   CashRegister,
@@ -39,6 +40,7 @@ import type {
   AfipDocumentSummary,
   AfipDocumentsQuery,
   BranchInput,
+  BrandInput,
   CashMovementInput,
   CategoryInput,
   CloseRegisterInput,
@@ -643,9 +645,30 @@ export class LocalDriver implements DataDriver {
 
   async createCategory(input: CategoryInput): Promise<Category> {
     const s = await this.requireSession();
-    const cat: Category = { id: uuid(), tenantId: s.tenantId, name: input.name, createdAt: now() };
+    const cat: Category = {
+      id: uuid(),
+      tenantId: s.tenantId,
+      name: input.name,
+      parentId: input.parentId ?? null,
+      sortOrder: input.sortOrder ?? 0,
+      createdAt: now(),
+    };
     await db.categories.put(cat);
     return cat;
+  }
+
+  async updateCategory(id: string, input: Partial<CategoryInput>): Promise<Category> {
+    const s = await this.requireSession();
+    const existing = await db.categories.get(id);
+    if (!existing || existing.tenantId !== s.tenantId) throw new Error('Categoría no encontrada');
+    const updated: Category = {
+      ...existing,
+      name: input.name ?? existing.name,
+      parentId: input.parentId !== undefined ? input.parentId : existing.parentId,
+      sortOrder: input.sortOrder !== undefined ? input.sortOrder : existing.sortOrder,
+    };
+    await db.categories.put(updated);
+    return updated;
   }
 
   async deleteCategory(id: string): Promise<void> {
@@ -704,8 +727,13 @@ export class LocalDriver implements DataDriver {
       cost: input.cost,
       categoryId: input.categoryId,
       taxRate: input.taxRate,
-      // Sprint PROMO: feature requiere modo online. En local siempre null.
-      brand: null,
+      // Sprint PROD-RETAIL: feature retail (brand, tags, etc) requiere modo online.
+      brandId: null,
+      description: null,
+      unitOfMeasure: 'unit',
+      tags: [],
+      imageUrl: null,
+      season: null,
       trackStock: input.trackStock,
       allowSaleWhenZero: input.allowSaleWhenZero,
       active: input.active,
@@ -1502,6 +1530,24 @@ export class LocalDriver implements DataDriver {
   async deactivatePaymentMethod(_id: string): Promise<void> {
     await this.requireSession();
     throw new Error('Los medios de pago configurables requieren modo online.');
+  }
+
+  // --- Sprint PROD-RETAIL: marcas (stubs offline) ---
+  async listBrands(_opts?: { activeOnly?: boolean }): Promise<Brand[]> {
+    await this.requireSession();
+    return [];
+  }
+  async createBrand(_input: BrandInput): Promise<Brand> {
+    await this.requireSession();
+    throw new Error('Marcas requieren modo online.');
+  }
+  async updateBrand(_id: string, _input: Partial<BrandInput>): Promise<Brand> {
+    await this.requireSession();
+    throw new Error('Marcas requieren modo online.');
+  }
+  async deactivateBrand(_id: string): Promise<void> {
+    await this.requireSession();
+    throw new Error('Marcas requieren modo online.');
   }
 
   // --- Sprint PROMO: customer groups + promociones (stubs offline) ---

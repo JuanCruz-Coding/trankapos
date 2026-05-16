@@ -9,6 +9,7 @@ import { data } from '@/data';
 import { toast } from '@/stores/toast';
 import { confirmDialog } from '@/lib/dialog';
 import type {
+  Brand,
   Category,
   CustomerGroup,
   Product,
@@ -83,6 +84,7 @@ function describeScope(
   p: Promotion,
   productById: Map<string, Product>,
   categoryById: Map<string, Category>,
+  brandById: Map<string, Brand>,
 ): string {
   if (p.scopeType === 'all') return 'Todo el catálogo';
   if (p.scopeType === 'product') {
@@ -93,7 +95,8 @@ function describeScope(
     const cat = p.scopeValue ? categoryById.get(p.scopeValue) : null;
     return cat ? `Categoría: ${cat.name}` : 'Categoría eliminada';
   }
-  return `Marca: ${p.scopeValue ?? ''}`;
+  const brand = p.scopeValue ? brandById.get(p.scopeValue) : null;
+  return brand ? `Marca: ${brand.name}` : 'Marca eliminada';
 }
 
 export default function Promotions() {
@@ -101,6 +104,7 @@ export default function Promotions() {
   const [groups, setGroups] = useState<CustomerGroup[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
+  const [brands, setBrands] = useState<Brand[]>([]);
   const [loading, setLoading] = useState(true);
 
   const [open, setOpen] = useState(false);
@@ -122,29 +126,27 @@ export default function Promotions() {
     groups.forEach((g) => m.set(g.id, g));
     return m;
   }, [groups]);
-
-  // Marcas distintas que ya existen en productos, sugerencias para scope='brand'.
-  const existingBrands = useMemo(() => {
-    const set = new Set<string>();
-    products.forEach((p) => {
-      if (p.brand && p.brand.trim()) set.add(p.brand.trim());
-    });
-    return Array.from(set).sort();
-  }, [products]);
+  const brandById = useMemo(() => {
+    const m = new Map<string, Brand>();
+    brands.forEach((b) => m.set(b.id, b));
+    return m;
+  }, [brands]);
 
   async function load() {
     setLoading(true);
     try {
-      const [ps, gs, prods, cats] = await Promise.all([
+      const [ps, gs, prods, cats, bs] = await Promise.all([
         data.listPromotions({ activeOnly: false }),
         data.listCustomerGroups({ activeOnly: true }),
         data.listProducts(),
         data.listCategories(),
+        data.listBrands({ activeOnly: true }),
       ]);
       setPromos(ps);
       setGroups(gs);
       setProducts(prods);
       setCategories(cats);
+      setBrands(bs);
     } catch (err) {
       toast.error((err as Error).message);
     } finally {
@@ -295,7 +297,7 @@ export default function Promotions() {
                       </span>
                     </td>
                     <td className="px-4 py-3 text-slate-700">
-                      {describeScope(p, productById, categoryById)}
+                      {describeScope(p, productById, categoryById, brandById)}
                     </td>
                     <td className="px-4 py-3 text-slate-700">
                       {group ? group.name : <span className="text-slate-400">Todos</span>}
@@ -493,21 +495,22 @@ export default function Promotions() {
           {form.scopeType === 'brand' && (
             <div>
               <label className="mb-1 block text-sm font-medium text-slate-700">Marca</label>
-              <Input
+              <select
+                className="h-10 w-full rounded-lg border border-slate-300 bg-white px-2 text-sm"
                 value={form.scopeValue}
                 onChange={(e) => setForm((f) => ({ ...f, scopeValue: e.target.value }))}
-                placeholder="Nike, Adidas…"
-                list="brand-suggestions"
-              />
-              <datalist id="brand-suggestions">
-                {existingBrands.map((b) => (
-                  <option key={b} value={b} />
+              >
+                <option value="">Elegir marca…</option>
+                {brands.map((b) => (
+                  <option key={b.id} value={b.id}>
+                    {b.name}
+                  </option>
                 ))}
-              </datalist>
-              {existingBrands.length === 0 && (
+              </select>
+              {brands.length === 0 && (
                 <p className="mt-1 text-xs text-amber-600">
-                  Ningún producto tiene marca cargada todavía. Editá los productos y agregá la
-                  marca para que la promo aplique.
+                  No tenés marcas cargadas. Andá a "Marcas" en el menú lateral y creá la marca
+                  primero (la podés asignar después a los productos en su ficha).
                 </p>
               )}
             </div>
