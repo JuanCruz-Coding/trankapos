@@ -45,6 +45,7 @@ import { ReturnReasonsEditor } from '@/components/settings/ReturnReasonsEditor';
 import { RefundPolicyPanel } from '@/components/settings/RefundPolicyPanel';
 import { BusinessModeSwitch } from '@/components/settings/BusinessModeSwitch';
 import { CustomerRequiredFieldsEditor } from '@/components/settings/CustomerRequiredFieldsEditor';
+import { PaymentMethodsEditor } from '@/components/settings/PaymentMethodsEditor';
 
 type Tab = 'empresa' | 'ticket' | 'pos' | 'stock' | 'pagos' | 'facturacion' | 'devoluciones';
 
@@ -526,6 +527,23 @@ function PagosTab() {
         Próximamente vas a poder elegir <strong>QR / MP</strong> al cobrar y el
         sistema generará un QR dinámico que tu cliente escanea con su app.
       </p>
+
+      {/* Sprint PMP — medios de pago configurables */}
+      <div className="mt-2 rounded-lg border border-slate-200 bg-white p-4">
+        <div className="mb-3 flex items-start gap-3">
+          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-violet-100 text-violet-700">
+            <CreditCard className="h-5 w-5" />
+          </div>
+          <div className="flex-1">
+            <h3 className="font-display text-base font-bold text-navy">Medios de pago</h3>
+            <p className="mt-1 text-sm text-slate-600">
+              Configurá variantes con recargo (ej. "Visa 3 cuotas +8%"). El recargo se
+              suma al total automáticamente al cobrar.
+            </p>
+          </div>
+        </div>
+        <PaymentMethodsEditor />
+      </div>
     </div>
   );
 }

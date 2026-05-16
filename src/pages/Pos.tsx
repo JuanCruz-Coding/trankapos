@@ -28,12 +28,12 @@ import { useAuth } from '@/stores/auth';
 import { useCart, cartTotals } from '@/stores/cart';
 import { confirmDialog } from '@/lib/dialog';
 import { formatARS } from '@/lib/currency';
-import { lineSubtotal, subMoney, applyDiscount, type DiscountMode } from '@/lib/money';
+import { lineSubtotal, roundMoney, applyDiscount, type DiscountMode } from '@/lib/money';
 import { cn } from '@/lib/utils';
 import { buildSaleFromCart, summarizeSale } from '@/lib/sales';
 import { beepError, beepSuccess, primeAudio } from '@/lib/sound';
 import { toast } from '@/stores/toast';
-import { PAYMENT_METHODS, type BusinessMode, type PaymentMethod, type Product, type ProductVariant, type Sale, type SaleReceiver, type TaxCondition, type Tenant } from '@/types';
+import { PAYMENT_METHODS, type BusinessMode, type PaymentMethod, type PaymentMethodConfig, type Product, type ProductVariant, type Sale, type SaleReceiver, type TaxCondition, type Tenant } from '@/types';
 import { QRPaymentModal } from '@/components/ui/QRPaymentModal';
 
 export default function Pos() {
@@ -888,14 +888,44 @@ interface PayProps {
   ) => void;
 }
 
+/**
+ * Sprint PMP: una fila de pago dentro del PaymentModal.
+ *
+ * - `amount` ya incluye el recargo. Es lo que el cajero cobra al cliente.
+ * - `surchargeAmount` es la parte del amount que corresponde al recargo del
+ *   medio configurado. Se manda explícito al backend; el server valida que
+ *   `sum(amount) == subtotal - discount + sum(surchargeAmount)`.
+ * - `methodConfigId` apunta al PaymentMethodConfig (si el cajero eligió uno).
+ *   Cuando es null, el pago va sin recargo (usa el método base).
+ */
+interface PaymentRow {
+  method: PaymentMethod;
+  amount: number;
+  surchargeAmount: number;
+  methodConfigId: string | null;
+}
+
+/**
+ * Calcula el recargo en pesos para un base dado y un % de recargo.
+ * Redondea a centavos para que la suma cuadre con la validación del backend.
+ */
+function calcSurcharge(baseAmount: number, pct: number): number {
+  if (!Number.isFinite(baseAmount) || !Number.isFinite(pct) || pct === 0) return 0;
+  return roundMoney((baseAmount * pct) / 100);
+}
+
 function PaymentModal({ open, onClose, total, mpReady, tenantTaxCondition, businessMode, creditSalesEnabled, variantIdByProduct, receiver, onReceiverChange, receiverModalOpen, onReceiverModalChange, activePriceListName, onCompleted, onPayWithQR }: PayProps) {
   const { session, activeBranchId } = useAuth();
   const { lines, discount } = useCart();
-  const [payments, setPayments] = useState<{ method: PaymentMethod; amount: number }[]>([
-    { method: 'cash', amount: total },
+  const [payments, setPayments] = useState<PaymentRow[]>([
+    { method: 'cash', amount: total, surchargeAmount: 0, methodConfigId: null },
   ]);
   const [partial, setPartial] = useState(false);
   const [loading, setLoading] = useState(false);
+
+  // Sprint PMP — medios configurados (cargados al abrir el modal). Si está
+  // vacío, el select muestra solo los métodos base sin recargo.
+  const [methodConfigs, setMethodConfigs] = useState<PaymentMethodConfig[]>([]);
 
   // Saldo a favor del cliente seleccionado (Sprint DEV). Solo se carga si el
   // receiver tiene customerId (los receptores inline / ad-hoc no tienen fila
@@ -909,7 +939,7 @@ function PaymentModal({ open, onClose, total, mpReady, tenantTaxCondition, busin
 
   useEffect(() => {
     if (open) {
-      setPayments([{ method: 'cash', amount: total }]);
+      setPayments([{ method: 'cash', amount: total, surchargeAmount: 0, methodConfigId: null }]);
       setPartial(false);
       setCustomerCreditBalance(0);
       // Sprint PRC: NO reseteamos el receiver al abrir el modal. El receiver
@@ -917,6 +947,24 @@ function PaymentModal({ open, onClose, total, mpReady, tenantTaxCondition, busin
       // productos. Se limpia desde Pos cuando se concreta la venta.
     }
   }, [open, total]);
+
+  // Sprint PMP — cargar la lista de medios configurados al abrir.
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const list = await data.listPaymentMethods({ activeOnly: true });
+        if (!cancelled) setMethodConfigs(list);
+      } catch {
+        // Silencioso: si falla, caemos al comportamiento original (solo base).
+        if (!cancelled) setMethodConfigs([]);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [open]);
 
   // Refrescar saldo cuando cambia el receiver seleccionado.
   useEffect(() => {
@@ -945,35 +993,98 @@ function PaymentModal({ open, onClose, total, mpReady, tenantTaxCondition, busin
     ? determineCbteLetter(tenantTaxCondition, receiver)
     : null;
 
-  const summary = summarizeSale(lines, discount, payments);
-  const paid = summary.paid;
-  const diff = summary.diff;
-  const exact = summary.exact;
-  // En modo seña, "OK para confirmar" es: paid > 0 y paid <= total.
-  const canConfirmPartial = paid > 0 && paid <= total;
-  const canConfirm = partial ? canConfirmPartial : exact;
-  const remaining = Math.max(total - paid, 0);
+  // Sprint PMP — el total que el cajero cobra incluye los recargos por medio
+  // de pago. summarizeSale calcula el total "limpio" (subtotal-discount) y
+  // valida exact match con paid; nosotros validamos contra totalWithSurcharge.
+  // Mantenemos la llamada para reusar summary.subtotal en el breakdown.
+  const summary = summarizeSale(lines, discount, payments.map((p) => ({ method: p.method, amount: p.amount })));
+  const surchargeTotal = roundMoney(
+    payments.reduce((acc, p) => acc + (p.surchargeAmount || 0), 0),
+  );
+  const totalWithSurcharge = roundMoney(total + surchargeTotal);
 
-  function setRow(i: number, field: 'method' | 'amount', value: string) {
+  // paid en este modal = suma de payments.amount (que ya incluyen recargo).
+  const paid = roundMoney(payments.reduce((acc, p) => acc + (p.amount || 0), 0));
+  const diff = roundMoney(totalWithSurcharge - paid);
+  const exact = Math.abs(diff) < 0.005;
+  // En modo seña, "OK para confirmar" es: paid > 0 y paid <= totalWithSurcharge.
+  const canConfirmPartial = paid > 0 && paid <= totalWithSurcharge + 0.005;
+  const canConfirm = partial ? canConfirmPartial : exact;
+  const remaining = Math.max(roundMoney(totalWithSurcharge - paid), 0);
+
+  /**
+   * Sprint PMP — cambia el método elegido de un pago. Recalcula el recargo
+   * desde el "amount base" (amount actual - surcharge actual) usando el % del
+   * nuevo medio. Si el nuevo método es un medio base (no config), el recargo
+   * pasa a 0 y amount = base.
+   */
+  function setRowMethod(i: number, value: string) {
     setPayments((ps) =>
-      ps.map((p, idx) =>
-        idx === i
-          ? {
-              ...p,
-              [field]: field === 'amount' ? Number(value) || 0 : (value as PaymentMethod),
-            }
-          : p,
-      ),
+      ps.map((p, idx) => {
+        if (idx !== i) return p;
+        const baseAmount = roundMoney(p.amount - (p.surchargeAmount || 0));
+        // El value puede ser "cfg:<uuid>" (medio configurado) o un PaymentMethod base.
+        if (value.startsWith('cfg:')) {
+          const cfgId = value.slice(4);
+          const cfg = methodConfigs.find((m) => m.id === cfgId);
+          if (!cfg) return p;
+          const newSurcharge = calcSurcharge(baseAmount, cfg.surchargePct);
+          return {
+            method: cfg.paymentMethodBase,
+            amount: roundMoney(baseAmount + newSurcharge),
+            surchargeAmount: newSurcharge,
+            methodConfigId: cfg.id,
+          };
+        }
+        return {
+          method: value as PaymentMethod,
+          amount: baseAmount,
+          surchargeAmount: 0,
+          methodConfigId: null,
+        };
+      }),
     );
   }
 
-  // Si todos los pagos son QR + MP conectado + no es seña → redirigimos
-  // al flow de QRPaymentModal en lugar de crear la sale localmente.
+  /**
+   * Sprint PMP — el cajero edita el monto. Interpretamos lo que escribe como
+   * el "amount con recargo" (lo que cobra). Recalculamos el surcharge desde
+   * el config asignado a esa fila (si lo hubiere) para que la suma cuadre.
+   *
+   * Edge case: si el config tiene recargo y el cajero edita el monto, mantenemos
+   * el % del recargo aplicado sobre la nueva base. La base se infiere del amount
+   * editado: base = amount / (1 + pct/100).
+   */
+  function setRowAmount(i: number, value: string) {
+    const newAmount = roundMoney(Number(value) || 0);
+    setPayments((ps) =>
+      ps.map((p, idx) => {
+        if (idx !== i) return p;
+        if (p.methodConfigId == null) {
+          return { ...p, amount: newAmount, surchargeAmount: 0 };
+        }
+        const cfg = methodConfigs.find((m) => m.id === p.methodConfigId);
+        if (!cfg || cfg.surchargePct === 0) {
+          return { ...p, amount: newAmount, surchargeAmount: 0 };
+        }
+        // Invertir: amount = base + base * pct/100 → base = amount / (1 + pct/100).
+        const base = roundMoney(newAmount / (1 + cfg.surchargePct / 100));
+        const surcharge = roundMoney(newAmount - base);
+        return { ...p, amount: newAmount, surchargeAmount: surcharge };
+      }),
+    );
+  }
+
+  // Si todos los pagos son QR base + MP conectado + no es seña + sin recargo →
+  // redirigimos al flow de QRPaymentModal en lugar de crear la sale localmente.
+  // Si hay surcharge, el QR flow server-side no lo soporta — caemos al
+  // createSale local.
   const isFullQR =
     !partial &&
     mpReady &&
+    surchargeTotal === 0 &&
     payments.length > 0 &&
-    payments.every((p) => p.method === 'qr');
+    payments.every((p) => p.method === 'qr' && p.methodConfigId == null);
 
   async function handleConfirm() {
     if (!session || !activeBranchId) return;
@@ -996,12 +1107,21 @@ function PaymentModal({ open, onClose, total, mpReady, tenantTaxCondition, busin
     setLoading(true);
     try {
       const reg = await data.currentOpenRegister(activeBranchId);
+      // buildSaleFromCart valida que sum(payments.amount) == subtotal - discount.
+      // Con recargos, payments.amount incluye surcharge → la validación falla.
+      // Truco: pasamos los "base amounts" (sin surcharge) para que la validación
+      // pase, y después re-inyectamos surchargeAmount + methodConfigId + amount
+      // real antes de mandar al backend.
+      const paymentsBase = payments.map((p) => ({
+        method: p.method,
+        amount: roundMoney(p.amount - (p.surchargeAmount || 0)),
+      }));
       const saleInput = buildSaleFromCart({
         branchId: activeBranchId,
         registerId: reg?.id ?? null,
         lines,
         globalDiscount: discount,
-        payments,
+        payments: paymentsBase,
         partial,
         receiver,
       });
@@ -1010,6 +1130,14 @@ function PaymentModal({ open, onClose, total, mpReady, tenantTaxCondition, busin
       saleInput.items = saleInput.items.map((it) => ({
         ...it,
         variantId: variantIdByProduct[it.productId],
+      }));
+      // Sprint PMP — re-inyectar amount (con surcharge) + surchargeAmount +
+      // methodConfigId. El backend valida sum(amount) = subtotal - discount + surchargeTotal.
+      saleInput.payments = payments.map((p) => ({
+        method: p.method,
+        amount: p.amount,
+        surchargeAmount: p.surchargeAmount || 0,
+        methodConfigId: p.methodConfigId,
       }));
       const sale = await data.createSale(saleInput);
       onCompleted(sale);
@@ -1024,7 +1152,16 @@ function PaymentModal({ open, onClose, total, mpReady, tenantTaxCondition, busin
     <Modal open={open} onClose={onClose} title="Cobrar" widthClass="max-w-md">
       <div className="mb-3 rounded-lg bg-ice p-4 text-center">
         <div className="eyebrow text-cyan">Total a cobrar</div>
-        <div className="font-display text-3xl font-bold tabular-nums text-navy">{formatARS(total)}</div>
+        <div className="font-display text-3xl font-bold tabular-nums text-navy">
+          {formatARS(totalWithSurcharge)}
+        </div>
+        {surchargeTotal !== 0 && (
+          <div className="mt-1 text-[11px] text-slate-600">
+            Incluye{' '}
+            {surchargeTotal > 0 ? 'recargo' : 'descuento'} de{' '}
+            <strong>{formatARS(Math.abs(surchargeTotal))}</strong> por medio de pago
+          </div>
+        )}
         {letterPreview?.letter && (
           <div className="mt-1 text-[11px] text-slate-600">
             Se va a emitir <strong>Factura {letterPreview.letter}</strong>
@@ -1120,47 +1257,97 @@ function PaymentModal({ open, onClose, total, mpReady, tenantTaxCondition, busin
       )}
 
       <div className="space-y-2">
-        {payments.map((p, i) => (
-          <div key={i} className="flex items-center gap-2">
-            <select
-              className="h-10 flex-1 rounded-lg border border-slate-300 bg-white px-2 text-sm"
-              value={p.method}
-              onChange={(e) => setRow(i, 'method', e.target.value)}
-            >
-              {PAYMENT_METHODS.filter((m) => {
-                // on_account solo si la feature está habilitada Y hay cliente identificado.
-                if (m.value === 'on_account') {
-                  return creditSalesEnabled && Boolean(receiver?.customerId);
-                }
-                return true;
-              }).map((m) => (
-                <option key={m.value} value={m.value}>
-                  {m.label}
-                </option>
-              ))}
-            </select>
-            <input
-              type="number"
-              min="0"
-              step="0.01"
-              className="h-10 w-32 rounded-lg border border-slate-300 bg-white px-2 text-right text-sm"
-              value={p.amount}
-              onChange={(e) => setRow(i, 'amount', e.target.value)}
-            />
-            {payments.length > 1 && (
-              <button
-                className="text-slate-400 hover:text-red-600"
-                onClick={() => setPayments((ps) => ps.filter((_, idx) => idx !== i))}
-              >
-                <X className="h-4 w-4" />
-              </button>
-            )}
-          </div>
-        ))}
+        {payments.map((p, i) => {
+          const cfg = p.methodConfigId
+            ? methodConfigs.find((m) => m.id === p.methodConfigId)
+            : null;
+          // Valor del select: 'cfg:<id>' si hay config, sino el método base.
+          const selectValue = cfg ? `cfg:${cfg.id}` : p.method;
+          return (
+            <div key={i}>
+              <div className="flex items-center gap-2">
+                <select
+                  className="h-10 flex-1 rounded-lg border border-slate-300 bg-white px-2 text-sm"
+                  value={selectValue}
+                  onChange={(e) => setRowMethod(i, e.target.value)}
+                >
+                  {/* Sprint PMP — medios configurados arriba (con badge del recargo). */}
+                  {methodConfigs.length > 0 && (
+                    <optgroup label="Configurados">
+                      {methodConfigs.map((m) => {
+                        const tag =
+                          m.surchargePct === 0
+                            ? ''
+                            : m.surchargePct > 0
+                              ? `  (+${m.surchargePct}%)`
+                              : `  (${m.surchargePct}%)`;
+                        return (
+                          <option key={m.id} value={`cfg:${m.id}`}>
+                            {m.label}
+                            {tag}
+                          </option>
+                        );
+                      })}
+                    </optgroup>
+                  )}
+                  <optgroup label="Métodos base">
+                    {PAYMENT_METHODS.filter((m) => {
+                      // on_account solo si la feature está habilitada Y hay cliente identificado.
+                      if (m.value === 'on_account') {
+                        return creditSalesEnabled && Boolean(receiver?.customerId);
+                      }
+                      return true;
+                    }).map((m) => (
+                      <option key={m.value} value={m.value}>
+                        {m.label}
+                      </option>
+                    ))}
+                  </optgroup>
+                </select>
+                <input
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  className="h-10 w-32 rounded-lg border border-slate-300 bg-white px-2 text-right text-sm"
+                  value={p.amount}
+                  onChange={(e) => setRowAmount(i, e.target.value)}
+                />
+                {payments.length > 1 && (
+                  <button
+                    className="text-slate-400 hover:text-red-600"
+                    onClick={() => setPayments((ps) => ps.filter((_, idx) => idx !== i))}
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                )}
+              </div>
+              {p.surchargeAmount > 0 && (
+                <div className="ml-1 mt-1 text-[11px] text-amber-700">
+                  Recargo aplicado: <strong>{formatARS(p.surchargeAmount)}</strong>
+                  {cfg && cfg.surchargePct !== 0 && <span> ({cfg.surchargePct}%)</span>}
+                </div>
+              )}
+              {p.surchargeAmount < 0 && (
+                <div className="ml-1 mt-1 text-[11px] text-emerald-700">
+                  Descuento aplicado: <strong>{formatARS(Math.abs(p.surchargeAmount))}</strong>
+                  {cfg && cfg.surchargePct !== 0 && <span> ({cfg.surchargePct}%)</span>}
+                </div>
+              )}
+            </div>
+          );
+        })}
         <button
           className="text-xs text-brand-600 hover:underline"
           onClick={() =>
-            setPayments((ps) => [...ps, { method: 'cash', amount: Math.max(0, diff) }])
+            setPayments((ps) => [
+              ...ps,
+              {
+                method: 'cash',
+                amount: Math.max(0, diff),
+                surchargeAmount: 0,
+                methodConfigId: null,
+              },
+            ])
           }
         >
           + Agregar pago
@@ -1182,15 +1369,43 @@ function PaymentModal({ open, onClose, total, mpReady, tenantTaxCondition, busin
         </span>
       </label>
 
-      <div className="my-4 rounded-lg bg-slate-50 p-3 text-sm">
-        <div className="flex justify-between">
+      <div className="my-4 space-y-1 rounded-lg bg-slate-50 p-3 text-sm">
+        <div className="flex justify-between text-slate-600">
+          <span>Subtotal</span>
+          <span className="tabular-nums">{formatARS(summary.subtotal)}</span>
+        </div>
+        {discount > 0 && (
+          <div className="flex justify-between text-red-600">
+            <span>Descuento</span>
+            <span className="tabular-nums">-{formatARS(discount)}</span>
+          </div>
+        )}
+        {surchargeTotal !== 0 && (
+          <div
+            className={
+              'flex justify-between ' +
+              (surchargeTotal > 0 ? 'text-amber-700' : 'text-emerald-700')
+            }
+          >
+            <span>{surchargeTotal > 0 ? 'Recargo' : 'Descuento por medio'}</span>
+            <span className="tabular-nums">
+              {surchargeTotal > 0 ? '+' : '-'}
+              {formatARS(Math.abs(surchargeTotal))}
+            </span>
+          </div>
+        )}
+        <div className="flex justify-between border-t border-slate-200 pt-1 font-display font-bold text-navy">
+          <span>Total</span>
+          <span className="tabular-nums">{formatARS(totalWithSurcharge)}</span>
+        </div>
+        <div className="flex justify-between pt-1">
           <span>Pagado</span>
-          <span className="font-semibold">{formatARS(paid)}</span>
+          <span className="font-semibold tabular-nums">{formatARS(paid)}</span>
         </div>
         {partial ? (
           <div className="flex justify-between text-amber-700">
             <span>Saldo pendiente</span>
-            <span className="font-semibold">{formatARS(remaining)}</span>
+            <span className="font-semibold tabular-nums">{formatARS(remaining)}</span>
           </div>
         ) : (
           <div
@@ -1204,7 +1419,7 @@ function PaymentModal({ open, onClose, total, mpReady, tenantTaxCondition, busin
             }
           >
             <span>{exact ? 'Exacto' : diff > 0 ? 'Falta' : 'Vuelto'}</span>
-            <span className="font-semibold">{formatARS(Math.abs(diff))}</span>
+            <span className="font-semibold tabular-nums">{formatARS(Math.abs(diff))}</span>
           </div>
         )}
       </div>
