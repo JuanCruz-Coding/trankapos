@@ -20,6 +20,8 @@ import Sales from '@/pages/Sales';
 import Comprobantes from '@/pages/Comprobantes';
 import Customers from '@/pages/Customers';
 import PriceLists from '@/pages/PriceLists';
+import CustomerGroups from '@/pages/CustomerGroups';
+import Promotions from '@/pages/Promotions';
 import Stock from '@/pages/Stock';
 import Transfers from '@/pages/Transfers';
 import Help from '@/pages/Help';
@@ -98,6 +100,22 @@ export function App() {
             element={
               <ProtectedRoute permission="manage_products">
                 <PriceLists />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="customer-groups"
+            element={
+              <ProtectedRoute permission="manage_settings">
+                <CustomerGroups />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="promotions"
+            element={
+              <ProtectedRoute permission="manage_settings">
+                <Promotions />
               </ProtectedRoute>
             }
           />

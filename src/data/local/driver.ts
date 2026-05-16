@@ -10,6 +10,7 @@ import type {
   Category,
   CustomerCredit,
   CustomerCreditMovement,
+  CustomerGroup,
   PaymentMethodConfig,
   PermissionsMap,
   Plan,
@@ -18,6 +19,7 @@ import type {
   PriceListItem,
   Product,
   ProductVariant,
+  Promotion,
   ReturnReason,
   Sale,
   SaleItem,
@@ -43,12 +45,16 @@ import type {
   CreditNoteInput,
   CreditNoteResult,
   AfipPadronResult,
+  ApplyPromotionsInput,
+  ApplyPromotionsResult,
   ConsultAfipPadronInput,
   CreditLimitCheck,
+  CustomerGroupInput,
   CustomerInput,
   CustomerSalesStats,
   PriceListInput,
   PriceListItemInput,
+  PromotionInput,
   RecordCreditPaymentInput,
   DataDriver,
   ExchangeSaleInput,
@@ -698,6 +704,8 @@ export class LocalDriver implements DataDriver {
       cost: input.cost,
       categoryId: input.categoryId,
       taxRate: input.taxRate,
+      // Sprint PROMO: feature requiere modo online. En local siempre null.
+      brand: null,
       trackStock: input.trackStock,
       allowSaleWhenZero: input.allowSaleWhenZero,
       active: input.active,
@@ -1494,5 +1502,48 @@ export class LocalDriver implements DataDriver {
   async deactivatePaymentMethod(_id: string): Promise<void> {
     await this.requireSession();
     throw new Error('Los medios de pago configurables requieren modo online.');
+  }
+
+  // --- Sprint PROMO: customer groups + promociones (stubs offline) ---
+  async listCustomerGroups(_opts?: { activeOnly?: boolean }): Promise<CustomerGroup[]> {
+    await this.requireSession();
+    return [];
+  }
+  async createCustomerGroup(_input: CustomerGroupInput): Promise<CustomerGroup> {
+    await this.requireSession();
+    throw new Error('Grupos de cliente requieren modo online.');
+  }
+  async updateCustomerGroup(
+    _id: string,
+    _input: Partial<CustomerGroupInput>,
+  ): Promise<CustomerGroup> {
+    await this.requireSession();
+    throw new Error('Grupos de cliente requieren modo online.');
+  }
+  async deactivateCustomerGroup(_id: string): Promise<void> {
+    await this.requireSession();
+    throw new Error('Grupos de cliente requieren modo online.');
+  }
+
+  async listPromotions(_opts?: { activeOnly?: boolean }): Promise<Promotion[]> {
+    await this.requireSession();
+    return [];
+  }
+  async createPromotion(_input: PromotionInput): Promise<Promotion> {
+    await this.requireSession();
+    throw new Error('Promociones requieren modo online.');
+  }
+  async updatePromotion(_id: string, _input: Partial<PromotionInput>): Promise<Promotion> {
+    await this.requireSession();
+    throw new Error('Promociones requieren modo online.');
+  }
+  async deactivatePromotion(_id: string): Promise<void> {
+    await this.requireSession();
+    throw new Error('Promociones requieren modo online.');
+  }
+  async applyPromotionsToCart(_input: ApplyPromotionsInput): Promise<ApplyPromotionsResult> {
+    await this.requireSession();
+    // Local nunca aplica promos.
+    return { totalDiscount: 0, applied: [] };
   }
 }

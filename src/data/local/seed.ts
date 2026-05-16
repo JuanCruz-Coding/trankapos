@@ -168,6 +168,7 @@ export async function seedIfEmpty(): Promise<void> {
     cost: p.cost,
     categoryId: p.categoryId,
     taxRate: 21,
+    brand: null,
     trackStock: true,
     allowSaleWhenZero: false,
     active: true,

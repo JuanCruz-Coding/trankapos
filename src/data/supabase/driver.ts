@@ -13,6 +13,7 @@ import type {
   CustomerCredit,
   CustomerCreditMovement,
   CustomerDocType,
+  CustomerGroup,
   PaymentMethod,
   PaymentMethodConfig,
   PermissionsMap,
@@ -22,9 +23,14 @@ import type {
   PriceListItem,
   Product,
   ProductVariant,
+  Promotion,
+  PromotionApplication,
+  PromotionScopeType,
+  PromotionType,
   ReturnReason,
   Sale,
   SaleItem,
+  SalePromotion,
   StockItem,
   Subscription,
   SubscriptionStatus,
@@ -44,18 +50,23 @@ import type {
   BranchInput,
   CashMovementInput,
   AfipPadronResult,
+  ApplyPromotionsInput,
+  ApplyPromotionsResult,
+  PromoCartLine,
   CategoryInput,
   CloseRegisterInput,
   ConsultAfipPadronInput,
   CreditLimitCheck,
   CreditNoteInput,
   CreditNoteResult,
+  CustomerGroupInput,
   CustomerInput,
   CustomerSalesStats,
   DataDriver,
   PaymentMethodConfigInput,
   PriceListInput,
   PriceListItemInput,
+  PromotionInput,
   RecordCreditPaymentInput,
   ExchangeSaleInput,
   ExchangeSaleResult,
@@ -206,6 +217,8 @@ interface ProductRow {
   id: string; tenant_id: string; name: string; barcode: string | null;
   sku: string | null;
   price: string; cost: string; category_id: string | null; tax_rate: string;
+  /** Sprint PROMO: marca libre. Migration 044 agrega la columna. */
+  brand: string | null;
   track_stock: boolean; allow_sale_when_zero: boolean;
   active: boolean; created_at: string;
 }
@@ -215,6 +228,7 @@ function mapProduct(r: ProductRow): Product {
     sku: r.sku ?? null,
     price: Number(r.price), cost: Number(r.cost),
     categoryId: r.category_id, taxRate: Number(r.tax_rate),
+    brand: r.brand ?? null,
     trackStock: r.track_stock ?? true,
     allowSaleWhenZero: r.allow_sale_when_zero ?? false,
     active: r.active, createdAt: r.created_at,
@@ -325,7 +339,11 @@ interface SaleRow {
   customer_doc_number?: string | null;
   customer_legal_name?: string | null;
   customer_iva_condition?: string | null;
+  /** Sprint PROMO: total descontado por promociones automáticas. */
+  promo_discount_total?: string | number | null;
   sale_items?: SaleItemRow[]; sale_payments?: SalePaymentRow[];
+  /** Sprint PROMO: si el select incluyó `sale_promotions(*)`. */
+  sale_promotions?: SalePromotionRow[];
 }
 function mapSale(r: SaleRow): Sale {
   return {
@@ -336,6 +354,8 @@ function mapSale(r: SaleRow): Sale {
     subtotal: Number(r.subtotal), discount: Number(r.discount), total: Number(r.total),
     status: (r.status ?? 'paid') as Sale['status'],
     stockReservedMode: r.stock_reserved_mode ?? false,
+    promoDiscountTotal: r.promo_discount_total != null ? Number(r.promo_discount_total) : 0,
+    promotions: (r.sale_promotions ?? []).map(mapSalePromotion),
     voided: r.voided, createdAt: r.created_at,
     customerId: r.customer_id ?? null,
     customerDocType: (r.customer_doc_type ?? null) as Sale['customerDocType'],
@@ -354,6 +374,8 @@ interface CustomerRow {
   marketing_opt_in: boolean | null;
   credit_limit: string | number | null;
   price_list_id: string | null;
+  /** Sprint PROMO: grupo del cliente. Migration 043. */
+  group_id: string | null;
   created_at: string; updated_at: string;
 }
 function mapCustomer(r: CustomerRow): Customer {
@@ -371,6 +393,7 @@ function mapCustomer(r: CustomerRow): Customer {
     marketingOptIn: r.marketing_opt_in ?? false,
     creditLimit: r.credit_limit == null ? null : Number(r.credit_limit),
     priceListId: r.price_list_id ?? null,
+    groupId: r.group_id ?? null,
     active: r.active,
     createdAt: r.created_at, updatedAt: r.updated_at,
   };
@@ -402,6 +425,80 @@ function mapPriceListItem(r: PriceListItemRow): PriceListItem {
     id: r.id, tenantId: r.tenant_id, priceListId: r.price_list_id,
     productId: r.product_id, variantId: r.variant_id,
     price: Number(r.price),
+  };
+}
+
+// ---------------------------------------------------------------------
+// Sprint PROMO: customer groups + promociones + sale_promotions
+// ---------------------------------------------------------------------
+interface CustomerGroupRow {
+  id: string; tenant_id: string; code: string; name: string;
+  default_price_list_id: string | null;
+  active: boolean; sort_order: number;
+  created_at: string; updated_at: string;
+}
+function mapCustomerGroup(r: CustomerGroupRow): CustomerGroup {
+  return {
+    id: r.id, tenantId: r.tenant_id, code: r.code, name: r.name,
+    defaultPriceListId: r.default_price_list_id ?? null,
+    active: r.active, sortOrder: r.sort_order ?? 0,
+    createdAt: r.created_at, updatedAt: r.updated_at,
+  };
+}
+
+interface PromotionRow {
+  id: string; tenant_id: string; name: string;
+  promo_type: PromotionType;
+  percent_off: string | number | null;
+  buy_qty: number | null;
+  pay_qty: number | null;
+  scope_type: PromotionScopeType;
+  scope_value: string | null;
+  customer_group_id: string | null;
+  starts_at: string | null;
+  ends_at: string | null;
+  active: boolean;
+  priority: number;
+  created_at: string;
+  updated_at: string;
+}
+function mapPromotion(r: PromotionRow): Promotion {
+  return {
+    id: r.id, tenantId: r.tenant_id, name: r.name,
+    promoType: r.promo_type,
+    percentOff: r.percent_off == null ? null : Number(r.percent_off),
+    buyQty: r.buy_qty ?? null,
+    payQty: r.pay_qty ?? null,
+    scopeType: r.scope_type,
+    scopeValue: r.scope_value ?? null,
+    customerGroupId: r.customer_group_id ?? null,
+    startsAt: r.starts_at ?? null,
+    endsAt: r.ends_at ?? null,
+    active: r.active,
+    priority: r.priority ?? 0,
+    createdAt: r.created_at,
+    updatedAt: r.updated_at,
+  };
+}
+
+interface SalePromotionRow {
+  id: string; tenant_id: string; sale_id: string;
+  promotion_id: string | null;
+  promo_name: string;
+  promo_type: PromotionType;
+  amount: string | number;
+  description: string | null;
+  created_at: string;
+}
+function mapSalePromotion(r: SalePromotionRow): SalePromotion {
+  return {
+    id: r.id, tenantId: r.tenant_id, saleId: r.sale_id,
+    promotionId: r.promotion_id ?? null,
+    promoName: r.promo_name,
+    promoType: r.promo_type,
+    amount: Number(r.amount),
+    description: r.description ?? null,
+    createdAt: r.created_at,
   };
 }
 
@@ -1193,6 +1290,9 @@ class SupabaseDriver implements DataDriver {
 
   async createProduct(input: ProductInput): Promise<Product> {
     const s = await this.requireSession();
+    // Sprint PROMO: `brand` se acepta como campo opcional aunque ProductInput
+    // todavía no lo declare en la interfaz (lo agregamos cuando la UI lo use).
+    const brand = (input as ProductInput & { brand?: string | null }).brand ?? null;
     const { data, error } = await this.sb
       .from('products')
       .insert({
@@ -1204,6 +1304,7 @@ class SupabaseDriver implements DataDriver {
         cost: input.cost,
         category_id: input.categoryId,
         tax_rate: input.taxRate,
+        brand,
         track_stock: input.trackStock,
         allow_sale_when_zero: input.allowSaleWhenZero,
         active: input.active,
@@ -1257,6 +1358,9 @@ class SupabaseDriver implements DataDriver {
     if (input.trackStock !== undefined) patch.track_stock = input.trackStock;
     if (input.allowSaleWhenZero !== undefined) patch.allow_sale_when_zero = input.allowSaleWhenZero;
     if (input.active !== undefined) patch.active = input.active;
+    // Sprint PROMO: brand opcional (no está en la interface pero la columna existe).
+    const brandPatch = (input as Partial<ProductInput> & { brand?: string | null }).brand;
+    if (brandPatch !== undefined) patch.brand = brandPatch;
 
     const { data, error } = await this.sb
       .from('products')
@@ -1376,11 +1480,19 @@ class SupabaseDriver implements DataDriver {
       }),
     );
 
+    // Sprint PROMO: las promos automáticas se mandan como `discount` adicional
+    // al RPC (porque la validación interna chequea sum(payments)==subtotal-discount+surcharge).
+    // Después de la venta, persistimos el detalle en sale_promotions y guardamos
+    // el total separado en sales.promo_discount_total para reportes.
+    const promoApplied = input.appliedPromotions ?? [];
+    const promoTotal = promoApplied.reduce((sum, p) => sum + (p.amount ?? 0), 0);
+    const effectiveDiscount = Math.round((input.discount + promoTotal) * 100) / 100;
+
     const { data: saleId, error: rpcErr } = await this.sb.rpc('create_sale_atomic', {
       p_tenant_id: s.tenantId,
       p_branch_id: input.branchId,
       p_register_id: input.registerId ?? null,
-      p_discount: input.discount,
+      p_discount: effectiveDiscount,
       p_items: itemsWithVariant,
       p_payments: input.payments.map((p) => ({
         method: p.method,
@@ -1396,9 +1508,30 @@ class SupabaseDriver implements DataDriver {
     });
     if (rpcErr) throw new Error(rpcErr.message);
 
+    // Sprint PROMO: persistimos el detalle de promos aplicadas.
+    if (promoApplied.length > 0 && typeof saleId === 'string') {
+      const { error: updErr } = await this.sb
+        .from('sales')
+        .update({ promo_discount_total: promoTotal })
+        .eq('id', saleId);
+      if (updErr) throw new Error(`Venta creada pero falló al guardar promo_discount_total: ${updErr.message}`);
+
+      const promoRows = promoApplied.map((p) => ({
+        tenant_id: s.tenantId,
+        sale_id: saleId,
+        promotion_id: p.promotionId,
+        promo_name: p.promotionName,
+        promo_type: p.promoType,
+        amount: p.amount,
+        description: p.description,
+      }));
+      const { error: insErr } = await this.sb.from('sale_promotions').insert(promoRows);
+      if (insErr) throw new Error(`Venta creada pero falló al guardar promociones: ${insErr.message}`);
+    }
+
     const { data: full, error: fullErr } = await this.sb
       .from('sales')
-      .select('*, sale_items(*), sale_payments(method, amount)')
+      .select('*, sale_items(*), sale_payments(method, amount), sale_promotions(*)')
       .eq('id', saleId)
       .single();
     if (fullErr) throw new Error(fullErr.message);
@@ -1425,7 +1558,7 @@ class SupabaseDriver implements DataDriver {
 
     const { data: full, error: fullErr } = await this.sb
       .from('sales')
-      .select('*, sale_items(*), sale_payments(method, amount)')
+      .select('*, sale_items(*), sale_payments(method, amount), sale_promotions(*)')
       .eq('id', input.saleId)
       .single();
     if (fullErr) throw new Error(fullErr.message);
@@ -1436,7 +1569,7 @@ class SupabaseDriver implements DataDriver {
     await this.requireSession();
     let query = this.sb
       .from('sales')
-      .select('*, sale_items(*), sale_payments(method, amount)')
+      .select('*, sale_items(*), sale_payments(method, amount), sale_promotions(*)')
       .order('created_at', { ascending: false });
     if (q.from) query = query.gte('created_at', q.from);
     if (q.to) query = query.lte('created_at', q.to);
@@ -1457,7 +1590,7 @@ class SupabaseDriver implements DataDriver {
     await this.requireSession();
     const { data, error } = await this.sb
       .from('sales')
-      .select('*, sale_items(*), sale_payments(method, amount)')
+      .select('*, sale_items(*), sale_payments(method, amount), sale_promotions(*)')
       .eq('id', id)
       .maybeSingle();
     if (error) throw new Error(error.message);
@@ -1899,6 +2032,9 @@ class SupabaseDriver implements DataDriver {
 
   async createCustomer(input: CustomerInput): Promise<Customer> {
     const s = await this.requireSession();
+    // Sprint PROMO: groupId opcional (CustomerInput aún no lo declara en la
+    // interfaz; lo agregamos cuando el form de Customers lo exponga).
+    const groupId = (input as CustomerInput & { groupId?: string | null }).groupId ?? null;
     const { data, error } = await this.sb
       .from('customers')
       .insert({
@@ -1915,6 +2051,7 @@ class SupabaseDriver implements DataDriver {
         state_province: input.stateProvince ?? null,
         birthdate: input.birthdate ?? null,
         marketing_opt_in: input.marketingOptIn ?? false,
+        group_id: groupId,
         active: input.active ?? true,
       })
       .select('*')
@@ -1945,6 +2082,9 @@ class SupabaseDriver implements DataDriver {
     if (input.birthdate !== undefined) patch.birthdate = input.birthdate;
     if (input.marketingOptIn !== undefined) patch.marketing_opt_in = input.marketingOptIn;
     if (input.active !== undefined) patch.active = input.active;
+    // Sprint PROMO: groupId opcional.
+    const groupIdPatch = (input as Partial<CustomerInput> & { groupId?: string | null }).groupId;
+    if (groupIdPatch !== undefined) patch.group_id = groupIdPatch;
 
     const { data, error } = await this.sb
       .from('customers')
@@ -2504,7 +2644,7 @@ class SupabaseDriver implements DataDriver {
     // devuelva Sale completa. Filtramos por customer_id y excluimos anuladas.
     const { data, error } = await this.sb
       .from('sales')
-      .select('*, sale_items(*), sale_payments(method, amount)')
+      .select('*, sale_items(*), sale_payments(method, amount), sale_promotions(*)')
       .eq('customer_id', customerId)
       .eq('voided', false)
       .order('created_at', { ascending: false })
@@ -2771,13 +2911,320 @@ class SupabaseDriver implements DataDriver {
     if (error) throw new Error(error.message);
   }
 
+  // ---------------------------------------------------------------------
+  // Sprint PROMO: customer groups + promociones
+  // ---------------------------------------------------------------------
+
+  async listCustomerGroups(opts?: { activeOnly?: boolean }): Promise<CustomerGroup[]> {
+    await this.requireSession();
+    let q = this.sb.from('customer_groups').select('*').order('sort_order', { ascending: true });
+    if (opts?.activeOnly) q = q.eq('active', true);
+    const { data, error } = await q;
+    if (error) throw new Error(error.message);
+    return (data ?? []).map((r) => mapCustomerGroup(r as CustomerGroupRow));
+  }
+
+  async createCustomerGroup(input: CustomerGroupInput): Promise<CustomerGroup> {
+    const s = await this.requireSession();
+    const { data, error } = await this.sb
+      .from('customer_groups')
+      .insert({
+        tenant_id: s.tenantId,
+        code: input.code.trim(),
+        name: input.name.trim(),
+        default_price_list_id: input.defaultPriceListId ?? null,
+        active: input.active ?? true,
+        sort_order: input.sortOrder ?? 0,
+      })
+      .select('*')
+      .single();
+    if (error) {
+      if (error.code === '23505') {
+        throw new Error('Ya existe un grupo con ese código.');
+      }
+      throw new Error(error.message);
+    }
+    return mapCustomerGroup(data as CustomerGroupRow);
+  }
+
+  async updateCustomerGroup(
+    id: string,
+    input: Partial<CustomerGroupInput>,
+  ): Promise<CustomerGroup> {
+    await this.requireSession();
+    const patch: Record<string, unknown> = {};
+    if (input.code !== undefined) patch.code = input.code.trim();
+    if (input.name !== undefined) patch.name = input.name.trim();
+    if (input.defaultPriceListId !== undefined) patch.default_price_list_id = input.defaultPriceListId;
+    if (input.active !== undefined) patch.active = input.active;
+    if (input.sortOrder !== undefined) patch.sort_order = input.sortOrder;
+    const { data, error } = await this.sb
+      .from('customer_groups')
+      .update(patch)
+      .eq('id', id)
+      .select('*')
+      .single();
+    if (error) throw new Error(error.message);
+    return mapCustomerGroup(data as CustomerGroupRow);
+  }
+
+  async deactivateCustomerGroup(id: string): Promise<void> {
+    await this.requireSession();
+    const { error } = await this.sb
+      .from('customer_groups').update({ active: false }).eq('id', id);
+    if (error) throw new Error(error.message);
+  }
+
+  async listPromotions(opts?: { activeOnly?: boolean }): Promise<Promotion[]> {
+    await this.requireSession();
+    let q = this.sb
+      .from('promotions')
+      .select('*')
+      .order('priority', { ascending: false })
+      .order('created_at', { ascending: false });
+    if (opts?.activeOnly) q = q.eq('active', true);
+    const { data, error } = await q;
+    if (error) throw new Error(error.message);
+    return (data ?? []).map((r) => mapPromotion(r as PromotionRow));
+  }
+
+  async createPromotion(input: PromotionInput): Promise<Promotion> {
+    const s = await this.requireSession();
+    // Coherencia client-side: cada promoType solo lleva sus campos.
+    const isPercent = input.promoType === 'percent_off';
+    const isNxm = input.promoType === 'nxm';
+    if (isPercent) {
+      if (input.percentOff == null || input.percentOff <= 0 || input.percentOff > 100) {
+        throw new Error('El porcentaje debe estar entre 1 y 100.');
+      }
+    }
+    if (isNxm) {
+      if (input.buyQty == null || input.payQty == null) {
+        throw new Error('Lleva X / paga Y son obligatorios para promo NxM.');
+      }
+      if (input.buyQty <= input.payQty) {
+        throw new Error('"Lleva" debe ser mayor que "paga" en una promo NxM.');
+      }
+    }
+    if (input.scopeType !== 'all' && (input.scopeValue == null || input.scopeValue === '')) {
+      throw new Error('Falta especificar a qué se aplica la promo.');
+    }
+    const { data, error } = await this.sb
+      .from('promotions')
+      .insert({
+        tenant_id: s.tenantId,
+        name: input.name.trim(),
+        promo_type: input.promoType,
+        percent_off: isPercent ? input.percentOff : null,
+        buy_qty: isNxm ? input.buyQty : null,
+        pay_qty: isNxm ? input.payQty : null,
+        scope_type: input.scopeType,
+        scope_value: input.scopeType === 'all' ? null : input.scopeValue,
+        customer_group_id: input.customerGroupId ?? null,
+        starts_at: input.startsAt ?? null,
+        ends_at: input.endsAt ?? null,
+        active: input.active ?? true,
+        priority: input.priority ?? 0,
+      })
+      .select('*')
+      .single();
+    if (error) throw new Error(error.message);
+    return mapPromotion(data as PromotionRow);
+  }
+
+  async updatePromotion(id: string, input: Partial<PromotionInput>): Promise<Promotion> {
+    await this.requireSession();
+    const patch: Record<string, unknown> = {};
+    if (input.name !== undefined) patch.name = input.name.trim();
+    if (input.promoType !== undefined) patch.promo_type = input.promoType;
+    if (input.percentOff !== undefined) patch.percent_off = input.percentOff;
+    if (input.buyQty !== undefined) patch.buy_qty = input.buyQty;
+    if (input.payQty !== undefined) patch.pay_qty = input.payQty;
+    if (input.scopeType !== undefined) patch.scope_type = input.scopeType;
+    if (input.scopeValue !== undefined) patch.scope_value = input.scopeValue;
+    if (input.customerGroupId !== undefined) patch.customer_group_id = input.customerGroupId;
+    if (input.startsAt !== undefined) patch.starts_at = input.startsAt;
+    if (input.endsAt !== undefined) patch.ends_at = input.endsAt;
+    if (input.active !== undefined) patch.active = input.active;
+    if (input.priority !== undefined) patch.priority = input.priority;
+    const { data, error } = await this.sb
+      .from('promotions')
+      .update(patch)
+      .eq('id', id)
+      .select('*')
+      .single();
+    if (error) throw new Error(error.message);
+    return mapPromotion(data as PromotionRow);
+  }
+
+  async deactivatePromotion(id: string): Promise<void> {
+    await this.requireSession();
+    const { error } = await this.sb
+      .from('promotions').update({ active: false }).eq('id', id);
+    if (error) throw new Error(error.message);
+  }
+
+  /**
+   * Engine cliente-side de promociones. Reglas:
+   * - Carga promos activas + vigentes.
+   * - Filtra por grupo del cliente (las sin grupo aplican a todos).
+   * - Por cada line del cart, evalúa la MEJOR promo aplicable (stack exclusivo).
+   *   Empate de descuento → gana la de mayor priority.
+   * - Si la misma promo aplica a varias lines, las amounts se suman en una
+   *   sola entrada con description "<nombre> ×N items".
+   */
+  async applyPromotionsToCart(input: ApplyPromotionsInput): Promise<ApplyPromotionsResult> {
+    await this.requireSession();
+
+    // Edge case: cart vacío → no hay nada que evaluar.
+    const lines = input.lines ?? [];
+    if (lines.length === 0) {
+      return { totalDiscount: 0, applied: [] };
+    }
+
+    const now = input.evaluatedAt ?? new Date().toISOString();
+
+    // 1) Promos activas + vigentes (filtradas en servidor cuando es posible).
+    const { data: promosRaw, error: promosErr } = await this.sb
+      .from('promotions')
+      .select('*')
+      .eq('active', true);
+    if (promosErr) throw new Error(promosErr.message);
+    let promos = (promosRaw ?? []).map((r) => mapPromotion(r as PromotionRow));
+
+    // Vigencia (defensivo en cliente, por si las dates vinieran null).
+    promos = promos.filter((p) => {
+      if (p.startsAt && p.startsAt > now) return false;
+      if (p.endsAt && p.endsAt <= now) return false;
+      return true;
+    });
+
+    if (promos.length === 0) {
+      return { totalDiscount: 0, applied: [] };
+    }
+
+    // 2) Resolver groupId del cliente si no vino y sí vino customerId.
+    let customerGroupId = input.customerGroupId ?? null;
+    if (!customerGroupId && input.customerId) {
+      const { data: c, error: cErr } = await this.sb
+        .from('customers')
+        .select('group_id')
+        .eq('id', input.customerId)
+        .maybeSingle();
+      if (cErr) throw new Error(cErr.message);
+      customerGroupId = (c as { group_id: string | null } | null)?.group_id ?? null;
+    }
+
+    // 3) Filtro de cliente: las promos sin customer_group_id aplican a todos.
+    //    Las que sí lo tienen, solo si matchea con el grupo del cliente.
+    promos = promos.filter((p) => {
+      if (!p.customerGroupId) return true;
+      return p.customerGroupId === customerGroupId;
+    });
+
+    if (promos.length === 0) {
+      return { totalDiscount: 0, applied: [] };
+    }
+
+    // Helper: descuento que generaría esta promo sobre una line.
+    function discountFor(p: Promotion, line: PromoCartLine): number {
+      if (p.promoType === 'percent_off') {
+        const pct = p.percentOff ?? 0;
+        if (pct <= 0) return 0;
+        return line.qty * line.unitPrice * (pct / 100);
+      }
+      // nxm
+      const buy = p.buyQty ?? 0;
+      const pay = p.payQty ?? 0;
+      if (buy <= 0 || pay <= 0 || buy <= pay) return 0;
+      const sets = Math.floor(line.qty / buy);
+      if (sets <= 0) return 0;
+      const freeUnits = sets * (buy - pay);
+      return freeUnits * line.unitPrice;
+    }
+
+    // Helper: ¿la promo es aplicable a esta line por scope?
+    function matchesScope(p: Promotion, line: PromoCartLine): boolean {
+      switch (p.scopeType) {
+        case 'all':
+          return true;
+        case 'product':
+          return p.scopeValue === line.productId;
+        case 'category':
+          return p.scopeValue != null && p.scopeValue === line.categoryId;
+        case 'brand':
+          return p.scopeValue != null && p.scopeValue === line.brand;
+        default:
+          return false;
+      }
+    }
+
+    // 4) Por cada line, elegir la MEJOR promo (stack exclusivo).
+    interface LineResult {
+      promo: Promotion;
+      amount: number;
+      line: PromoCartLine;
+    }
+    const results: LineResult[] = [];
+    for (const line of lines) {
+      let best: LineResult | null = null;
+      for (const p of promos) {
+        if (!matchesScope(p, line)) continue;
+        const amount = discountFor(p, line);
+        if (amount <= 0) continue;
+        if (!best || amount > best.amount || (amount === best.amount && p.priority > best.promo.priority)) {
+          best = { promo: p, amount, line };
+        }
+      }
+      if (best) results.push(best);
+    }
+
+    if (results.length === 0) {
+      return { totalDiscount: 0, applied: [] };
+    }
+
+    // 5) Mergear results por promotionId: si la misma promo aplica a varias
+    //    lines, sumar amounts y description "<nombre> ×N items".
+    const merged = new Map<string, { promo: Promotion; total: number; count: number; firstLine: PromoCartLine }>();
+    for (const r of results) {
+      const key = r.promo.id;
+      const ex = merged.get(key);
+      if (ex) {
+        ex.total += r.amount;
+        ex.count += 1;
+      } else {
+        merged.set(key, { promo: r.promo, total: r.amount, count: 1, firstLine: r.line });
+      }
+    }
+
+    const applied: PromotionApplication[] = [];
+    for (const m of merged.values()) {
+      const amount = Math.round(m.total * 100) / 100;
+      if (amount <= 0) continue;
+      const description =
+        m.count > 1
+          ? `${m.promo.name} ×${m.count} items`
+          : `${m.promo.name}`;
+      applied.push({
+        promotionId: m.promo.id,
+        promotionName: m.promo.name,
+        promoType: m.promo.promoType,
+        amount,
+        description,
+      });
+    }
+
+    const totalDiscount = Math.round(applied.reduce((s, a) => s + a.amount, 0) * 100) / 100;
+    return { totalDiscount, applied };
+  }
+
   async listCustomersWithDebt(): Promise<Array<Customer & { debt: number }>> {
     await this.requireSession();
     // customer_credits con balance < 0 → cliente debe.
     const { data, error } = await this.sb
       .from('customer_credits')
       .select(
-        'balance, customer:customers(id, tenant_id, doc_type, doc_number, legal_name, iva_condition, email, notes, active, phone, address, city, state_province, birthdate, marketing_opt_in, credit_limit, price_list_id, created_at, updated_at)',
+        'balance, customer:customers(id, tenant_id, doc_type, doc_number, legal_name, iva_condition, email, notes, active, phone, address, city, state_province, birthdate, marketing_opt_in, credit_limit, price_list_id, group_id, created_at, updated_at)',
       )
       .lt('balance', 0)
       .order('balance', { ascending: true });

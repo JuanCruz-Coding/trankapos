@@ -11,6 +11,7 @@ import type {
   CustomerCredit,
   CustomerCreditMovement,
   CustomerDocType,
+  CustomerGroup,
   CustomerIvaCondition,
   PaymentMethod,
   PaymentMethodConfig,
@@ -21,6 +22,10 @@ import type {
   PriceListItem,
   Product,
   ProductVariant,
+  Promotion,
+  PromotionApplication,
+  PromotionScopeType,
+  PromotionType,
   ReturnReason,
   Role,
   Sale,
@@ -119,6 +124,14 @@ export interface SaleInput {
     methodConfigId?: string | null;
   }[];
   discount: number;
+  /**
+   * Sprint PROMO: promos automáticas ya aplicadas al cart (el cliente las
+   * calcula con applyPromotionsToCart antes de cobrar). El driver las persiste
+   * en sale_promotions post-sale y suma sus amounts al `discount` enviado al
+   * RPC (para que la validación de payments cuadre). El campo es informativo
+   * para el frontend; el backend no diferencia entre descuento manual y promo.
+   */
+  appliedPromotions?: PromotionApplication[];
   /** Si true, la venta es una seña: paid<total OK, status='partial'. */
   partial?: boolean;
   /** Datos del receptor para Factura A/B. null si venta anónima. */
@@ -176,6 +189,68 @@ export interface PriceListItemInput {
   productId: string;
   variantId?: string | null;
   price: number;
+}
+
+// --- Sprint PROMO ---
+
+export interface CustomerGroupInput {
+  code: string;
+  name: string;
+  defaultPriceListId?: string | null;
+  active?: boolean;
+  sortOrder?: number;
+}
+
+export interface PromotionInput {
+  name: string;
+  promoType: PromotionType;
+  /** Requerido si promoType='percent_off'. */
+  percentOff?: number | null;
+  /** Requerido si promoType='nxm'. */
+  buyQty?: number | null;
+  /** Requerido si promoType='nxm'. */
+  payQty?: number | null;
+  scopeType: PromotionScopeType;
+  /** product_id, category_id o brand. null si scopeType='all'. */
+  scopeValue?: string | null;
+  customerGroupId?: string | null;
+  startsAt?: string | null;
+  endsAt?: string | null;
+  active?: boolean;
+  priority?: number;
+}
+
+/**
+ * Una línea del cart tal como la consume el engine de promociones. Contempla
+ * variante para que el motor pueda agrupar items idénticos en NxM (mismo
+ * product_id + variant_id).
+ */
+export interface PromoCartLine {
+  productId: string;
+  variantId: string | null;
+  qty: number;
+  unitPrice: number;
+  /** Categoría del producto (para promos scope='category'). */
+  categoryId: string | null;
+  /** Marca del producto (para promos scope='brand'). */
+  brand: string | null;
+}
+
+export interface ApplyPromotionsInput {
+  lines: PromoCartLine[];
+  /** Cliente identificado (null si venta anónima). */
+  customerId?: string | null;
+  /** Si ya conocés el groupId no hace falta hacer el lookup. */
+  customerGroupId?: string | null;
+  /** ISO. Default: now. Para evaluar vigencia. */
+  evaluatedAt?: string;
+}
+
+export interface ApplyPromotionsResult {
+  /** Suma de todos los amounts (descuento total por promos). */
+  totalDiscount: number;
+  /** Lista de promos efectivamente aplicadas. Se persisten en sale_promotions. */
+  applied: PromotionApplication[];
 }
 
 export interface RecordCreditPaymentInput {
@@ -614,6 +689,27 @@ export interface DataDriver {
     input: Partial<PaymentMethodConfigInput>,
   ): Promise<PaymentMethodConfig>;
   deactivatePaymentMethod(id: string): Promise<void>;
+
+  // --- Sprint PROMO: customer groups + promociones ---
+  listCustomerGroups(opts?: { activeOnly?: boolean }): Promise<CustomerGroup[]>;
+  createCustomerGroup(input: CustomerGroupInput): Promise<CustomerGroup>;
+  updateCustomerGroup(id: string, input: Partial<CustomerGroupInput>): Promise<CustomerGroup>;
+  /** Soft delete: setea active=false. Los clientes asignados quedan sin grupo (FK ON DELETE SET NULL maneja el caso de delete real). */
+  deactivateCustomerGroup(id: string): Promise<void>;
+
+  listPromotions(opts?: { activeOnly?: boolean }): Promise<Promotion[]>;
+  createPromotion(input: PromotionInput): Promise<Promotion>;
+  updatePromotion(id: string, input: Partial<PromotionInput>): Promise<Promotion>;
+  deactivatePromotion(id: string): Promise<void>;
+
+  /**
+   * Engine de promociones (cliente-side). Recibe el cart + cliente y devuelve
+   * el descuento total + qué promos aplicaron. Stack EXCLUSIVO: por cada
+   * producto se aplica solo la mejor promo aplicable.
+   * Las promos se guardan en sale_promotions al confirmar la venta — esa
+   * persistencia la hace el driver internamente como parte de createSale.
+   */
+  applyPromotionsToCart(input: ApplyPromotionsInput): Promise<ApplyPromotionsResult>;
 
   // --- AFIP: documentos fiscales y notas de crédito ---
   /** Documentos AFIP (factura + NC/ND) asociados a una venta. */

@@ -61,9 +61,82 @@ export interface Customer {
   creditLimit: number | null;
   /** Lista de precios asignada al cliente. null = usa la default del tenant. Sprint PRC. */
   priceListId: string | null;
+  /** Grupo del cliente. null = sin grupo. Sprint PROMO. Cascada listas: customer.priceListId > customer.group.defaultPriceListId > tenant default. */
+  groupId: string | null;
   active: boolean;
   createdAt: string;
   updatedAt: string;
+}
+
+/** Sprint PROMO: grupo de clientes (VIP, mayorista, empresas, cta cte). */
+export interface CustomerGroup {
+  id: string;
+  tenantId: string;
+  code: string;
+  name: string;
+  /** Lista de precios por defecto para clientes del grupo. null = no fuerza. */
+  defaultPriceListId: string | null;
+  active: boolean;
+  sortOrder: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** Sprint PROMO: tipo de promoción. percent_off = % off lineal. nxm = lleva N paga M. */
+export type PromotionType = 'percent_off' | 'nxm';
+
+/** Sprint PROMO: a qué productos aplica una promo. */
+export type PromotionScopeType = 'all' | 'product' | 'category' | 'brand';
+
+export interface Promotion {
+  id: string;
+  tenantId: string;
+  name: string;
+  promoType: PromotionType;
+  /** Para percent_off: 1..100. null si nxm. */
+  percentOff: number | null;
+  /** Para nxm: cantidad que tiene que llevar el cliente. null si percent_off. */
+  buyQty: number | null;
+  /** Para nxm: cantidad que paga. null si percent_off. */
+  payQty: number | null;
+  scopeType: PromotionScopeType;
+  /** product_id, category_id o brand text según scopeType. null si scopeType='all'. */
+  scopeValue: string | null;
+  /** Filtro de cliente. null = aplica a todos los clientes (incluso anónimos). */
+  customerGroupId: string | null;
+  /** ISO. null = sin inicio. */
+  startsAt: string | null;
+  /** ISO. null = sin fin. */
+  endsAt: string | null;
+  active: boolean;
+  priority: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/**
+ * Resultado del engine: una promo aplicada al cart con su descuento total
+ * y la descripción para el ticket. Se persiste en sale_promotions.
+ */
+export interface PromotionApplication {
+  promotionId: string;
+  promotionName: string;
+  promoType: PromotionType;
+  amount: number;
+  description: string;
+}
+
+/** Promo persistida contra una sale concreta. Se carga al reconstruir el ticket. */
+export interface SalePromotion {
+  id: string;
+  tenantId: string;
+  saleId: string;
+  promotionId: string | null;
+  promoName: string;
+  promoType: PromotionType;
+  amount: number;
+  description: string | null;
+  createdAt: string;
 }
 
 /** Lista de precios (Sprint PRC). */
@@ -272,6 +345,8 @@ export interface Product {
   price: number;
   cost: number;
   categoryId: string | null;
+  /** Sprint PROMO: marca libre. Usado como scope_value en promos de scope='brand'. */
+  brand: string | null;
   taxRate: number;
   trackStock: boolean;
   allowSaleWhenZero: boolean;
@@ -448,8 +523,12 @@ export interface Sale {
   payments: SalePayment[];
   subtotal: number;
   discount: number;
-  /** Sprint PMP: suma de recargos por medio de pago. total = subtotal - discount + surchargeTotal. */
+  /** Sprint PMP: suma de recargos por medio de pago. total = subtotal - discount - promoDiscountTotal + surchargeTotal. */
   surchargeTotal?: number;
+  /** Sprint PROMO: suma de descuentos por promociones automáticas. */
+  promoDiscountTotal?: number;
+  /** Sprint PROMO: detalle de promos aplicadas (para reimprimir el ticket). */
+  promotions?: SalePromotion[];
   total: number;
   status: SaleStatus;
   stockReservedMode: boolean;
