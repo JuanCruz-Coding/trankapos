@@ -17,6 +17,8 @@ import type {
   PermissionsMap,
   Plan,
   PlanUsage,
+  PriceList,
+  PriceListItem,
   Product,
   ProductVariant,
   ReturnReason,
@@ -50,6 +52,8 @@ import type {
   CustomerInput,
   CustomerSalesStats,
   DataDriver,
+  PriceListInput,
+  PriceListItemInput,
   RecordCreditPaymentInput,
   ExchangeSaleInput,
   ExchangeSaleResult,
@@ -347,6 +351,7 @@ interface CustomerRow {
   state_province: string | null; birthdate: string | null;
   marketing_opt_in: boolean | null;
   credit_limit: string | number | null;
+  price_list_id: string | null;
   created_at: string; updated_at: string;
 }
 function mapCustomer(r: CustomerRow): Customer {
@@ -363,8 +368,38 @@ function mapCustomer(r: CustomerRow): Customer {
     birthdate: r.birthdate ?? null,
     marketingOptIn: r.marketing_opt_in ?? false,
     creditLimit: r.credit_limit == null ? null : Number(r.credit_limit),
+    priceListId: r.price_list_id ?? null,
     active: r.active,
     createdAt: r.created_at, updatedAt: r.updated_at,
+  };
+}
+
+// ---------------------------------------------------------------------
+// Sprint PRC: price lists
+// ---------------------------------------------------------------------
+interface PriceListRow {
+  id: string; tenant_id: string; code: string; name: string;
+  is_default: boolean; active: boolean; sort_order: number;
+  created_at: string; updated_at: string;
+}
+function mapPriceList(r: PriceListRow): PriceList {
+  return {
+    id: r.id, tenantId: r.tenant_id, code: r.code, name: r.name,
+    isDefault: r.is_default, active: r.active, sortOrder: r.sort_order,
+    createdAt: r.created_at, updatedAt: r.updated_at,
+  };
+}
+
+interface PriceListItemRow {
+  id: string; tenant_id: string; price_list_id: string;
+  product_id: string; variant_id: string | null;
+  price: string | number;
+}
+function mapPriceListItem(r: PriceListItemRow): PriceListItem {
+  return {
+    id: r.id, tenantId: r.tenant_id, priceListId: r.price_list_id,
+    productId: r.product_id, variantId: r.variant_id,
+    price: Number(r.price),
   };
 }
 
@@ -2513,13 +2548,149 @@ class SupabaseDriver implements DataDriver {
     return { newBalance: Number(data ?? 0) };
   }
 
+  // --- Sprint PRC: listas de precios ---
+
+  async listPriceLists(opts?: { activeOnly?: boolean }): Promise<PriceList[]> {
+    await this.requireSession();
+    let q = this.sb.from('price_lists').select('*').order('sort_order', { ascending: true });
+    if (opts?.activeOnly) q = q.eq('active', true);
+    const { data, error } = await q;
+    if (error) throw new Error(error.message);
+    return (data ?? []).map((r) => mapPriceList(r as PriceListRow));
+  }
+
+  async createPriceList(input: PriceListInput): Promise<PriceList> {
+    const s = await this.requireSession();
+    const { data, error } = await this.sb
+      .from('price_lists')
+      .insert({
+        tenant_id: s.tenantId,
+        code: input.code,
+        name: input.name,
+        is_default: input.isDefault ?? false,
+        active: input.active ?? true,
+        sort_order: input.sortOrder ?? 0,
+      })
+      .select('*')
+      .single();
+    if (error) throw new Error(error.message);
+    return mapPriceList(data as PriceListRow);
+  }
+
+  async updatePriceList(id: string, input: Partial<PriceListInput>): Promise<PriceList> {
+    await this.requireSession();
+    const patch: Record<string, unknown> = {};
+    if (input.code !== undefined) patch.code = input.code;
+    if (input.name !== undefined) patch.name = input.name;
+    if (input.isDefault !== undefined) patch.is_default = input.isDefault;
+    if (input.active !== undefined) patch.active = input.active;
+    if (input.sortOrder !== undefined) patch.sort_order = input.sortOrder;
+    const { data, error } = await this.sb
+      .from('price_lists').update(patch).eq('id', id).select('*').single();
+    if (error) throw new Error(error.message);
+    return mapPriceList(data as PriceListRow);
+  }
+
+  async deactivatePriceList(id: string): Promise<void> {
+    await this.requireSession();
+    const { data: row } = await this.sb
+      .from('price_lists').select('is_default').eq('id', id).maybeSingle();
+    if ((row as { is_default: boolean } | null)?.is_default) {
+      throw new Error('No se puede desactivar la lista por defecto');
+    }
+    const { error } = await this.sb
+      .from('price_lists').update({ active: false }).eq('id', id);
+    if (error) throw new Error(error.message);
+  }
+
+  async listPriceListItems(priceListId: string): Promise<PriceListItem[]> {
+    await this.requireSession();
+    const { data, error } = await this.sb
+      .from('price_list_items')
+      .select('*')
+      .eq('price_list_id', priceListId);
+    if (error) throw new Error(error.message);
+    return (data ?? []).map((r) => mapPriceListItem(r as PriceListItemRow));
+  }
+
+  async upsertPriceListItem(input: PriceListItemInput): Promise<PriceListItem> {
+    const s = await this.requireSession();
+    // Si ya existe (price_list_id, product_id, variant_id) → update. Sino → insert.
+    const variantId = input.variantId ?? null;
+    let existing: { id: string } | null = null;
+    if (variantId === null) {
+      const { data } = await this.sb
+        .from('price_list_items')
+        .select('id')
+        .eq('price_list_id', input.priceListId)
+        .eq('product_id', input.productId)
+        .is('variant_id', null)
+        .maybeSingle();
+      existing = (data as { id: string } | null) ?? null;
+    } else {
+      const { data } = await this.sb
+        .from('price_list_items')
+        .select('id')
+        .eq('price_list_id', input.priceListId)
+        .eq('product_id', input.productId)
+        .eq('variant_id', variantId)
+        .maybeSingle();
+      existing = (data as { id: string } | null) ?? null;
+    }
+    if (existing) {
+      const { data, error } = await this.sb
+        .from('price_list_items')
+        .update({ price: input.price })
+        .eq('id', existing.id)
+        .select('*')
+        .single();
+      if (error) throw new Error(error.message);
+      return mapPriceListItem(data as PriceListItemRow);
+    }
+    const { data, error } = await this.sb
+      .from('price_list_items')
+      .insert({
+        tenant_id: s.tenantId,
+        price_list_id: input.priceListId,
+        product_id: input.productId,
+        variant_id: variantId,
+        price: input.price,
+      })
+      .select('*')
+      .single();
+    if (error) throw new Error(error.message);
+    return mapPriceListItem(data as PriceListItemRow);
+  }
+
+  async deletePriceListItem(id: string): Promise<void> {
+    await this.requireSession();
+    const { error } = await this.sb.from('price_list_items').delete().eq('id', id);
+    if (error) throw new Error(error.message);
+  }
+
+  async getEffectivePrice(input: {
+    productId: string;
+    variantId?: string | null;
+    priceListId?: string | null;
+  }): Promise<number> {
+    const s = await this.requireSession();
+    const { data, error } = await this.sb.rpc('get_effective_price', {
+      p_tenant_id: s.tenantId,
+      p_product_id: input.productId,
+      p_variant_id: input.variantId ?? null,
+      p_price_list_id: input.priceListId ?? null,
+    });
+    if (error) throw new Error(error.message);
+    return Number(data ?? 0);
+  }
+
   async listCustomersWithDebt(): Promise<Array<Customer & { debt: number }>> {
     await this.requireSession();
     // customer_credits con balance < 0 → cliente debe.
     const { data, error } = await this.sb
       .from('customer_credits')
       .select(
-        'balance, customer:customers(id, tenant_id, doc_type, doc_number, legal_name, iva_condition, email, notes, active, phone, address, city, state_province, birthdate, marketing_opt_in, credit_limit, created_at, updated_at)',
+        'balance, customer:customers(id, tenant_id, doc_type, doc_number, legal_name, iva_condition, email, notes, active, phone, address, city, state_province, birthdate, marketing_opt_in, credit_limit, price_list_id, created_at, updated_at)',
       )
       .lt('balance', 0)
       .order('balance', { ascending: true });

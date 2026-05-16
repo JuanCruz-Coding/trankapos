@@ -59,9 +59,34 @@ export interface Customer {
   marketingOptIn: boolean;
   /** Override del limite de cuenta corriente del tenant para este cliente. null = usa default. Sprint FIA. */
   creditLimit: number | null;
+  /** Lista de precios asignada al cliente. null = usa la default del tenant. Sprint PRC. */
+  priceListId: string | null;
   active: boolean;
   createdAt: string;
   updatedAt: string;
+}
+
+/** Lista de precios (Sprint PRC). */
+export interface PriceList {
+  id: string;
+  tenantId: string;
+  code: string;
+  name: string;
+  isDefault: boolean;
+  active: boolean;
+  sortOrder: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** Override de precio dentro de una lista. variantId null = aplica a todas las variantes del producto. */
+export interface PriceListItem {
+  id: string;
+  tenantId: string;
+  priceListId: string;
+  productId: string;
+  variantId: string | null;
+  price: number;
 }
 
 /** Configuración granular de qué campos del cliente son obligatorios al cargarlo. */

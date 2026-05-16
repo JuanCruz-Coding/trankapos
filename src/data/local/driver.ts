@@ -13,6 +13,8 @@ import type {
   PermissionsMap,
   Plan,
   PlanUsage,
+  PriceList,
+  PriceListItem,
   Product,
   ProductVariant,
   ReturnReason,
@@ -44,6 +46,8 @@ import type {
   CreditLimitCheck,
   CustomerInput,
   CustomerSalesStats,
+  PriceListInput,
+  PriceListItemInput,
   RecordCreditPaymentInput,
   DataDriver,
   ExchangeSaleInput,
@@ -1429,5 +1433,43 @@ export class LocalDriver implements DataDriver {
   async listCustomersWithDebt(): Promise<Array<Customer & { debt: number }>> {
     await this.requireSession();
     return [];
+  }
+
+  // --- Sprint PRC: listas de precios (stubs offline) ---
+  async listPriceLists(_opts?: { activeOnly?: boolean }): Promise<PriceList[]> {
+    await this.requireSession();
+    return [];
+  }
+  async createPriceList(_input: PriceListInput): Promise<PriceList> {
+    await this.requireSession();
+    throw new Error('Las listas de precios requieren modo online (por ahora).');
+  }
+  async updatePriceList(_id: string, _input: Partial<PriceListInput>): Promise<PriceList> {
+    await this.requireSession();
+    throw new Error('Las listas de precios requieren modo online (por ahora).');
+  }
+  async deactivatePriceList(_id: string): Promise<void> {
+    await this.requireSession();
+    throw new Error('Las listas de precios requieren modo online (por ahora).');
+  }
+  async listPriceListItems(_priceListId: string): Promise<PriceListItem[]> {
+    await this.requireSession();
+    return [];
+  }
+  async upsertPriceListItem(_input: PriceListItemInput): Promise<PriceListItem> {
+    await this.requireSession();
+    throw new Error('Las listas de precios requieren modo online (por ahora).');
+  }
+  async deletePriceListItem(_id: string): Promise<void> {
+    await this.requireSession();
+    throw new Error('Las listas de precios requieren modo online (por ahora).');
+  }
+  async getEffectivePrice(_input: {
+    productId: string;
+    variantId?: string | null;
+    priceListId?: string | null;
+  }): Promise<number> {
+    await this.requireSession();
+    return 0;
   }
 }

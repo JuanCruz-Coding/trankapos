@@ -15,6 +15,8 @@ import type {
   PermissionsMap,
   Plan,
   PlanUsage,
+  PriceList,
+  PriceListItem,
   Product,
   ProductVariant,
   ReturnReason,
@@ -138,6 +140,21 @@ export interface CustomerSalesStats {
 }
 
 // --- Sprint FIA: ventas a cuenta corriente ---
+
+export interface PriceListInput {
+  code: string;
+  name: string;
+  isDefault?: boolean;
+  active?: boolean;
+  sortOrder?: number;
+}
+
+export interface PriceListItemInput {
+  priceListId: string;
+  productId: string;
+  variantId?: string | null;
+  price: number;
+}
 
 export interface RecordCreditPaymentInput {
   customerId: string;
@@ -547,6 +564,25 @@ export interface DataDriver {
   recordCreditPayment(input: RecordCreditPaymentInput): Promise<{ newBalance: number }>;
   /** Lista clientes con deuda (balance < 0), ordenados por monto adeudado desc. */
   listCustomersWithDebt(): Promise<Array<Customer & { debt: number }>>;
+
+  // --- Sprint PRC: listas de precios ---
+  listPriceLists(opts?: { activeOnly?: boolean }): Promise<PriceList[]>;
+  createPriceList(input: PriceListInput): Promise<PriceList>;
+  updatePriceList(id: string, input: Partial<PriceListInput>): Promise<PriceList>;
+  /** Soft delete: setea active=false. La lista default no se puede borrar. */
+  deactivatePriceList(id: string): Promise<void>;
+  /** Items de una lista. */
+  listPriceListItems(priceListId: string): Promise<PriceListItem[]>;
+  /** Upsert (crear o actualizar) un item de la lista. */
+  upsertPriceListItem(input: PriceListItemInput): Promise<PriceListItem>;
+  /** Eliminar un item (vuelve a usar la cascada fallback). */
+  deletePriceListItem(id: string): Promise<void>;
+  /** Resuelve el precio efectivo con la cascada (variant > product > default). */
+  getEffectivePrice(input: {
+    productId: string;
+    variantId?: string | null;
+    priceListId?: string | null;
+  }): Promise<number>;
 
   // --- AFIP: documentos fiscales y notas de crédito ---
   /** Documentos AFIP (factura + NC/ND) asociados a una venta. */
