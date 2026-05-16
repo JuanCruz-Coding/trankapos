@@ -1,6 +1,6 @@
 export type Role = 'owner' | 'manager' | 'cashier';
 
-export type PaymentMethod = 'cash' | 'debit' | 'credit' | 'qr' | 'transfer';
+export type PaymentMethod = 'cash' | 'debit' | 'credit' | 'qr' | 'transfer' | 'on_account';
 
 export const PAYMENT_METHODS: { value: PaymentMethod; label: string }[] = [
   { value: 'cash', label: 'Efectivo' },
@@ -8,6 +8,7 @@ export const PAYMENT_METHODS: { value: PaymentMethod; label: string }[] = [
   { value: 'credit', label: 'Crédito' },
   { value: 'qr', label: 'QR / MP' },
   { value: 'transfer', label: 'Transferencia' },
+  { value: 'on_account', label: 'Cuenta corriente' },
 ];
 
 export type TaxCondition =
@@ -56,6 +57,8 @@ export interface Customer {
   stateProvince: string | null;
   birthdate: string | null;
   marketingOptIn: boolean;
+  /** Override del limite de cuenta corriente del tenant para este cliente. null = usa default. Sprint FIA. */
+  creditLimit: number | null;
   active: boolean;
   createdAt: string;
   updatedAt: string;
@@ -150,6 +153,10 @@ export interface Tenant {
   businessMode: BusinessMode;
   businessSubtype: BusinessSubtype | null;
   customerRequiredFields: CustomerRequiredFields;
+  // Cuenta corriente cliente (Sprint FIA)
+  creditSalesEnabled: boolean;
+  /** Límite default de deuda por cliente. null = sin límite. */
+  creditSalesDefaultLimit: number | null;
   // Branding
   logoUrl: string | null;
 }
@@ -181,6 +188,8 @@ export interface TenantSettingsInput {
   businessMode?: BusinessMode;
   businessSubtype?: BusinessSubtype | null;
   customerRequiredFields?: CustomerRequiredFields;
+  creditSalesEnabled?: boolean;
+  creditSalesDefaultLimit?: number | null;
 }
 
 export interface User {

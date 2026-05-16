@@ -1,13 +1,16 @@
 import { useEffect, useState } from 'react';
-import { ChevronDown, ChevronRight, Wallet } from 'lucide-react';
+import { ChevronDown, ChevronRight, Wallet, DollarSign } from 'lucide-react';
 import { data } from '@/data';
 import { toast } from '@/stores/toast';
 import { formatARS } from '@/lib/currency';
 import { cn } from '@/lib/utils';
 import type { CustomerCredit, CustomerCreditMovement } from '@/types';
+import { RecordCreditPaymentModal } from './RecordCreditPaymentModal';
 
 interface Props {
   customerId: string;
+  /** Sprint FIA: para el header del modal de pago de fiado. */
+  customerName?: string;
 }
 
 const REASON_LABELS_ES: Record<CustomerCreditMovement['reason'], string> = {
@@ -24,12 +27,14 @@ const REASON_LABELS_ES: Record<CustomerCreditMovement['reason'], string> = {
  * Carga lazy: balance al montar, movimientos al expandir el detalle.
  * Si el balance es 0 / null, muestra un placeholder discreto.
  */
-export function CustomerCreditPanel({ customerId }: Props) {
+export function CustomerCreditPanel({ customerId, customerName }: Props) {
   const [credit, setCredit] = useState<CustomerCredit | null>(null);
   const [loading, setLoading] = useState(true);
   const [expanded, setExpanded] = useState(false);
   const [movements, setMovements] = useState<CustomerCreditMovement[] | null>(null);
   const [movementsLoading, setMovementsLoading] = useState(false);
+  const [recordPaymentOpen, setRecordPaymentOpen] = useState(false);
+  const [refreshKey, setRefreshKey] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
@@ -50,7 +55,7 @@ export function CustomerCreditPanel({ customerId }: Props) {
     return () => {
       cancelled = true;
     };
-  }, [customerId]);
+  }, [customerId, refreshKey]);
 
   async function handleToggleMovements() {
     const next = !expanded;
@@ -115,7 +120,11 @@ export function CustomerCreditPanel({ customerId }: Props) {
         </div>
         <div className="min-w-0 flex-1">
           <div className="text-xs font-semibold uppercase tracking-wide text-slate-600">
-            {balance === 0 ? 'Saldo a favor (vencido)' : 'Saldo a favor disponible'}
+            {balance < 0
+              ? 'Adeuda (cuenta corriente)'
+              : balance === 0
+                ? 'Saldo a favor (vencido)'
+                : 'Saldo a favor disponible'}
           </div>
           <div
             className={cn(
@@ -127,7 +136,7 @@ export function CustomerCreditPanel({ customerId }: Props) {
                   : 'text-red-700',
             )}
           >
-            {formatARS(balance)}
+            {formatARS(positive || balance === 0 ? balance : -balance)}
           </div>
           {hasExpired && (
             <div className="mt-0.5 text-[11px] text-slate-500">
@@ -135,6 +144,16 @@ export function CustomerCreditPanel({ customerId }: Props) {
             </div>
           )}
         </div>
+        {balance < 0 && (
+          <button
+            type="button"
+            onClick={() => setRecordPaymentOpen(true)}
+            className="inline-flex items-center gap-1 rounded-lg bg-red-600 px-3 py-2 text-xs font-semibold text-white hover:bg-red-700"
+          >
+            <DollarSign className="h-3.5 w-3.5" />
+            Registrar pago
+          </button>
+        )}
       </div>
 
       <button
@@ -152,6 +171,19 @@ export function CustomerCreditPanel({ customerId }: Props) {
         )}
         Ver movimientos
       </button>
+
+      <RecordCreditPaymentModal
+        open={recordPaymentOpen}
+        customerId={customerId}
+        customerName={customerName ?? 'Cliente'}
+        currentDebt={balance < 0 ? -balance : 0}
+        onClose={() => setRecordPaymentOpen(false)}
+        onRecorded={() => {
+          // Refresca el balance y los movements al cerrar.
+          setMovements(null);
+          setRefreshKey((k) => k + 1);
+        }}
+      />
 
       {expanded && (
         <div className="mt-2 rounded-md border border-white/60 bg-white/60 p-2">

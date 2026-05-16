@@ -137,6 +137,25 @@ export interface CustomerSalesStats {
   firstSaleAt: string | null;
 }
 
+// --- Sprint FIA: ventas a cuenta corriente ---
+
+export interface RecordCreditPaymentInput {
+  customerId: string;
+  amount: number;
+  method: 'cash' | 'debit' | 'credit' | 'qr' | 'transfer';
+  notes?: string | null;
+}
+
+export interface CreditLimitCheck {
+  ok: boolean;
+  /** Deuda total que tendría el cliente si se aprueba el monto (incluye deuda actual). */
+  currentDebt: number;
+  /** Límite efectivo (override del cliente o default del tenant). null = sin límite. */
+  limitAmount: number | null;
+  /** Si no `ok`, motivo. */
+  reason: string | null;
+}
+
 /** Documento fiscal AFIP asociado a una venta (factura o nota de crédito). */
 export interface AfipDocumentSummary {
   id: string;
@@ -518,6 +537,14 @@ export interface DataDriver {
   listSalesForCustomer(customerId: string, opts?: { limit?: number }): Promise<Sale[]>;
   /** Sprint CRM-RETAIL: aplica preset al cambiar el modo del negocio. */
   applyBusinessModePreset(mode: BusinessMode): Promise<void>;
+
+  // --- Sprint FIA: cuenta corriente ---
+  /** Valida si el cliente puede fiar `amount`. Llama RPC validate_customer_credit_limit. */
+  validateCustomerCreditLimit(customerId: string, amount: number): Promise<CreditLimitCheck>;
+  /** Registra un pago de fiado (suma al balance del cliente). */
+  recordCreditPayment(input: RecordCreditPaymentInput): Promise<{ newBalance: number }>;
+  /** Lista clientes con deuda (balance < 0), ordenados por monto adeudado desc. */
+  listCustomersWithDebt(): Promise<Array<Customer & { debt: number }>>;
 
   // --- AFIP: documentos fiscales y notas de crédito ---
   /** Documentos AFIP (factura + NC/ND) asociados a una venta. */

@@ -72,6 +72,8 @@ interface FormState {
   ticketShowLogo: boolean;
   ticketShowTaxId: boolean;
   ticketWidthMm: 58 | 80;
+  creditSalesEnabled: boolean;
+  creditSalesDefaultLimit: string;
   posAllowNegativeStock: boolean;
   posMaxDiscountPercent: string;
   posRoundTo: string;
@@ -103,6 +105,8 @@ function tenantToForm(t: Tenant): FormState {
     ticketShowLogo: t.ticketShowLogo,
     ticketShowTaxId: t.ticketShowTaxId,
     ticketWidthMm: t.ticketWidthMm,
+    creditSalesEnabled: t.creditSalesEnabled,
+    creditSalesDefaultLimit: t.creditSalesDefaultLimit == null ? '' : String(t.creditSalesDefaultLimit),
     posAllowNegativeStock: t.posAllowNegativeStock,
     posMaxDiscountPercent: String(t.posMaxDiscountPercent),
     posRoundTo: String(t.posRoundTo),
@@ -194,6 +198,11 @@ export default function Settings() {
         ticketShowLogo: form.ticketShowLogo,
         ticketShowTaxId: form.ticketShowTaxId,
         ticketWidthMm: form.ticketWidthMm,
+        creditSalesEnabled: form.creditSalesEnabled,
+        creditSalesDefaultLimit:
+          form.creditSalesDefaultLimit.trim() === ''
+            ? null
+            : Number(form.creditSalesDefaultLimit),
         posAllowNegativeStock: form.posAllowNegativeStock,
         posMaxDiscountPercent: maxPct,
         posRoundTo: round,
@@ -841,6 +850,34 @@ function PosTab({ form, update }: TabProps) {
             onChange={(e) => update('posRoundTo', e.target.value)}
           />
         </Field>
+      </div>
+
+      <div className="rounded-lg border border-emerald-200 bg-emerald-50/50 p-3">
+        <div className="mb-2 text-xs font-semibold uppercase text-emerald-700">
+          Cuenta corriente del cliente (vender fiado)
+        </div>
+        <CheckRow
+          checked={form.creditSalesEnabled}
+          onChange={(v) => update('creditSalesEnabled', v)}
+          label="Habilitar pago en cuenta corriente"
+          hint="Si está activo, el POS muestra la opción 'Cuenta corriente' como medio de pago. El monto queda como deuda del cliente y se cobra después."
+        />
+        <div className="mt-3 max-w-xs">
+          <Field
+            label="Límite default de deuda por cliente"
+            hint="Monto máximo que un cliente puede deber. Vacío = sin límite. Se puede sobreescribir por cliente en su ficha."
+          >
+            <Input
+              type="number"
+              min="0"
+              step="100"
+              placeholder="Sin límite"
+              value={form.creditSalesDefaultLimit}
+              onChange={(e) => update('creditSalesDefaultLimit', e.target.value)}
+              disabled={!form.creditSalesEnabled}
+            />
+          </Field>
+        </div>
       </div>
 
       <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">

@@ -620,6 +620,7 @@ export default function Pos() {
         mpReady={mpReady}
         tenantTaxCondition={tenant?.taxCondition ?? null}
         businessMode={tenant?.businessMode ?? 'kiosk'}
+        creditSalesEnabled={tenant?.creditSalesEnabled ?? false}
         variantIdByProduct={variantIdByProduct}
         onCompleted={(sale) => {
           setPayModal(false);
@@ -720,6 +721,8 @@ interface PayProps {
   tenantTaxCondition: TaxCondition | null;
   /** Modo del negocio. En retail mostramos un CTA prominente de "Identificar cliente". */
   businessMode: BusinessMode;
+  /** Sprint FIA: si está habilitado, ofrecemos pago "Cuenta corriente". */
+  creditSalesEnabled: boolean;
   /** Map productId -> variantId elegida (Sprint VAR). */
   variantIdByProduct: Record<string, string>;
   onCompleted: (sale: Sale) => void;
@@ -731,7 +734,7 @@ interface PayProps {
   ) => void;
 }
 
-function PaymentModal({ open, onClose, total, mpReady, tenantTaxCondition, businessMode, variantIdByProduct, onCompleted, onPayWithQR }: PayProps) {
+function PaymentModal({ open, onClose, total, mpReady, tenantTaxCondition, businessMode, creditSalesEnabled, variantIdByProduct, onCompleted, onPayWithQR }: PayProps) {
   const { session, activeBranchId } = useAuth();
   const { lines, discount } = useCart();
   const [payments, setPayments] = useState<{ method: PaymentMethod; amount: number }[]>([
@@ -962,7 +965,13 @@ function PaymentModal({ open, onClose, total, mpReady, tenantTaxCondition, busin
               value={p.method}
               onChange={(e) => setRow(i, 'method', e.target.value)}
             >
-              {PAYMENT_METHODS.map((m) => (
+              {PAYMENT_METHODS.filter((m) => {
+                // on_account solo si la feature está habilitada Y hay cliente identificado.
+                if (m.value === 'on_account') {
+                  return creditSalesEnabled && Boolean(receiver?.customerId);
+                }
+                return true;
+              }).map((m) => (
                 <option key={m.value} value={m.value}>
                   {m.label}
                 </option>

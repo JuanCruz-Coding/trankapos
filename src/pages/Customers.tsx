@@ -407,7 +407,9 @@ export default function Customers() {
           {form.id && (
             <CustomerSalesPanel customerId={form.id} businessMode={businessMode} />
           )}
-          {form.id && <CustomerCreditPanel customerId={form.id} />}
+          {form.id && (
+            <CustomerCreditPanel customerId={form.id} customerName={form.legalName} />
+          )}
           <div className="grid gap-3 md:grid-cols-2">
             <Field label="Tipo de documento">
               <select

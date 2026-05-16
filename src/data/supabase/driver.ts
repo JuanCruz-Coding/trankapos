@@ -44,11 +44,13 @@ import type {
   CategoryInput,
   CloseRegisterInput,
   ConsultAfipPadronInput,
+  CreditLimitCheck,
   CreditNoteInput,
   CreditNoteResult,
   CustomerInput,
   CustomerSalesStats,
   DataDriver,
+  RecordCreditPaymentInput,
   ExchangeSaleInput,
   ExchangeSaleResult,
   GenerateCsrInput,
@@ -105,6 +107,8 @@ interface TenantRow {
   business_mode: 'kiosk' | 'retail' | null;
   business_subtype: string | null;
   customer_required_fields: unknown;
+  credit_sales_enabled: boolean | null;
+  credit_sales_default_limit: string | number | null;
   logo_url: string | null;
 }
 
@@ -146,6 +150,9 @@ function mapTenant(r: TenantRow): Tenant {
       address: false,
       birthdate: false,
     },
+    creditSalesEnabled: r.credit_sales_enabled ?? false,
+    creditSalesDefaultLimit:
+      r.credit_sales_default_limit == null ? null : Number(r.credit_sales_default_limit),
     logoUrl: r.logo_url ?? null,
   };
 }
@@ -339,6 +346,7 @@ interface CustomerRow {
   phone: string | null; address: string | null; city: string | null;
   state_province: string | null; birthdate: string | null;
   marketing_opt_in: boolean | null;
+  credit_limit: string | number | null;
   created_at: string; updated_at: string;
 }
 function mapCustomer(r: CustomerRow): Customer {
@@ -354,6 +362,7 @@ function mapCustomer(r: CustomerRow): Customer {
     stateProvince: r.state_province ?? null,
     birthdate: r.birthdate ?? null,
     marketingOptIn: r.marketing_opt_in ?? false,
+    creditLimit: r.credit_limit == null ? null : Number(r.credit_limit),
     active: r.active,
     createdAt: r.created_at, updatedAt: r.updated_at,
   };
@@ -2438,5 +2447,73 @@ class SupabaseDriver implements DataDriver {
       p_mode: mode,
     });
     if (error) throw new Error(error.message);
+  }
+
+  // --- Sprint FIA: cuenta corriente ---
+
+  async validateCustomerCreditLimit(
+    customerId: string,
+    amount: number,
+  ): Promise<CreditLimitCheck> {
+    const s = await this.requireSession();
+    const { data, error } = await this.sb.rpc('validate_customer_credit_limit', {
+      p_tenant_id: s.tenantId,
+      p_customer_id: customerId,
+      p_amount: amount,
+    });
+    if (error) throw new Error(error.message);
+    const row = Array.isArray(data) ? data[0] : data;
+    if (!row) {
+      return { ok: false, currentDebt: 0, limitAmount: null, reason: 'Sin respuesta del servidor' };
+    }
+    return {
+      ok: !!(row as { ok: boolean }).ok,
+      currentDebt: Number((row as { current_debt: string | number }).current_debt ?? 0),
+      limitAmount:
+        (row as { limit_amount: string | number | null }).limit_amount == null
+          ? null
+          : Number((row as { limit_amount: string | number }).limit_amount),
+      reason: (row as { reason: string | null }).reason ?? null,
+    };
+  }
+
+  async recordCreditPayment(
+    input: RecordCreditPaymentInput,
+  ): Promise<{ newBalance: number }> {
+    const s = await this.requireSession();
+    if (input.amount <= 0) throw new Error('El monto debe ser mayor a 0');
+    const { data, error } = await this.sb.rpc('apply_customer_credit_movement', {
+      p_tenant_id: s.tenantId,
+      p_customer_id: input.customerId,
+      p_amount: input.amount,
+      p_reason: 'fiado_payment',
+      p_related_sale_id: null,
+      p_related_doc_id: null,
+      p_notes: input.notes ?? `Pago de fiado (${input.method})`,
+      p_created_by: s.userId,
+      p_expires_at: null,
+    });
+    if (error) throw new Error(error.message);
+    return { newBalance: Number(data ?? 0) };
+  }
+
+  async listCustomersWithDebt(): Promise<Array<Customer & { debt: number }>> {
+    await this.requireSession();
+    // customer_credits con balance < 0 → cliente debe.
+    const { data, error } = await this.sb
+      .from('customer_credits')
+      .select(
+        'balance, customer:customers(id, tenant_id, doc_type, doc_number, legal_name, iva_condition, email, notes, active, phone, address, city, state_province, birthdate, marketing_opt_in, credit_limit, created_at, updated_at)',
+      )
+      .lt('balance', 0)
+      .order('balance', { ascending: true });
+    if (error) throw new Error(error.message);
+    return (data ?? []).flatMap((row) => {
+      const cRaw = (row as { customer: CustomerRow | CustomerRow[] | null }).customer;
+      const c = Array.isArray(cRaw) ? cRaw[0] : cRaw;
+      if (!c) return [];
+      const customer = mapCustomer(c);
+      return [{ ...customer, debt: -Number((row as { balance: string | number }).balance) }];
+    });
   }
 }

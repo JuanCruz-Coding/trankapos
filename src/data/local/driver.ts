@@ -41,8 +41,10 @@ import type {
   CreditNoteResult,
   AfipPadronResult,
   ConsultAfipPadronInput,
+  CreditLimitCheck,
   CustomerInput,
   CustomerSalesStats,
+  RecordCreditPaymentInput,
   DataDriver,
   ExchangeSaleInput,
   ExchangeSaleResult,
@@ -108,6 +110,8 @@ function withTenantDefaults(t: Partial<Tenant> & Pick<Tenant, 'id' | 'name' | 'c
       address: false,
       birthdate: false,
     },
+    creditSalesEnabled: t.creditSalesEnabled ?? false,
+    creditSalesDefaultLimit: t.creditSalesDefaultLimit ?? null,
     logoUrl: t.logoUrl ?? null,
   };
 }
@@ -1399,5 +1403,24 @@ export class LocalDriver implements DataDriver {
   async applyBusinessModePreset(_mode: BusinessMode): Promise<void> {
     await this.requireSession();
     throw new Error('El cambio de modo del negocio requiere modo online.');
+  }
+
+  // --- Sprint FIA: cuenta corriente (stubs offline) ---
+  async validateCustomerCreditLimit(
+    _customerId: string,
+    _amount: number,
+  ): Promise<CreditLimitCheck> {
+    await this.requireSession();
+    return { ok: false, currentDebt: 0, limitAmount: null, reason: 'Requiere modo online' };
+  }
+  async recordCreditPayment(
+    _input: RecordCreditPaymentInput,
+  ): Promise<{ newBalance: number }> {
+    await this.requireSession();
+    throw new Error('Los pagos de cuenta corriente requieren modo online.');
+  }
+  async listCustomersWithDebt(): Promise<Array<Customer & { debt: number }>> {
+    await this.requireSession();
+    return [];
   }
 }

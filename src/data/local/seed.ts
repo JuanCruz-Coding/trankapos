@@ -61,6 +61,8 @@ export async function seedIfEmpty(): Promise<void> {
       address: false,
       birthdate: false,
     },
+    creditSalesEnabled: false,
+    creditSalesDefaultLimit: null,
     logoUrl: null,
   };
 
