@@ -846,6 +846,11 @@ class SupabaseDriver implements DataDriver {
     if (input.posPartialReservesStock !== undefined) patch.pos_partial_reserves_stock = input.posPartialReservesStock;
     if (input.refundPolicy !== undefined) patch.refund_policy = input.refundPolicy;
     if (input.storeCreditValidityMonths !== undefined) patch.store_credit_validity_months = input.storeCreditValidityMonths;
+    if (input.businessMode !== undefined) patch.business_mode = input.businessMode;
+    if (input.businessSubtype !== undefined) patch.business_subtype = input.businessSubtype;
+    if (input.customerRequiredFields !== undefined) patch.customer_required_fields = input.customerRequiredFields;
+    if (input.creditSalesEnabled !== undefined) patch.credit_sales_enabled = input.creditSalesEnabled;
+    if (input.creditSalesDefaultLimit !== undefined) patch.credit_sales_default_limit = input.creditSalesDefaultLimit;
 
     const { data, error } = await this.sb
       .from('tenants')
