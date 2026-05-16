@@ -1,6 +1,7 @@
 import { useState, type PropsWithChildren } from 'react';
 import { Link, NavLink, useLocation, useNavigate } from 'react-router-dom';
 import {
+  BadgeDollarSign,
   BarChart3,
   Boxes,
   Cog,
@@ -48,6 +49,7 @@ const nav: NavItem[] = [
   { to: '/sales', label: 'Ventas', icon: Receipt },
   { to: '/comprobantes', label: 'Comprobantes', icon: FileText, permission: 'view_reports' },
   { to: '/customers', label: 'Clientes', icon: Contact },
+  { to: '/price-lists', label: 'Listas de precios', icon: BadgeDollarSign, permission: 'manage_products' },
   { to: '/reports', label: 'Reportes', icon: BarChart3, permission: 'view_reports' },
   { to: '/branches', label: 'Sucursales', icon: Store, permission: 'manage_branches' },
   { to: '/warehouses', label: 'Depósitos', icon: Boxes, permission: 'manage_branches' },

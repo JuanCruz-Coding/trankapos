@@ -26,6 +26,7 @@ import { data } from '@/data';
 import { getSupabase } from '@/lib/supabase';
 import { useAuth } from '@/stores/auth';
 import { useCart, cartTotals } from '@/stores/cart';
+import { confirmDialog } from '@/lib/dialog';
 import { formatARS } from '@/lib/currency';
 import { lineSubtotal, subMoney, applyDiscount, type DiscountMode } from '@/lib/money';
 import { cn } from '@/lib/utils';
@@ -42,6 +43,7 @@ export default function Pos() {
     discount,
     addProduct,
     updateQty,
+    updatePrice,
     updateLineDiscount,
     removeLine,
     setGlobalDiscount,
@@ -171,13 +173,152 @@ export default function Pos() {
     variants: ProductVariant[];
   } | null>(null);
 
-  /** Agrega una variante concreta al carrito y registra el mapping. */
+  // --- Sprint PRC: lista de precios activa ---
+  // Receiver compartido entre Pos y PaymentModal. Lo levantamos acá para poder
+  // determinar la lista de precios efectiva al agregar productos al carrito
+  // (antes de abrir el modal de cobro).
+  const [receiver, setReceiver] = useState<SaleReceiver | null>(null);
+  // priceListId que el sistema usa para resolver precios. Cae por cascada:
+  // customer.priceListId -> tenant default -> null (cascada del backend).
+  const [activePriceListId, setActivePriceListId] = useState<string | null>(null);
+  // Nombre de la lista activa (para mostrar en UI). Cargado cuando cambia.
+  const [activePriceListName, setActivePriceListName] = useState<string | null>(null);
+
+  // Carga la lista default del tenant si todavía no hay receiver.
+  useEffect(() => {
+    if (!session || receiver?.customerId) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const lists = await data.listPriceLists({ activeOnly: true });
+        if (cancelled) return;
+        const def = lists.find((l) => l.isDefault) ?? null;
+        setActivePriceListId(def?.id ?? null);
+        setActivePriceListName(def?.name ?? null);
+      } catch {
+        // No bloqueamos: el backend resuelve cascada igualmente si pasamos null.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [session?.tenantId, receiver?.customerId]);
+
+  // Cuando el receiver tiene customerId, leemos su lista asignada (puede ser null
+  // si usa la default del comercio).
+  useEffect(() => {
+    if (!receiver?.customerId) return;
+    let cancelled = false;
+    const customerId = receiver.customerId;
+    (async () => {
+      try {
+        const [customer, lists] = await Promise.all([
+          data.getCustomer(customerId),
+          data.listPriceLists({ activeOnly: true }),
+        ]);
+        if (cancelled) return;
+        const target = customer?.priceListId
+          ? lists.find((l) => l.id === customer.priceListId) ?? null
+          : lists.find((l) => l.isDefault) ?? null;
+        setActivePriceListId(target?.id ?? null);
+        setActivePriceListName(target?.name ?? null);
+      } catch {
+        // Silencioso: el POS sigue funcionando con cascada del backend.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [receiver?.customerId]);
+
+  /**
+   * Recalcula los precios de todas las líneas del carrito según la lista
+   * activa. Lo usamos cuando el cajero cambia el cliente mid-cart.
+   */
+  const recalcCartPrices = useCallback(
+    async (priceListId: string | null) => {
+      if (lines.length === 0) return;
+      try {
+        const updates = await Promise.all(
+          lines.map(async (line) => {
+            const variantId = variantIdByProduct[line.productId];
+            const newPrice = await data.getEffectivePrice({
+              productId: line.productId,
+              variantId: variantId ?? null,
+              priceListId,
+            });
+            return { productId: line.productId, price: newPrice };
+          }),
+        );
+        for (const u of updates) {
+          updatePrice(u.productId, u.price);
+        }
+        toast.success('Precios recalculados');
+      } catch (err) {
+        toast.error(`No se pudieron recalcular los precios: ${(err as Error).message}`);
+      }
+    },
+    [lines, updatePrice],
+    // variantIdByProduct se lee de cierre pero no lo pongo en deps porque
+    // los precios se recalculan justo después de cambiar el receiver y
+    // las líneas siempre traen su variantId ya bindeado.
+  );
+
+  // Cuando cambia el receiver (y por ende activePriceListId), si ya hay items
+  // en el carrito, ofrecer recalcular. NO recalculamos automático porque puede
+  // ser una decisión del cajero (el cliente puede haber acordado un precio
+  // distinto al de la lista).
+  const lastReceiverCustomerId = useRef<string | null | undefined>(undefined);
+  useEffect(() => {
+    const currentCustomerId = receiver?.customerId ?? null;
+    // Skip primera ejecución (cuando todavía no se "cambió" nada).
+    if (lastReceiverCustomerId.current === undefined) {
+      lastReceiverCustomerId.current = currentCustomerId;
+      return;
+    }
+    if (lastReceiverCustomerId.current === currentCustomerId) return;
+    lastReceiverCustomerId.current = currentCustomerId;
+    if (lines.length === 0) return;
+    // Pregunta async: no podemos await directo en el effect, lo encapsulamos.
+    (async () => {
+      const ok = await confirmDialog('Cambió la lista de precios del carrito', {
+        text:
+          'El cliente que seleccionaste puede tener precios distintos. ¿Querés recalcular los ' +
+          'precios del carrito con la lista activa?',
+        confirmText: 'Recalcular',
+        cancelText: 'Mantener precios',
+        icon: 'question',
+      });
+      if (ok) {
+        await recalcCartPrices(activePriceListId);
+      }
+    })();
+    // recalcCartPrices y activePriceListId cambian juntos; quedamos pegados al
+    // customerId que es la fuente real del cambio.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [receiver?.customerId]);
+
+  const [receiverModalOpen, setReceiverModalOpen] = useState(false);
+
+  /** Agrega una variante concreta al carrito y registra el mapping.
+   *  Sprint PRC: resuelve el precio efectivo según la lista activa (cliente o
+   *  default del tenant). Si la llamada falla, hace fallback a la cascada local
+   *  (variant.priceOverride > product.price) para no bloquear la venta. */
   const addVariantToCart = useCallback(
-    (product: Product, variant: ProductVariant) => {
-      // Override de precio si la variante define uno.
+    async (product: Product, variant: ProductVariant) => {
+      let effectivePrice: number = variant.priceOverride ?? product.price;
+      try {
+        effectivePrice = await data.getEffectivePrice({
+          productId: product.id,
+          variantId: variant.id,
+          priceListId: activePriceListId,
+        });
+      } catch {
+        // Fallback silencioso al precio local. El cajero puede ajustar a mano.
+      }
       const productForCart: Product = {
         ...product,
-        price: variant.priceOverride ?? product.price,
+        price: effectivePrice,
       };
       // El display name incluye los atributos para distinguir en el carrito.
       const attrs = Object.entries(variant.attributes)
@@ -190,7 +331,7 @@ export default function Pos() {
       setVariantIdByProduct((prev) => ({ ...prev, [product.id]: variant.id }));
       beepSuccess();
     },
-    [addProduct],
+    [addProduct, activePriceListId],
   );
 
   /**
@@ -219,7 +360,7 @@ export default function Pos() {
           activeVariants.length === 1 &&
           Object.keys(activeVariants[0].attributes).length === 0
         ) {
-          addVariantToCart(product, activeVariants[0]);
+          await addVariantToCart(product, activeVariants[0]);
           return;
         }
         setVariantPicker({ product, variants });
@@ -622,10 +763,16 @@ export default function Pos() {
         businessMode={tenant?.businessMode ?? 'kiosk'}
         creditSalesEnabled={tenant?.creditSalesEnabled ?? false}
         variantIdByProduct={variantIdByProduct}
+        receiver={receiver}
+        onReceiverChange={setReceiver}
+        receiverModalOpen={receiverModalOpen}
+        onReceiverModalChange={setReceiverModalOpen}
+        activePriceListName={activePriceListName}
         onCompleted={(sale) => {
           setPayModal(false);
           clear();
           setVariantIdByProduct({});
+          setReceiver(null);
           setLastSale(sale);
           setRefreshKey((k) => k + 1);
           toast.success('Venta registrada');
@@ -643,7 +790,7 @@ export default function Pos() {
         onClose={() => setVariantPicker(null)}
         onPick={(variant) => {
           if (!variantPicker) return;
-          addVariantToCart(variantPicker.product, variant);
+          void addVariantToCart(variantPicker.product, variant);
           setVariantPicker(null);
         }}
       />
@@ -725,6 +872,13 @@ interface PayProps {
   creditSalesEnabled: boolean;
   /** Map productId -> variantId elegida (Sprint VAR). */
   variantIdByProduct: Record<string, string>;
+  /** Sprint PRC: receiver compartido con Pos para resolver lista de precios. */
+  receiver: SaleReceiver | null;
+  onReceiverChange: (r: SaleReceiver | null) => void;
+  receiverModalOpen: boolean;
+  onReceiverModalChange: (open: boolean) => void;
+  /** Sprint PRC: nombre de la lista de precios activa, para mostrar como hint. */
+  activePriceListName: string | null;
   onCompleted: (sale: Sale) => void;
   /** Se llama cuando se elige cobrar 100% por QR con MP conectado. */
   onPayWithQR?: (
@@ -734,7 +888,7 @@ interface PayProps {
   ) => void;
 }
 
-function PaymentModal({ open, onClose, total, mpReady, tenantTaxCondition, businessMode, creditSalesEnabled, variantIdByProduct, onCompleted, onPayWithQR }: PayProps) {
+function PaymentModal({ open, onClose, total, mpReady, tenantTaxCondition, businessMode, creditSalesEnabled, variantIdByProduct, receiver, onReceiverChange, receiverModalOpen, onReceiverModalChange, activePriceListName, onCompleted, onPayWithQR }: PayProps) {
   const { session, activeBranchId } = useAuth();
   const { lines, discount } = useCart();
   const [payments, setPayments] = useState<{ method: PaymentMethod; amount: number }[]>([
@@ -742,8 +896,6 @@ function PaymentModal({ open, onClose, total, mpReady, tenantTaxCondition, busin
   ]);
   const [partial, setPartial] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [receiver, setReceiver] = useState<SaleReceiver | null>(null);
-  const [receiverModalOpen, setReceiverModalOpen] = useState(false);
 
   // Saldo a favor del cliente seleccionado (Sprint DEV). Solo se carga si el
   // receiver tiene customerId (los receptores inline / ad-hoc no tienen fila
@@ -759,8 +911,10 @@ function PaymentModal({ open, onClose, total, mpReady, tenantTaxCondition, busin
     if (open) {
       setPayments([{ method: 'cash', amount: total }]);
       setPartial(false);
-      setReceiver(null);
       setCustomerCreditBalance(0);
+      // Sprint PRC: NO reseteamos el receiver al abrir el modal. El receiver
+      // ahora vive en Pos para que la lista de precios siga activa al agregar
+      // productos. Se limpia desde Pos cuando se concreta la venta.
     }
   }, [open, total]);
 
@@ -901,7 +1055,7 @@ function PaymentModal({ open, onClose, total, mpReady, tenantTaxCondition, busin
               </div>
             </div>
             <button
-              onClick={() => setReceiver(null)}
+              onClick={() => onReceiverChange(null)}
               className="rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-red-600"
               title="Quitar cliente"
             >
@@ -911,7 +1065,7 @@ function PaymentModal({ open, onClose, total, mpReady, tenantTaxCondition, busin
         ) : businessMode === 'retail' ? (
           <button
             type="button"
-            onClick={() => setReceiverModalOpen(true)}
+            onClick={() => onReceiverModalChange(true)}
             className="flex w-full items-center gap-2 text-left font-semibold text-brand-700 hover:text-brand-800"
           >
             <UserPlus className="h-5 w-5 shrink-0" />
@@ -925,7 +1079,7 @@ function PaymentModal({ open, onClose, total, mpReady, tenantTaxCondition, busin
         ) : (
           <button
             type="button"
-            onClick={() => setReceiverModalOpen(true)}
+            onClick={() => onReceiverModalChange(true)}
             className="flex w-full items-center gap-2 text-left text-slate-600 hover:text-navy"
           >
             <UserPlus className="h-4 w-4" />
@@ -933,6 +1087,14 @@ function PaymentModal({ open, onClose, total, mpReady, tenantTaxCondition, busin
           </button>
         )}
       </div>
+
+      {/* Sprint PRC: hint de la lista de precios activa, para que el cajero sepa
+          con qué tabla estamos cobrando. */}
+      {activePriceListName && (
+        <div className="mb-3 text-[11px] text-slate-500">
+          Lista de precios activa: <strong>{activePriceListName}</strong>
+        </div>
+      )}
 
       {/* Saldo a favor del cliente — solo informativo por ahora (Sprint DEV).
           TODO Sprint DEV.fix: cuando el backend exponga una RPC atómica que
@@ -1062,8 +1224,8 @@ function PaymentModal({ open, onClose, total, mpReady, tenantTaxCondition, busin
 
       <ReceiverSelectorModal
         open={receiverModalOpen}
-        onClose={() => setReceiverModalOpen(false)}
-        onConfirm={(r) => setReceiver(r)}
+        onClose={() => onReceiverModalChange(false)}
+        onConfirm={(r) => onReceiverChange(r)}
       />
     </Modal>
   );

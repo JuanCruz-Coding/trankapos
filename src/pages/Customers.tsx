@@ -9,6 +9,7 @@ import { PageHeader } from '@/components/ui/PageHeader';
 import { CustomerCreditPanel } from '@/components/customers/CustomerCreditPanel';
 import { CustomerSalesPanel } from '@/components/customers/CustomerSalesPanel';
 import { data } from '@/data';
+import { getSupabase } from '@/lib/supabase';
 import { toast } from '@/stores/toast';
 import { confirmDialog } from '@/lib/dialog';
 import { formatCuit, validateDocument } from '@/lib/cuitValidator';
@@ -20,6 +21,7 @@ import {
   type CustomerDocType,
   type CustomerIvaCondition,
   type CustomerRequiredFields,
+  type PriceList,
   type Tenant,
 } from '@/types';
 
@@ -38,6 +40,8 @@ interface FormState {
   stateProvince: string;
   birthdate: string;
   marketingOptIn: boolean;
+  // Sprint PRC: lista de precios asignada. '' = usa la default.
+  priceListId: string;
 }
 
 const emptyForm: FormState = {
@@ -53,6 +57,7 @@ const emptyForm: FormState = {
   stateProvince: '',
   birthdate: '',
   marketingOptIn: false,
+  priceListId: '',
 };
 
 /** Defaults conservadores si el tenant todavía no setteó los required_fields. */
@@ -89,6 +94,8 @@ export default function Customers() {
   const [creditByCustomer, setCreditByCustomer] = useState<Record<string, number>>({});
   // Sprint FIA: modal de cuenta corriente del cliente.
   const [statementFor, setStatementFor] = useState<{ id: string; name: string } | null>(null);
+  // Sprint PRC: listas de precios activas para asignar al cliente.
+  const [priceLists, setPriceLists] = useState<PriceList[]>([]);
 
   // Required fields del tenant. Lo cargamos junto con el tenant. Si no llegó
   // todavía o no está configurado, usamos los defaults conservadores.
@@ -102,12 +109,14 @@ export default function Customers() {
   async function load() {
     setLoading(true);
     try {
-      const [list, t] = await Promise.all([
+      const [list, t, pls] = await Promise.all([
         data.listCustomers({ activeOnly: true }),
         data.getTenant().catch(() => null),
+        data.listPriceLists({ activeOnly: true }).catch(() => [] as PriceList[]),
       ]);
       setCustomers(list);
       setTenant(t);
+      setPriceLists(pls);
       // Carga los saldos en paralelo para los primeros 50 visibles.
       // Si un cliente no tiene fila en customer_credits, getCustomerCredit
       // devuelve null (balance=0 efectivo).
@@ -164,6 +173,7 @@ export default function Customers() {
       stateProvince: c.stateProvince ?? '',
       birthdate: c.birthdate ?? '',
       marketingOptIn: c.marketingOptIn ?? false,
+      priceListId: c.priceListId ?? '',
     });
     setModalOpen(true);
   }
@@ -269,12 +279,31 @@ export default function Customers() {
         birthdate: form.birthdate.trim() || null,
         marketingOptIn: form.marketingOptIn,
       };
+      let customerId: string;
       if (form.id) {
-        await data.updateCustomer(form.id, payload);
+        const updated = await data.updateCustomer(form.id, payload);
+        customerId = updated.id;
         toast.success('Cliente actualizado');
       } else {
-        await data.createCustomer(payload);
+        const created = await data.createCustomer(payload);
+        customerId = created.id;
         toast.success('Cliente creado');
+      }
+      // Sprint PRC: persistir la lista de precios asignada.
+      // TODO: cuando CustomerInput.priceListId esté en el driver, mover esto al payload.
+      // Por ahora lo escribimos directo a la tabla (RLS valida tenant).
+      try {
+        const sb = getSupabase();
+        const { error } = await sb
+          .from('customers')
+          .update({ price_list_id: form.priceListId || null })
+          .eq('id', customerId);
+        if (error) {
+          // No bloqueamos el flujo principal — el customer se guardó OK.
+          toast.error(`No se pudo guardar la lista de precios: ${error.message}`);
+        }
+      } catch (err) {
+        toast.error(`No se pudo guardar la lista de precios: ${(err as Error).message}`);
       }
       setModalOpen(false);
       await load();
@@ -305,6 +334,11 @@ export default function Customers() {
     CUSTOMER_IVA_CONDITIONS.find((c) => c.value === v)?.label ?? v;
   const docTypeLabel = (v: CustomerDocType) =>
     CUSTOMER_DOC_TYPES.find((d) => d.value === v)?.label ?? String(v);
+  // Sprint PRC: nombre de la lista asignada al cliente (null = default).
+  const priceListLabel = (id: string | null) => {
+    if (!id) return null;
+    return priceLists.find((p) => p.id === id)?.name ?? null;
+  };
 
   return (
     <div>
@@ -351,6 +385,7 @@ export default function Customers() {
                 <th className="px-3 py-2">Documento</th>
                 <th className="px-3 py-2">Condición IVA</th>
                 <th className="px-3 py-2">Email</th>
+                <th className="px-3 py-2">Lista</th>
                 <th className="px-3 py-2">Saldo</th>
                 <th className="px-3 py-2 w-24"></th>
               </tr>
@@ -366,6 +401,18 @@ export default function Customers() {
                   </td>
                   <td className="px-3 py-2">{ivaLabel(c.ivaCondition)}</td>
                   <td className="px-3 py-2 text-slate-600">{c.email ?? '—'}</td>
+                  <td className="px-3 py-2 text-slate-600">
+                    {priceListLabel(c.priceListId) ? (
+                      <span
+                        className="inline-flex rounded-full bg-ice px-2 py-0.5 text-[11px] font-medium text-navy"
+                        title="Lista de precios asignada"
+                      >
+                        {priceListLabel(c.priceListId)}
+                      </span>
+                    ) : (
+                      <span className="text-slate-400 text-xs">Default</span>
+                    )}
+                  </td>
                   <td className="px-3 py-2 text-right tabular-nums">
                     {balance > 0 ? (
                       <span className="font-semibold text-emerald-700">{formatARS(balance)}</span>
@@ -537,6 +584,26 @@ export default function Customers() {
               value={form.notes}
               onChange={(e) => update('notes', e.target.value)}
             />
+          </Field>
+
+          <Field label="Lista de precios asignada">
+            <select
+              className="h-10 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm"
+              value={form.priceListId}
+              onChange={(e) => update('priceListId', e.target.value)}
+            >
+              <option value="">Usa la lista General (default del comercio)</option>
+              {priceLists.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.name}
+                  {p.isDefault ? ' (default)' : ''}
+                </option>
+              ))}
+            </select>
+            <div className="mt-1 text-[11px] text-slate-500">
+              Sus compras en el POS van a usar los precios de esta lista. Si la dejás vacía, se
+              usa la default del comercio.
+            </div>
           </Field>
 
           <label className="flex items-start gap-2 rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm">

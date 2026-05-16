@@ -19,6 +19,7 @@ import Reports from '@/pages/Reports';
 import Sales from '@/pages/Sales';
 import Comprobantes from '@/pages/Comprobantes';
 import Customers from '@/pages/Customers';
+import PriceLists from '@/pages/PriceLists';
 import Stock from '@/pages/Stock';
 import Transfers from '@/pages/Transfers';
 import Help from '@/pages/Help';
@@ -92,6 +93,14 @@ export function App() {
             }
           />
           <Route path="customers" element={<Customers />} />
+          <Route
+            path="price-lists"
+            element={
+              <ProtectedRoute permission="manage_products">
+                <PriceLists />
+              </ProtectedRoute>
+            }
+          />
           <Route
             path="reports"
             element={
