@@ -133,7 +133,13 @@ export function PriceListItemsEditor({ priceListId, isDefault }: Props) {
 
   /**
    * Guarda un precio para (productId, variantId|null).
-   * Si el input está vacío y existe un item → lo borra (vuelve a cascada).
+   * Si el input está vacío O es 0, borra el item (vuelve a cascada).
+   *
+   * Best practice (Shopify/BSale): un override en una price list NO puede ser 0.
+   * Si el comercio quiere "vender gratis", debe usar una promoción 100% off
+   * (es lo correcto fiscalmente además — un precio 0 confunde a AFIP). El bug
+   * histórico era que dejar la celda en "0" guardaba override $0 → cascada
+   * resolvía 0 y el producto entraba al cart en $0 (caso 7Up).
    */
   async function saveRow(productId: string, variantId: string | null, raw: string) {
     const key = itemKey(productId, variantId);
@@ -141,14 +147,14 @@ export function PriceListItemsEditor({ priceListId, isDefault }: Props) {
     const trimmed = raw.trim();
     setSavingKey(key);
     try {
-      if (trimmed === '') {
-        // Vaciar = borrar item si existía.
+      const isEmptyOrZero = trimmed === '' || Number(trimmed) === 0;
+      if (isEmptyOrZero) {
+        // Vaciar o cero = borrar item si existía. No es válido como override.
         if (existing) {
           await data.deletePriceListItem(existing.id);
           setItems((prev) => prev.filter((i) => i.id !== existing.id));
           toast.success('Precio quitado de la lista');
         }
-        // Si no existía, no hay nada que hacer (el draft estaba vacío).
         return;
       }
       const price = Number(trimmed);
