@@ -53,26 +53,38 @@ export function BarcodeSvg({
       setFailed(true);
       return;
     }
-    const resolved = format === 'auto' ? detectFormat(trimmed) : format;
-    try {
-      // Limpiamos el contenido del svg antes de re-renderizar.
-      while (ref.current.firstChild) ref.current.removeChild(ref.current.firstChild);
-      JsBarcode(ref.current, trimmed, {
-        format: resolved,
-        width,
-        height,
-        displayValue,
-        fontSize,
-        margin: 0,
-        background: '#ffffff',
-        lineColor: '#000000',
-      });
-      setFailed(false);
-    } catch {
-      // jsbarcode tira si el value no es válido para el formato (ej. EAN13 con menos
-      // de 13 dígitos o checksum mal). Caemos al placeholder.
-      setFailed(true);
+
+    // En modo 'auto', si el detect inicial (EAN13/EAN8) falla por checksum
+    // inválido, hacemos fallback a CODE128 que acepta cualquier alfanumérico.
+    // Mucho comercio tiene códigos de 13 dígitos que NO son EAN reales (ej.
+    // generados a mano o importados de Excel). Sin el fallback dicen "Sin
+    // código" injustamente. CODE128 los renderiza igual.
+    const formats: ('CODE128' | 'EAN13' | 'EAN8')[] =
+      format === 'auto'
+        ? [detectFormat(trimmed), 'CODE128']
+        : [format];
+
+    let rendered = false;
+    for (const f of formats) {
+      try {
+        while (ref.current.firstChild) ref.current.removeChild(ref.current.firstChild);
+        JsBarcode(ref.current, trimmed, {
+          format: f,
+          width,
+          height,
+          displayValue,
+          fontSize,
+          margin: 0,
+          background: '#ffffff',
+          lineColor: '#000000',
+        });
+        rendered = true;
+        break;
+      } catch {
+        // Probar siguiente formato del fallback chain.
+      }
     }
+    setFailed(!rendered);
   }, [value, format, width, height, displayValue, fontSize]);
 
   if (failed || !value?.trim()) {
