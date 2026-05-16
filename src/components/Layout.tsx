@@ -44,6 +44,7 @@ const nav: NavItem[] = [
   { to: '/pos', label: 'Vender', icon: ShoppingCart },
   { to: '/dashboard', label: 'Dashboard', icon: LayoutDashboard, permission: 'view_reports' },
   { to: '/products', label: 'Productos', icon: Package },
+  { to: '/brands', label: 'Marcas', icon: Tag, permission: 'manage_products' },
   { to: '/labels', label: 'Etiquetas', icon: Tag, permission: 'manage_products' },
   { to: '/stock', label: 'Stock', icon: Boxes },
   { to: '/transfers', label: 'Transferencias', icon: TrendingUp, permission: 'do_transfers' },

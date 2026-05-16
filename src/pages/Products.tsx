@@ -17,7 +17,7 @@ import { productSchema, safeParse } from '@/lib/schemas';
 import { confirmDialog } from '@/lib/dialog';
 import { AttributeKeysInput } from '@/components/products/AttributeKeysInput';
 import { VariantEditor } from '@/components/products/VariantEditor';
-import type { Product, ProductVariant } from '@/types';
+import { UNITS_OF_MEASURE, type Brand, type Category, type Product, type ProductVariant, type UnitOfMeasure } from '@/types';
 
 interface FormState {
   id?: string;
@@ -32,6 +32,14 @@ interface FormState {
   allowSaleWhenZero: boolean;
   active: boolean;
   initialStock: Record<string, { qty: string; minQty: string }>;
+  // --- Sprint PROD-RETAIL ---
+  brandId: string;
+  description: string;
+  unitOfMeasure: UnitOfMeasure;
+  /** Tags como string CSV en el form, se convierte a array al guardar. */
+  tagsText: string;
+  imageUrl: string;
+  season: string;
   // --- Sprint VAR ---
   hasVariants: boolean;
   attributeKeys: string[];
@@ -53,11 +61,39 @@ const emptyForm: FormState = {
   allowSaleWhenZero: false,
   active: true,
   initialStock: {},
+  brandId: '',
+  description: '',
+  unitOfMeasure: 'unit',
+  tagsText: '',
+  imageUrl: '',
+  season: '',
   hasVariants: false,
   attributeKeys: [],
   variants: [],
   originalVariantIds: [],
 };
+
+/**
+ * Sprint PROD-RETAIL: render del select de categorías mostrando jerarquía
+ * (rubro padre + sub-rubros indentados con "└─"). Hace orden estable
+ * (padre → sus hijos), independiente del sort_order.
+ */
+function renderCategoryOptions(categories: Category[]) {
+  const roots = categories.filter((c) => !c.parentId);
+  return roots.flatMap((root) => {
+    const children = categories.filter((c) => c.parentId === root.id);
+    return [
+      <option key={root.id} value={root.id}>
+        {root.name}
+      </option>,
+      ...children.map((c) => (
+        <option key={c.id} value={c.id}>
+          {'   └─ '}{c.name}
+        </option>
+      )),
+    ];
+  });
+}
 
 type ImportPhase = 'idle' | 'preview' | 'running' | 'done';
 
@@ -79,6 +115,7 @@ export default function Products() {
     return data.listProducts();
   }, [session?.tenantId, refreshKey]);
   const categories = useLiveQuery(() => data.listCategories(), [session?.tenantId, refreshKey]);
+  const brands = useLiveQuery(() => data.listBrands({ activeOnly: true }), [session?.tenantId, refreshKey]);
   const branches = useLiveQuery(() => data.listBranches(), [session?.tenantId]);
   const warehouses = useLiveQuery(() => data.listWarehouses(), [session?.tenantId]);
   const stock = useLiveQuery(() => data.listStock(), [session?.tenantId, refreshKey]);
@@ -166,6 +203,12 @@ export default function Products() {
       allowSaleWhenZero: p.allowSaleWhenZero,
       active: p.active,
       initialStock: {},
+      brandId: p.brandId ?? '',
+      description: p.description ?? '',
+      unitOfMeasure: p.unitOfMeasure,
+      tagsText: (p.tags ?? []).join(', '),
+      imageUrl: p.imageUrl ?? '',
+      season: p.season ?? '',
       hasVariants,
       attributeKeys: Array.from(keysSet),
       variants: pvariants,
@@ -190,6 +233,19 @@ export default function Products() {
     });
     if (!parsed.ok) return toast.error(parsed.error);
 
+    // Sprint PROD-RETAIL: campos extra que el schema no valida pero que mandamos al driver.
+    const retailExtras = {
+      brandId: form.brandId || null,
+      description: form.description.trim() || null,
+      unitOfMeasure: form.unitOfMeasure,
+      tags: form.tagsText
+        .split(',')
+        .map((t) => t.trim())
+        .filter((t) => t.length > 0),
+      imageUrl: form.imageUrl.trim() || null,
+      season: form.season.trim() || null,
+    };
+
     // Validación de variantes (solo si hasVariants).
     if (form.hasVariants) {
       if (form.variants.length === 0) {
@@ -208,7 +264,7 @@ export default function Products() {
     try {
       let productId = form.id;
       if (form.id) {
-        await data.updateProduct(form.id, parsed.data);
+        await data.updateProduct(form.id, { ...parsed.data, ...retailExtras });
       } else {
         const initialStock = Object.entries(form.initialStock)
           .map(([warehouseId, v]) => ({
@@ -217,7 +273,7 @@ export default function Products() {
             minQty: Number(v.minQty) || 0,
           }))
           .filter((x) => x.qty > 0 || x.minQty > 0);
-        const created = await data.createProduct({ ...parsed.data, initialStock });
+        const created = await data.createProduct({ ...parsed.data, ...retailExtras, initialStock });
         productId = created.id;
       }
 
@@ -662,13 +718,27 @@ export default function Products() {
                 onChange={(e) => setForm({ ...form, categoryId: e.target.value })}
               >
                 <option value="">Sin categoría</option>
-                {(categories ?? []).map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {c.name}
+                {renderCategoryOptions(categories ?? [])}
+              </select>
+            </div>
+            <div>
+              <label className="mb-1 block text-xs font-medium text-slate-700">Marca</label>
+              <select
+                className="h-10 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm"
+                value={form.brandId}
+                onChange={(e) => setForm({ ...form, brandId: e.target.value })}
+              >
+                <option value="">Sin marca</option>
+                {(brands ?? []).map((b) => (
+                  <option key={b.id} value={b.id}>
+                    {b.name}
                   </option>
                 ))}
               </select>
             </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
             <div>
               <label className="mb-1 block text-xs font-medium text-slate-700">IVA %</label>
               <Input
@@ -679,7 +749,70 @@ export default function Products() {
                 onChange={(e) => setForm({ ...form, taxRate: e.target.value })}
               />
             </div>
+            <div>
+              <label className="mb-1 block text-xs font-medium text-slate-700">Unidad de medida</label>
+              <select
+                className="h-10 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm"
+                value={form.unitOfMeasure}
+                onChange={(e) =>
+                  setForm({ ...form, unitOfMeasure: e.target.value as UnitOfMeasure })
+                }
+              >
+                {UNITS_OF_MEASURE.map((u) => (
+                  <option key={u.value} value={u.value}>
+                    {u.label}
+                  </option>
+                ))}
+              </select>
+            </div>
           </div>
+
+          <details className="rounded-lg border border-slate-200 bg-slate-50">
+            <summary className="cursor-pointer px-3 py-2 text-xs font-medium text-slate-700">
+              Datos adicionales (descripción, tags, imagen, temporada)
+            </summary>
+            <div className="space-y-3 px-3 pb-3">
+              <div>
+                <label className="mb-1 block text-xs font-medium text-slate-700">Descripción</label>
+                <textarea
+                  rows={3}
+                  className="w-full rounded-lg border border-slate-300 bg-white p-2 text-sm"
+                  value={form.description}
+                  onChange={(e) => setForm({ ...form, description: e.target.value })}
+                  placeholder="Detalle del producto (opcional, sirve para tickets largos y catálogo)"
+                />
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="mb-1 block text-xs font-medium text-slate-700">
+                    Tags (separados por coma)
+                  </label>
+                  <Input
+                    value={form.tagsText}
+                    onChange={(e) => setForm({ ...form, tagsText: e.target.value })}
+                    placeholder="oferta, premium, nuevo"
+                  />
+                </div>
+                <div>
+                  <label className="mb-1 block text-xs font-medium text-slate-700">Temporada</label>
+                  <Input
+                    value={form.season}
+                    onChange={(e) => setForm({ ...form, season: e.target.value })}
+                    placeholder="Verano 2026"
+                  />
+                </div>
+              </div>
+              <div>
+                <label className="mb-1 block text-xs font-medium text-slate-700">URL de imagen</label>
+                <Input
+                  type="url"
+                  value={form.imageUrl}
+                  onChange={(e) => setForm({ ...form, imageUrl: e.target.value })}
+                  placeholder="https://…"
+                />
+              </div>
+            </div>
+          </details>
 
           {!form.id && warehouses && warehouses.length > 0 && (
             <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
