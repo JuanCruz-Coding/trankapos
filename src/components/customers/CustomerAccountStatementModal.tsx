@@ -1,13 +1,14 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Printer, Download, DollarSign } from 'lucide-react';
+import { Printer, Download, DollarSign, FileText } from 'lucide-react';
 import { Modal } from '@/components/ui/Modal';
 import { Button } from '@/components/ui/Button';
 import { data } from '@/data';
 import { toast } from '@/stores/toast';
 import { formatARS } from '@/lib/currency';
 import { cn } from '@/lib/utils';
-import type { CustomerCreditMovement } from '@/types';
+import type { CustomerCreditMovement, Sale, Tenant } from '@/types';
 import { RecordCreditPaymentModal } from './RecordCreditPaymentModal';
+import { ReceiptModal } from '@/components/pos/ReceiptModal';
 
 interface Props {
   open: boolean;
@@ -29,6 +30,8 @@ interface LedgerRow {
   date: string;
   concept: string;
   reference: string;
+  /** Si está, hace clickeable la referencia para abrir el ticket/factura. */
+  relatedSaleId: string | null;
   /** Aumenta la deuda del cliente con el comercio. */
   debe: number;
   /** Reduce la deuda o suma a favor del cliente. */
@@ -106,6 +109,7 @@ export function CustomerAccountStatementModal({
         reference: m.relatedSaleId
           ? `Venta ${m.relatedSaleId.slice(0, 8)}…`
           : m.notes ?? '',
+        relatedSaleId: m.relatedSaleId,
         debe,
         haber,
         balance: running,
@@ -114,6 +118,31 @@ export function CustomerAccountStatementModal({
     }
     return rows.reverse(); // mostrar más reciente arriba
   }, [movements]);
+
+  // --- Visor de comprobantes (Sprint REPRINT) ---
+  const [viewingSale, setViewingSale] = useState<Sale | null>(null);
+  const [tenant, setTenant] = useState<Tenant | null>(null);
+  const [loadingSale, setLoadingSale] = useState(false);
+
+  async function handleViewReceipt(saleId: string) {
+    setLoadingSale(true);
+    try {
+      const [sale, t] = await Promise.all([
+        data.getSale(saleId),
+        tenant ? Promise.resolve(tenant) : data.getTenant(),
+      ]);
+      if (!sale) {
+        toast.error('No se encontró la venta');
+        return;
+      }
+      if (!tenant) setTenant(t);
+      setViewingSale(sale);
+    } catch (err) {
+      toast.error((err as Error).message);
+    } finally {
+      setLoadingSale(false);
+    }
+  }
 
   const totals = useMemo(() => {
     return ledger.reduce(
@@ -276,7 +305,22 @@ export function CustomerAccountStatementModal({
                           <span className="ml-1 text-[10px] text-red-600">(vencido)</span>
                         )}
                       </td>
-                      <td className="py-2 pr-3 text-slate-500">{r.reference || '—'}</td>
+                      <td className="py-2 pr-3 text-slate-500">
+                        {r.relatedSaleId ? (
+                          <button
+                            type="button"
+                            onClick={() => handleViewReceipt(r.relatedSaleId!)}
+                            disabled={loadingSale}
+                            className="inline-flex items-center gap-1 text-brand-600 hover:text-brand-800 hover:underline disabled:opacity-50"
+                            title="Ver comprobante"
+                          >
+                            <FileText className="h-3.5 w-3.5" />
+                            {r.reference}
+                          </button>
+                        ) : (
+                          r.reference || '—'
+                        )}
+                      </td>
                       <td className="py-2 pr-3 text-right tabular-nums">
                         {r.debe > 0 ? formatARS(r.debe) : '—'}
                       </td>
@@ -351,6 +395,15 @@ export function CustomerAccountStatementModal({
         onClose={() => setRecordPaymentOpen(false)}
         onRecorded={() => setRefreshKey((k) => k + 1)}
       />
+
+      {viewingSale && tenant && (
+        <ReceiptModal
+          sale={viewingSale}
+          tenant={tenant}
+          mode="view"
+          onClose={() => setViewingSale(null)}
+        />
+      )}
     </>
   );
 }

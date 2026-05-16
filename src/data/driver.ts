@@ -506,6 +506,8 @@ export interface DataDriver {
   createSale(input: SaleInput): Promise<Sale>;
   voidSale(id: string): Promise<void>;
   listSales(q: SalesQuery): Promise<Sale[]>;
+  /** Sprint REPRINT: cargar una venta puntual por id (para ReceiptModal modo view). */
+  getSale(id: string): Promise<Sale | null>;
   /** Agrega pagos a una venta con status=partial. Promueve a paid si cubren el saldo. */
   addPaymentToSale(input: AddPaymentInput): Promise<Sale>;
 

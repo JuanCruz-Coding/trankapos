@@ -25,6 +25,7 @@ export const PERMISSION_KEYS: readonly Permission[] = [
   'manage_settings',
   'apply_discount_above_default',
   'cash_register_open_close',
+  'reprint_documents',
 ] as const;
 
 export const PERMISSION_LABELS: Record<Permission, string> = {
@@ -40,6 +41,7 @@ export const PERMISSION_LABELS: Record<Permission, string> = {
   manage_settings: 'Cambiar configuración del comercio',
   apply_discount_above_default: 'Aplicar descuentos sobre el tope general',
   cash_register_open_close: 'Abrir y cerrar cajas',
+  reprint_documents: 'Reimprimir tickets y facturas',
 };
 
 export const PERMISSION_DESCRIPTIONS: Record<Permission, string> = {
@@ -59,6 +61,8 @@ export const PERMISSION_DESCRIPTIONS: Record<Permission, string> = {
   apply_discount_above_default:
     'Permite aplicar descuentos mayores al "Descuento máximo" definido en Configuración → POS.',
   cash_register_open_close: 'Permite abrir y cerrar la caja del turno.',
+  reprint_documents:
+    'Permite reimprimir tickets de venta y facturas AFIP desde el historial. Útil restringirlo a manager+ para evitar reimpresiones fraudulentas.',
 };
 
 const ALL_TRUE: Record<Permission, boolean> = PERMISSION_KEYS.reduce(
@@ -80,6 +84,7 @@ export const PERMISSION_DEFAULTS_BY_ROLE: Record<Role, Record<Permission, boolea
     manage_settings: false,
     apply_discount_above_default: false,
     cash_register_open_close: true,
+    reprint_documents: false,
   },
   manager: {
     view_costs: true,
@@ -94,6 +99,7 @@ export const PERMISSION_DEFAULTS_BY_ROLE: Record<Role, Record<Permission, boolea
     manage_settings: false,
     apply_discount_above_default: true,
     cash_register_open_close: true,
+    reprint_documents: true,
   },
   owner: ALL_TRUE,
 };

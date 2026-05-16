@@ -1072,6 +1072,13 @@ export class LocalDriver implements DataDriver {
     return sales;
   }
 
+  async getSale(id: string): Promise<Sale | null> {
+    const s = await this.requireSession();
+    const sale = await db.sales.get(id);
+    if (!sale || sale.tenantId !== s.tenantId) return null;
+    return sale;
+  }
+
   // --- cash register ---
   async currentOpenRegister(branchId: string): Promise<CashRegister | null> {
     const s = await this.requireSession();

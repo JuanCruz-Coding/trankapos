@@ -437,7 +437,8 @@ export type Permission =
   | 'manage_users'
   | 'manage_settings'
   | 'apply_discount_above_default'
-  | 'cash_register_open_close';
+  | 'cash_register_open_close'
+  | 'reprint_documents';
 
 export type PermissionsMap = Partial<Record<Permission, boolean>>;
 

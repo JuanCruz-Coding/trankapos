@@ -1396,6 +1396,17 @@ class SupabaseDriver implements DataDriver {
     return (data ?? []).map(mapSale);
   }
 
+  async getSale(id: string): Promise<Sale | null> {
+    await this.requireSession();
+    const { data, error } = await this.sb
+      .from('sales')
+      .select('*, sale_items(*), sale_payments(method, amount)')
+      .eq('id', id)
+      .maybeSingle();
+    if (error) throw new Error(error.message);
+    return data ? mapSale(data) : null;
+  }
+
   // ===== CASH REGISTER =====
 
   async currentOpenRegister(branchId: string): Promise<CashRegister | null> {

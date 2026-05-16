@@ -1,11 +1,13 @@
 import { useEffect, useState } from 'react';
-import { Loader2, Printer } from 'lucide-react';
+import { Loader2, Lock, Printer } from 'lucide-react';
 import { QRCodeSVG } from 'qrcode.react';
 import { Modal } from '@/components/ui/Modal';
 import { Button } from '@/components/ui/Button';
+import { Tooltip } from '@/components/ui/Tooltip';
 import { formatARS } from '@/lib/currency';
 import { getSupabase } from '@/lib/supabase';
 import { buildAfipQrUrl, letterToCbteTipo } from '@/lib/afipQr';
+import { usePermission } from '@/lib/permissions';
 import type { Sale, Tenant } from '@/types';
 
 /**
@@ -215,6 +217,10 @@ interface Props {
 
 export function ReceiptModal({ sale, tenant, onClose, mode = 'emit' }: Props) {
   const afip = useAfipDocumentFor(sale, tenant, mode);
+  // Sprint REPRINT: solo roles con permiso pueden reimprimir desde mode 'view'.
+  // En 'emit' (post-cobro) siempre se puede imprimir, es la primera impresión.
+  const canReprint = usePermission('reprint_documents');
+  const canPrint = mode === 'emit' || canReprint;
   if (!sale) return null;
 
   const businessName = tenant?.legalName || tenant?.name || 'TrankaPOS';
@@ -380,9 +386,17 @@ export function ReceiptModal({ sale, tenant, onClose, mode = 'emit' }: Props) {
         <Button variant="outline" className="flex-1" onClick={onClose}>
           Cerrar
         </Button>
-        <Button className="flex-1" onClick={() => window.print()}>
-          <Printer className="h-4 w-4" /> Imprimir
-        </Button>
+        {canPrint ? (
+          <Button className="flex-1" onClick={() => window.print()}>
+            <Printer className="h-4 w-4" /> Imprimir
+          </Button>
+        ) : (
+          <Tooltip label="Tu rol no tiene permiso para reimprimir comprobantes">
+            <Button className="flex-1" disabled>
+              <Lock className="h-4 w-4" /> Reimpresión deshabilitada
+            </Button>
+          </Tooltip>
+        )}
       </div>
     </Modal>
   );
