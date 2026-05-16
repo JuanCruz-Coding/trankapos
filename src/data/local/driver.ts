@@ -10,6 +10,7 @@ import type {
   Category,
   CustomerCredit,
   CustomerCreditMovement,
+  PaymentMethodConfig,
   PermissionsMap,
   Plan,
   PlanUsage,
@@ -52,6 +53,7 @@ import type {
   DataDriver,
   ExchangeSaleInput,
   ExchangeSaleResult,
+  PaymentMethodConfigInput,
   GenerateCsrInput,
   GenerateCsrResult,
   LoginInput,
@@ -1471,5 +1473,26 @@ export class LocalDriver implements DataDriver {
   }): Promise<number> {
     await this.requireSession();
     return 0;
+  }
+
+  // --- Sprint PMP: medios de pago configurables (stubs offline) ---
+  async listPaymentMethods(_opts?: { activeOnly?: boolean }): Promise<PaymentMethodConfig[]> {
+    await this.requireSession();
+    return [];
+  }
+  async createPaymentMethod(_input: PaymentMethodConfigInput): Promise<PaymentMethodConfig> {
+    await this.requireSession();
+    throw new Error('Los medios de pago configurables requieren modo online.');
+  }
+  async updatePaymentMethod(
+    _id: string,
+    _input: Partial<PaymentMethodConfigInput>,
+  ): Promise<PaymentMethodConfig> {
+    await this.requireSession();
+    throw new Error('Los medios de pago configurables requieren modo online.');
+  }
+  async deactivatePaymentMethod(_id: string): Promise<void> {
+    await this.requireSession();
+    throw new Error('Los medios de pago configurables requieren modo online.');
   }
 }

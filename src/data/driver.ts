@@ -12,6 +12,8 @@ import type {
   CustomerCreditMovement,
   CustomerDocType,
   CustomerIvaCondition,
+  PaymentMethod,
+  PaymentMethodConfig,
   PermissionsMap,
   Plan,
   PlanUsage,
@@ -106,7 +108,16 @@ export interface SaleInput {
    * a marcarlo required.
    */
   items: { productId: string; variantId?: string; qty: number; price: number; discount: number }[];
-  payments: { method: Sale['payments'][number]['method']; amount: number }[];
+  /**
+   * Sprint PMP: cada pago puede llevar surchargeAmount y methodConfigId opcionales.
+   * El amount YA incluye el surcharge. El backend valida que sum(amount) = subtotal - discount + sum(surchargeAmount).
+   */
+  payments: {
+    method: Sale['payments'][number]['method'];
+    amount: number;
+    surchargeAmount?: number;
+    methodConfigId?: string | null;
+  }[];
   discount: number;
   /** Si true, la venta es una seña: paid<total OK, status='partial'. */
   partial?: boolean;
@@ -140,6 +151,17 @@ export interface CustomerSalesStats {
 }
 
 // --- Sprint FIA: ventas a cuenta corriente ---
+
+export interface PaymentMethodConfigInput {
+  code: string;
+  label: string;
+  paymentMethodBase: PaymentMethod;
+  cardBrand?: string | null;
+  installments?: number | null;
+  surchargePct?: number;
+  active?: boolean;
+  sortOrder?: number;
+}
 
 export interface PriceListInput {
   code: string;
@@ -583,6 +605,15 @@ export interface DataDriver {
     variantId?: string | null;
     priceListId?: string | null;
   }): Promise<number>;
+
+  // --- Sprint PMP: medios de pago configurables ---
+  listPaymentMethods(opts?: { activeOnly?: boolean }): Promise<PaymentMethodConfig[]>;
+  createPaymentMethod(input: PaymentMethodConfigInput): Promise<PaymentMethodConfig>;
+  updatePaymentMethod(
+    id: string,
+    input: Partial<PaymentMethodConfigInput>,
+  ): Promise<PaymentMethodConfig>;
+  deactivatePaymentMethod(id: string): Promise<void>;
 
   // --- AFIP: documentos fiscales y notas de crédito ---
   /** Documentos AFIP (factura + NC/ND) asociados a una venta. */

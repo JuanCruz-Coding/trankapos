@@ -412,6 +412,28 @@ export interface CustomerCreditMovement {
 export interface SalePayment {
   method: PaymentMethod;
   amount: number;
+  /** Sprint PMP: recargo aplicado al pago (parte de amount). Para reportes. */
+  surchargeAmount?: number;
+  /** Sprint PMP: medio configurado usado, si aplica. */
+  methodConfigId?: string | null;
+}
+
+/** Medio de pago configurable (Sprint PMP). */
+export interface PaymentMethodConfig {
+  id: string;
+  tenantId: string;
+  code: string;
+  label: string;
+  paymentMethodBase: PaymentMethod;
+  /** ej 'visa', 'master', 'naranja', 'cabal'. null si no aplica. */
+  cardBrand: string | null;
+  installments: number | null;
+  /** Recargo en %. Puede ser negativo (descuento). */
+  surchargePct: number;
+  active: boolean;
+  sortOrder: number;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export type SaleStatus = 'paid' | 'partial';
@@ -426,6 +448,8 @@ export interface Sale {
   payments: SalePayment[];
   subtotal: number;
   discount: number;
+  /** Sprint PMP: suma de recargos por medio de pago. total = subtotal - discount + surchargeTotal. */
+  surchargeTotal?: number;
   total: number;
   status: SaleStatus;
   stockReservedMode: boolean;

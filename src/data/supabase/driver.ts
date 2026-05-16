@@ -14,6 +14,7 @@ import type {
   CustomerCreditMovement,
   CustomerDocType,
   PaymentMethod,
+  PaymentMethodConfig,
   PermissionsMap,
   Plan,
   PlanUsage,
@@ -52,6 +53,7 @@ import type {
   CustomerInput,
   CustomerSalesStats,
   DataDriver,
+  PaymentMethodConfigInput,
   PriceListInput,
   PriceListItemInput,
   RecordCreditPaymentInput,
@@ -400,6 +402,26 @@ function mapPriceListItem(r: PriceListItemRow): PriceListItem {
     id: r.id, tenantId: r.tenant_id, priceListId: r.price_list_id,
     productId: r.product_id, variantId: r.variant_id,
     price: Number(r.price),
+  };
+}
+
+// ---------------------------------------------------------------------
+// Sprint PMP: payment method configs
+// ---------------------------------------------------------------------
+interface PaymentMethodConfigRow {
+  id: string; tenant_id: string; code: string; label: string;
+  payment_method_base: PaymentMethod;
+  card_brand: string | null; installments: number | null;
+  surcharge_pct: string | number; active: boolean; sort_order: number;
+  created_at: string; updated_at: string;
+}
+function mapPaymentMethodConfig(r: PaymentMethodConfigRow): PaymentMethodConfig {
+  return {
+    id: r.id, tenantId: r.tenant_id, code: r.code, label: r.label,
+    paymentMethodBase: r.payment_method_base,
+    cardBrand: r.card_brand, installments: r.installments,
+    surchargePct: Number(r.surcharge_pct), active: r.active, sortOrder: r.sort_order,
+    createdAt: r.created_at, updatedAt: r.updated_at,
   };
 }
 
@@ -2682,6 +2704,71 @@ class SupabaseDriver implements DataDriver {
     });
     if (error) throw new Error(error.message);
     return Number(data ?? 0);
+  }
+
+  // --- Sprint PMP: medios de pago configurables ---
+
+  async listPaymentMethods(opts?: { activeOnly?: boolean }): Promise<PaymentMethodConfig[]> {
+    await this.requireSession();
+    let q = this.sb
+      .from('payment_methods_config')
+      .select('*')
+      .order('sort_order', { ascending: true });
+    if (opts?.activeOnly) q = q.eq('active', true);
+    const { data, error } = await q;
+    if (error) throw new Error(error.message);
+    return (data ?? []).map((r) => mapPaymentMethodConfig(r as PaymentMethodConfigRow));
+  }
+
+  async createPaymentMethod(
+    input: PaymentMethodConfigInput,
+  ): Promise<PaymentMethodConfig> {
+    const s = await this.requireSession();
+    const { data, error } = await this.sb
+      .from('payment_methods_config')
+      .insert({
+        tenant_id: s.tenantId,
+        code: input.code,
+        label: input.label,
+        payment_method_base: input.paymentMethodBase,
+        card_brand: input.cardBrand ?? null,
+        installments: input.installments ?? null,
+        surcharge_pct: input.surchargePct ?? 0,
+        active: input.active ?? true,
+        sort_order: input.sortOrder ?? 0,
+      })
+      .select('*')
+      .single();
+    if (error) throw new Error(error.message);
+    return mapPaymentMethodConfig(data as PaymentMethodConfigRow);
+  }
+
+  async updatePaymentMethod(
+    id: string,
+    input: Partial<PaymentMethodConfigInput>,
+  ): Promise<PaymentMethodConfig> {
+    await this.requireSession();
+    const patch: Record<string, unknown> = {};
+    if (input.code !== undefined) patch.code = input.code;
+    if (input.label !== undefined) patch.label = input.label;
+    if (input.paymentMethodBase !== undefined) patch.payment_method_base = input.paymentMethodBase;
+    if (input.cardBrand !== undefined) patch.card_brand = input.cardBrand;
+    if (input.installments !== undefined) patch.installments = input.installments;
+    if (input.surchargePct !== undefined) patch.surcharge_pct = input.surchargePct;
+    if (input.active !== undefined) patch.active = input.active;
+    if (input.sortOrder !== undefined) patch.sort_order = input.sortOrder;
+    const { data, error } = await this.sb
+      .from('payment_methods_config')
+      .update(patch).eq('id', id).select('*').single();
+    if (error) throw new Error(error.message);
+    return mapPaymentMethodConfig(data as PaymentMethodConfigRow);
+  }
+
+  async deactivatePaymentMethod(id: string): Promise<void> {
+    await this.requireSession();
+    const { error } = await this.sb
+      .from('payment_methods_config').update({ active: false }).eq('id', id);
+    if (error) throw new Error(error.message);
   }
 
   async listCustomersWithDebt(): Promise<Array<Customer & { debt: number }>> {
