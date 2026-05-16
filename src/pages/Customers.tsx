@@ -19,6 +19,7 @@ import {
   CUSTOMER_IVA_CONDITIONS,
   type Customer,
   type CustomerDocType,
+  type CustomerGroup,
   type CustomerIvaCondition,
   type CustomerRequiredFields,
   type PriceList,
@@ -42,6 +43,8 @@ interface FormState {
   marketingOptIn: boolean;
   // Sprint PRC: lista de precios asignada. '' = usa la default.
   priceListId: string;
+  // Sprint PROMO: grupo del cliente. '' = sin grupo.
+  groupId: string;
 }
 
 const emptyForm: FormState = {
@@ -58,6 +61,7 @@ const emptyForm: FormState = {
   birthdate: '',
   marketingOptIn: false,
   priceListId: '',
+  groupId: '',
 };
 
 /** Defaults conservadores si el tenant todavía no setteó los required_fields. */
@@ -96,6 +100,8 @@ export default function Customers() {
   const [statementFor, setStatementFor] = useState<{ id: string; name: string } | null>(null);
   // Sprint PRC: listas de precios activas para asignar al cliente.
   const [priceLists, setPriceLists] = useState<PriceList[]>([]);
+  // Sprint PROMO: grupos de clientes activos para asignar.
+  const [customerGroups, setCustomerGroups] = useState<CustomerGroup[]>([]);
 
   // Required fields del tenant. Lo cargamos junto con el tenant. Si no llegó
   // todavía o no está configurado, usamos los defaults conservadores.
@@ -109,14 +115,16 @@ export default function Customers() {
   async function load() {
     setLoading(true);
     try {
-      const [list, t, pls] = await Promise.all([
+      const [list, t, pls, cgs] = await Promise.all([
         data.listCustomers({ activeOnly: true }),
         data.getTenant().catch(() => null),
         data.listPriceLists({ activeOnly: true }).catch(() => [] as PriceList[]),
+        data.listCustomerGroups({ activeOnly: true }).catch(() => [] as CustomerGroup[]),
       ]);
       setCustomers(list);
       setTenant(t);
       setPriceLists(pls);
+      setCustomerGroups(cgs);
       // Carga los saldos en paralelo para los primeros 50 visibles.
       // Si un cliente no tiene fila en customer_credits, getCustomerCredit
       // devuelve null (balance=0 efectivo).
@@ -174,6 +182,7 @@ export default function Customers() {
       birthdate: c.birthdate ?? '',
       marketingOptIn: c.marketingOptIn ?? false,
       priceListId: c.priceListId ?? '',
+      groupId: c.groupId ?? '',
     });
     setModalOpen(true);
   }
@@ -289,21 +298,24 @@ export default function Customers() {
         customerId = created.id;
         toast.success('Cliente creado');
       }
-      // Sprint PRC: persistir la lista de precios asignada.
-      // TODO: cuando CustomerInput.priceListId esté en el driver, mover esto al payload.
+      // Sprint PRC + PROMO: persistir lista de precios + grupo del cliente.
+      // TODO: cuando CustomerInput los soporte, mover al payload.
       // Por ahora lo escribimos directo a la tabla (RLS valida tenant).
       try {
         const sb = getSupabase();
         const { error } = await sb
           .from('customers')
-          .update({ price_list_id: form.priceListId || null })
+          .update({
+            price_list_id: form.priceListId || null,
+            group_id: form.groupId || null,
+          })
           .eq('id', customerId);
         if (error) {
           // No bloqueamos el flujo principal — el customer se guardó OK.
-          toast.error(`No se pudo guardar la lista de precios: ${error.message}`);
+          toast.error(`No se pudo guardar lista/grupo: ${error.message}`);
         }
       } catch (err) {
-        toast.error(`No se pudo guardar la lista de precios: ${(err as Error).message}`);
+        toast.error(`No se pudo guardar lista/grupo: ${(err as Error).message}`);
       }
       setModalOpen(false);
       await load();
@@ -586,13 +598,32 @@ export default function Customers() {
             />
           </Field>
 
+          <Field label="Grupo del cliente">
+            <select
+              className="h-10 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm"
+              value={form.groupId}
+              onChange={(e) => update('groupId', e.target.value)}
+            >
+              <option value="">Sin grupo</option>
+              {customerGroups.map((g) => (
+                <option key={g.id} value={g.id}>
+                  {g.name}
+                </option>
+              ))}
+            </select>
+            <div className="mt-1 text-[11px] text-slate-500">
+              Determina la lista de precios por defecto y filtra promociones (ej. 10% VIP, 2x1
+              mayorista).
+            </div>
+          </Field>
+
           <Field label="Lista de precios asignada">
             <select
               className="h-10 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm"
               value={form.priceListId}
               onChange={(e) => update('priceListId', e.target.value)}
             >
-              <option value="">Usa la lista General (default del comercio)</option>
+              <option value="">Usar la lista del grupo o la default del comercio</option>
               {priceLists.map((p) => (
                 <option key={p.id} value={p.id}>
                   {p.name}
@@ -601,8 +632,8 @@ export default function Customers() {
               ))}
             </select>
             <div className="mt-1 text-[11px] text-slate-500">
-              Sus compras en el POS van a usar los precios de esta lista. Si la dejás vacía, se
-              usa la default del comercio.
+              Sus compras van a usar esta lista. Si la dejás vacía, cae a la lista del grupo y, si
+              tampoco tiene, a la default del comercio (cascada).
             </div>
           </Field>
 

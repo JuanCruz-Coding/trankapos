@@ -308,6 +308,13 @@ export function ReceiptModal({ sale, tenant, onClose, mode = 'emit' }: Props) {
             <span>-{formatARS(sale.discount)}</span>
           </div>
         )}
+        {/* Sprint PROMO: cada promo aplicada como línea negativa en el ticket. */}
+        {(sale.promotions ?? []).map((p) => (
+          <div key={p.id} className="flex justify-between text-[10px] text-emerald-700">
+            <span className="truncate">🏷 {p.promoName}</span>
+            <span>-{formatARS(p.amount)}</span>
+          </div>
+        ))}
         {afip.status === 'authorized' && afip.cbteTipo === 'A' && (() => {
           const totalConIva = sale.total;
           const baseImp = Math.round((totalConIva / 1.21) * 100) / 100;

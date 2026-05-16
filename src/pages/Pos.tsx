@@ -33,7 +33,7 @@ import { cn } from '@/lib/utils';
 import { buildSaleFromCart, summarizeSale } from '@/lib/sales';
 import { beepError, beepSuccess, primeAudio } from '@/lib/sound';
 import { toast } from '@/stores/toast';
-import { PAYMENT_METHODS, type BusinessMode, type PaymentMethod, type PaymentMethodConfig, type Product, type ProductVariant, type Sale, type SaleReceiver, type TaxCondition, type Tenant } from '@/types';
+import { PAYMENT_METHODS, type BusinessMode, type PaymentMethod, type PaymentMethodConfig, type Product, type ProductVariant, type PromotionApplication, type Sale, type SaleReceiver, type TaxCondition, type Tenant } from '@/types';
 import { QRPaymentModal } from '@/components/ui/QRPaymentModal';
 
 export default function Pos() {
@@ -179,10 +179,15 @@ export default function Pos() {
   // (antes de abrir el modal de cobro).
   const [receiver, setReceiver] = useState<SaleReceiver | null>(null);
   // priceListId que el sistema usa para resolver precios. Cae por cascada:
-  // customer.priceListId -> tenant default -> null (cascada del backend).
+  // customer.priceListId -> customer.group.defaultPriceListId -> tenant default -> null.
   const [activePriceListId, setActivePriceListId] = useState<string | null>(null);
   // Nombre de la lista activa (para mostrar en UI). Cargado cuando cambia.
   const [activePriceListName, setActivePriceListName] = useState<string | null>(null);
+  // Sprint PROMO: grupo del cliente (cacheado para no hacer lookup repetido en el engine).
+  const [activeCustomerGroupId, setActiveCustomerGroupId] = useState<string | null>(null);
+  // Sprint PROMO: resultado del engine. Se recalcula cuando cambia el cart o el cliente.
+  const [appliedPromotions, setAppliedPromotions] = useState<PromotionApplication[]>([]);
+  const [promoDiscount, setPromoDiscount] = useState<number>(0);
 
   // Carga la lista default del tenant si todavía no hay receiver.
   useEffect(() => {
@@ -195,6 +200,7 @@ export default function Pos() {
         const def = lists.find((l) => l.isDefault) ?? null;
         setActivePriceListId(def?.id ?? null);
         setActivePriceListName(def?.name ?? null);
+        setActiveCustomerGroupId(null);
       } catch {
         // No bloqueamos: el backend resuelve cascada igualmente si pasamos null.
       }
@@ -204,24 +210,32 @@ export default function Pos() {
     };
   }, [session?.tenantId, receiver?.customerId]);
 
-  // Cuando el receiver tiene customerId, leemos su lista asignada (puede ser null
-  // si usa la default del comercio).
+  // Cuando el receiver tiene customerId, resolvemos la cascada de listas:
+  // customer.priceListId > customer.group.defaultPriceListId > tenant default.
   useEffect(() => {
     if (!receiver?.customerId) return;
     let cancelled = false;
     const customerId = receiver.customerId;
     (async () => {
       try {
-        const [customer, lists] = await Promise.all([
+        const [customer, lists, groups] = await Promise.all([
           data.getCustomer(customerId),
           data.listPriceLists({ activeOnly: true }),
+          data.listCustomerGroups({ activeOnly: true }).catch(() => []),
         ]);
         if (cancelled) return;
-        const target = customer?.priceListId
-          ? lists.find((l) => l.id === customer.priceListId) ?? null
+        // Cascada: priceListId directo del cliente → del grupo → default del comercio.
+        let targetId = customer?.priceListId ?? null;
+        if (!targetId && customer?.groupId) {
+          const grp = groups.find((g) => g.id === customer.groupId);
+          targetId = grp?.defaultPriceListId ?? null;
+        }
+        const target = targetId
+          ? lists.find((l) => l.id === targetId) ?? null
           : lists.find((l) => l.isDefault) ?? null;
         setActivePriceListId(target?.id ?? null);
         setActivePriceListName(target?.name ?? null);
+        setActiveCustomerGroupId(customer?.groupId ?? null);
       } catch {
         // Silencioso: el POS sigue funcionando con cascada del backend.
       }
@@ -230,6 +244,55 @@ export default function Pos() {
       cancelled = true;
     };
   }, [receiver?.customerId]);
+
+  /**
+   * Sprint PROMO: recalcula promociones aplicables cada vez que cambia el cart
+   * o el cliente. Engine cliente-side con stack exclusivo (best descuento por
+   * item). Las promos persisten en sale_promotions al confirmar la venta.
+   */
+  useEffect(() => {
+    if (lines.length === 0 || !products) {
+      setAppliedPromotions([]);
+      setPromoDiscount(0);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        // Construir PromoCartLine[] con categoryId + brandId desde el producto.
+        const productById = new Map(products.map((p) => [p.id, p]));
+        const promoLines = lines.map((l) => {
+          const prod = productById.get(l.productId);
+          return {
+            productId: l.productId,
+            variantId: variantIdByProduct[l.productId] ?? null,
+            qty: l.qty,
+            unitPrice: l.price,
+            categoryId: prod?.categoryId ?? null,
+            brandId: prod?.brandId ?? null,
+          };
+        });
+        const result = await data.applyPromotionsToCart({
+          lines: promoLines,
+          customerId: receiver?.customerId ?? null,
+          customerGroupId: activeCustomerGroupId,
+        });
+        if (cancelled) return;
+        setAppliedPromotions(result.applied);
+        setPromoDiscount(result.totalDiscount);
+      } catch {
+        // Si falla el engine no rompemos el POS; solo no aplicamos promos.
+        if (!cancelled) {
+          setAppliedPromotions([]);
+          setPromoDiscount(0);
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // Re-evalúa cuando: cambia el cart o el cliente o su grupo o las variantes.
+  }, [lines, products, receiver?.customerId, activeCustomerGroupId, variantIdByProduct]);
 
   /**
    * Recalcula los precios de todas las líneas del carrito según la lista
@@ -383,6 +446,8 @@ export default function Pos() {
   }, [products, search]);
 
   const { subtotal, total } = cartTotals(lines, discount);
+  // Sprint PROMO: total efectivo después de descuentos automáticos por promoción.
+  const totalWithPromo = Math.max(0, total - promoDiscount);
 
   // Recalcula el monto del descuento de una línea desde el input crudo + modo.
   function applyLineDiscount(productId: string, raw: string, mode: DiscountMode) {
@@ -642,9 +707,21 @@ export default function Pos() {
               <span>-{formatARS(discount)}</span>
             </div>
           )}
+          {/* Sprint PROMO: cada promo aplicada como línea negativa (best practice
+              Shopify/BSale — el cliente ve el ahorro). */}
+          {appliedPromotions.map((p) => (
+            <div
+              key={p.promotionId}
+              className="mb-1 flex items-center justify-between text-sm text-emerald-700"
+              title={p.description}
+            >
+              <span className="truncate">🏷 {p.promotionName}</span>
+              <span className="tabular-nums">-{formatARS(p.amount)}</span>
+            </div>
+          ))}
           <div className="mb-3 flex items-center justify-between font-display text-lg font-bold text-navy">
             <span>Total</span>
-            <span className="tabular-nums">{formatARS(total)}</span>
+            <span className="tabular-nums">{formatARS(totalWithPromo)}</span>
           </div>
           {!openRegister && (
             <div className="mb-2 flex items-center gap-2 rounded-md bg-amber-50 px-3 py-2 text-xs text-amber-800">
@@ -757,7 +834,7 @@ export default function Pos() {
       <PaymentModal
         open={payModal}
         onClose={() => setPayModal(false)}
-        total={total}
+        total={totalWithPromo}
         mpReady={mpReady}
         tenantTaxCondition={tenant?.taxCondition ?? null}
         businessMode={tenant?.businessMode ?? 'kiosk'}
@@ -768,6 +845,8 @@ export default function Pos() {
         receiverModalOpen={receiverModalOpen}
         onReceiverModalChange={setReceiverModalOpen}
         activePriceListName={activePriceListName}
+        appliedPromotions={appliedPromotions}
+        promoDiscount={promoDiscount}
         onCompleted={(sale) => {
           setPayModal(false);
           clear();
@@ -879,6 +958,10 @@ interface PayProps {
   onReceiverModalChange: (open: boolean) => void;
   /** Sprint PRC: nombre de la lista de precios activa, para mostrar como hint. */
   activePriceListName: string | null;
+  /** Sprint PROMO: promos aplicadas al cart. El monto ya está descontado del `total`. */
+  appliedPromotions: PromotionApplication[];
+  /** Sprint PROMO: suma de promos. El driver lo combina con `discount` al persistir. */
+  promoDiscount: number;
   onCompleted: (sale: Sale) => void;
   /** Se llama cuando se elige cobrar 100% por QR con MP conectado. */
   onPayWithQR?: (
@@ -914,7 +997,7 @@ function calcSurcharge(baseAmount: number, pct: number): number {
   return roundMoney((baseAmount * pct) / 100);
 }
 
-function PaymentModal({ open, onClose, total, mpReady, tenantTaxCondition, businessMode, creditSalesEnabled, variantIdByProduct, receiver, onReceiverChange, receiverModalOpen, onReceiverModalChange, activePriceListName, onCompleted, onPayWithQR }: PayProps) {
+function PaymentModal({ open, onClose, total, mpReady, tenantTaxCondition, businessMode, creditSalesEnabled, variantIdByProduct, receiver, onReceiverChange, receiverModalOpen, onReceiverModalChange, activePriceListName, appliedPromotions, promoDiscount, onCompleted, onPayWithQR }: PayProps) {
   const { session, activeBranchId } = useAuth();
   const { lines, discount } = useCart();
   const [payments, setPayments] = useState<PaymentRow[]>([
@@ -1135,11 +1218,16 @@ function PaymentModal({ open, onClose, total, mpReady, tenantTaxCondition, busin
         method: p.method,
         amount: roundMoney(p.amount - (p.surchargeAmount || 0)),
       }));
+      // Sprint PROMO: el `discount` que enviamos al RPC suma el descuento manual
+      // + el descuento por promociones automáticas. Así la validación del backend
+      // (sum(payments) == subtotal - discount + surcharge) cuadra. El driver
+      // además persiste sale_promotions con el detalle.
+      const totalDiscount = roundMoney(discount + (promoDiscount || 0));
       const saleInput = buildSaleFromCart({
         branchId: activeBranchId,
         registerId: reg?.id ?? null,
         lines,
-        globalDiscount: discount,
+        globalDiscount: totalDiscount,
         payments: paymentsBase,
         partial,
         receiver,
@@ -1158,6 +1246,11 @@ function PaymentModal({ open, onClose, total, mpReady, tenantTaxCondition, busin
         surchargeAmount: p.surchargeAmount || 0,
         methodConfigId: p.methodConfigId,
       }));
+      // Sprint PROMO: mandamos el detalle de promos para que el driver las
+      // persista en sale_promotions y actualice sales.promo_discount_total.
+      if (appliedPromotions.length > 0) {
+        saleInput.appliedPromotions = appliedPromotions;
+      }
       const sale = await data.createSale(saleInput);
       onCompleted(sale);
     } catch (err) {
