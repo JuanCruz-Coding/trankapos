@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState, type FormEvent } from 'react';
-import { Building2, Pencil, Plus, Search, Trash2 } from 'lucide-react';
+import { Building2, BookOpen, Pencil, Plus, Search, Trash2 } from 'lucide-react';
+import { CustomerAccountStatementModal } from '@/components/customers/CustomerAccountStatementModal';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import { Modal } from '@/components/ui/Modal';
@@ -86,6 +87,8 @@ export default function Customers() {
   // Saldo a favor por cliente (Sprint DEV). Indexado por customerId.
   // Se carga en batch para los primeros 50 clientes para no abusar del backend.
   const [creditByCustomer, setCreditByCustomer] = useState<Record<string, number>>({});
+  // Sprint FIA: modal de cuenta corriente del cliente.
+  const [statementFor, setStatementFor] = useState<{ id: string; name: string } | null>(null);
 
   // Required fields del tenant. Lo cargamos junto con el tenant. Si no llegó
   // todavía o no está configurado, usamos los defaults conservadores.
@@ -374,8 +377,15 @@ export default function Customers() {
                   </td>
                   <td className="px-3 py-2 text-right">
                     <button
-                      onClick={() => openEdit(c)}
+                      onClick={() => setStatementFor({ id: c.id, name: c.legalName })}
                       className="rounded p-1.5 text-slate-500 hover:bg-slate-200 hover:text-navy"
+                      title="Cuenta corriente"
+                    >
+                      <BookOpen className="h-4 w-4" />
+                    </button>
+                    <button
+                      onClick={() => openEdit(c)}
+                      className="ml-1 rounded p-1.5 text-slate-500 hover:bg-slate-200 hover:text-navy"
                       title="Editar"
                     >
                       <Pencil className="h-4 w-4" />
@@ -554,6 +564,15 @@ export default function Customers() {
           </div>
         </form>
       </Modal>
+
+      {statementFor && (
+        <CustomerAccountStatementModal
+          open={statementFor !== null}
+          customerId={statementFor.id}
+          customerName={statementFor.name}
+          onClose={() => setStatementFor(null)}
+        />
+      )}
     </div>
   );
 }
