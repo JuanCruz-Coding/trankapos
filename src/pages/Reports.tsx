@@ -15,7 +15,9 @@ import {
   Users,
   DollarSign,
   RotateCcw,
+  Lock,
 } from 'lucide-react';
+import { Link } from 'react-router-dom';
 import { Card, CardBody, CardHeader, CardTitle } from '@/components/ui/Card';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { Button } from '@/components/ui/Button';
@@ -27,7 +29,7 @@ import { dayKey, rangeFromPreset, type RangePreset } from '@/lib/dates';
 import { format } from 'date-fns';
 import { es } from 'date-fns/locale';
 import { cn } from '@/lib/utils';
-import { PAYMENT_METHODS, type PaymentMethod, type Sale, type Tenant } from '@/types';
+import { PAYMENT_METHODS, type PaymentMethod, type Sale, type Subscription, type Tenant } from '@/types';
 import { ProductosTab } from '@/components/reports/ProductosTab';
 import { ClientesTab } from '@/components/reports/ClientesTab';
 import { FinancieroTab } from '@/components/reports/FinancieroTab';
@@ -65,22 +67,35 @@ export default function Reports() {
   const [categoryId, setCategoryId] = useState<string>('');
   const [status, setStatus] = useState<StatusFilter>('active');
   const [tenant, setTenant] = useState<Tenant | null>(null);
+  const [subscription, setSubscription] = useState<Subscription | null>(null);
 
-  // Cargar tenant para saber el businessMode (afecta visibilidad del tab Clientes).
+  // Cargar tenant (businessMode → Clientes tab) + subscription (plan → Financiero gate).
   useEffect(() => {
     let cancelled = false;
     void (async () => {
       try {
-        const t = await data.getTenant();
-        if (!cancelled) setTenant(t);
+        const [t, sub] = await Promise.all([
+          data.getTenant(),
+          data.getSubscription().catch(() => null),
+        ]);
+        if (cancelled) return;
+        setTenant(t);
+        setSubscription(sub);
       } catch {
-        if (!cancelled) setTenant(null);
+        if (!cancelled) {
+          setTenant(null);
+          setSubscription(null);
+        }
       }
     })();
     return () => {
       cancelled = true;
     };
   }, [session?.tenantId]);
+
+  // Plan gate para el tab Financiero (Pro / Empresa).
+  const planCode = subscription?.plan.code ?? 'free';
+  const hasFinancieroAccess = ['pro', 'empresa'].includes(planCode);
 
   const sales = useLiveQuery(() => data.listSales({}), [session?.tenantId]);
   const users = useLiveQuery(() => data.listUsers(), [session?.tenantId]);
@@ -277,12 +292,21 @@ export default function Reports() {
         <ClientesTab filtered={filtered} customers={customers ?? []} />
       )}
       {tab === 'financiero' && (
-        <FinancieroTab
-          filtered={filtered}
-          rangeFrom={range.from}
-          rangeTo={range.to}
-          products={products ?? []}
-        />
+        hasFinancieroAccess ? (
+          <FinancieroTab
+            filtered={filtered}
+            rangeFrom={range.from}
+            rangeTo={range.to}
+            products={products ?? []}
+          />
+        ) : (
+          <PlanGate
+            featureName="Reporte Financiero"
+            description="Margen bruto estimado y comparativa de período actual vs anterior te ayudan a medir la rentabilidad real del negocio."
+            requiredPlan="Pro"
+            currentPlan={planCode}
+          />
+        )
       )}
       {tab === 'devoluciones' && (
         <DevolucionesTab
@@ -480,6 +504,44 @@ function ResumenTab({
             )}
           </CardBody>
         </Card>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Bloquea una sección cuando el plan del tenant no incluye la feature.
+ * Sigue mostrando el tab en el nav (consistencia) pero ofrece un CTA al upgrade.
+ */
+function PlanGate({
+  featureName,
+  description,
+  requiredPlan,
+  currentPlan,
+}: {
+  featureName: string;
+  description: string;
+  requiredPlan: string;
+  currentPlan: string;
+}) {
+  return (
+    <div className="rounded-xl border-2 border-dashed border-brand-200 bg-brand-50/30 p-8 text-center">
+      <Lock className="mx-auto h-10 w-10 text-brand-500" />
+      <h3 className="mt-3 font-display text-lg font-semibold text-navy">
+        {featureName}
+      </h3>
+      <p className="mx-auto mt-1 max-w-md text-sm text-slate-600">{description}</p>
+      <div className="mt-4 inline-flex items-center gap-2 rounded-full bg-amber-100 px-3 py-1 text-xs font-medium text-amber-800">
+        Disponible en plan <strong>{requiredPlan}</strong>{' '}
+        {currentPlan !== 'free' && <span className="opacity-60">· tenés "{currentPlan}"</span>}
+      </div>
+      <div className="mt-4">
+        <Link
+          to="/plan"
+          className="inline-flex h-10 items-center rounded-lg bg-brand-600 px-4 text-sm font-semibold text-white hover:bg-brand-700"
+        >
+          Ver planes
+        </Link>
       </div>
     </div>
   );
