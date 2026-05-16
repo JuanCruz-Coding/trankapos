@@ -23,6 +23,7 @@ import PriceLists from '@/pages/PriceLists';
 import CustomerGroups from '@/pages/CustomerGroups';
 import Promotions from '@/pages/Promotions';
 import Brands from '@/pages/Brands';
+import Categories from '@/pages/Categories';
 import Stock from '@/pages/Stock';
 import Transfers from '@/pages/Transfers';
 import Help from '@/pages/Help';
@@ -109,6 +110,14 @@ export function App() {
             element={
               <ProtectedRoute permission="manage_products">
                 <Brands />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="categories"
+            element={
+              <ProtectedRoute permission="manage_products">
+                <Categories />
               </ProtectedRoute>
             }
           />
