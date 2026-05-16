@@ -98,6 +98,8 @@ interface TenantRow {
   sku_auto_enabled: boolean;
   sku_prefix: string;
   pos_partial_reserves_stock: boolean;
+  refund_policy: 'cash_or_credit' | 'credit_only' | 'cash_only' | null;
+  store_credit_validity_months: number | null;
   logo_url: string | null;
 }
 
@@ -127,6 +129,8 @@ function mapTenant(r: TenantRow): Tenant {
     skuAutoEnabled: r.sku_auto_enabled ?? true,
     skuPrefix: r.sku_prefix ?? '200',
     posPartialReservesStock: r.pos_partial_reserves_stock ?? false,
+    refundPolicy: r.refund_policy ?? 'cash_or_credit',
+    storeCreditValidityMonths: r.store_credit_validity_months ?? null,
     logoUrl: r.logo_url ?? null,
   };
 }
@@ -373,6 +377,7 @@ interface ReturnReasonRow {
   label: string;
   stock_destination: 'original' | 'specific_warehouse' | 'discard';
   destination_warehouse_id: string | null;
+  allows_cash_refund: boolean | null;
   active: boolean;
   sort_order: number;
   created_at: string;
@@ -386,6 +391,7 @@ function mapReturnReason(r: ReturnReasonRow): ReturnReason {
     label: r.label,
     stockDestination: r.stock_destination,
     destinationWarehouseId: r.destination_warehouse_id,
+    allowsCashRefund: r.allows_cash_refund ?? false,
     active: r.active,
     sortOrder: r.sort_order,
     createdAt: r.created_at,
@@ -416,6 +422,7 @@ interface CustomerCreditMovementRow {
   related_sale_id: string | null;
   related_doc_id: string | null;
   notes: string | null;
+  expires_at: string | null;
   created_at: string;
 }
 function mapCustomerCreditMovement(r: CustomerCreditMovementRow): CustomerCreditMovement {
@@ -427,6 +434,7 @@ function mapCustomerCreditMovement(r: CustomerCreditMovementRow): CustomerCredit
     relatedSaleId: r.related_sale_id,
     relatedDocId: r.related_doc_id,
     notes: r.notes,
+    expiresAt: r.expires_at,
     createdAt: r.created_at,
   };
 }
@@ -777,6 +785,8 @@ class SupabaseDriver implements DataDriver {
     if (input.skuAutoEnabled !== undefined) patch.sku_auto_enabled = input.skuAutoEnabled;
     if (input.skuPrefix !== undefined) patch.sku_prefix = input.skuPrefix;
     if (input.posPartialReservesStock !== undefined) patch.pos_partial_reserves_stock = input.posPartialReservesStock;
+    if (input.refundPolicy !== undefined) patch.refund_policy = input.refundPolicy;
+    if (input.storeCreditValidityMonths !== undefined) patch.store_credit_validity_months = input.storeCreditValidityMonths;
 
     const { data, error } = await this.sb
       .from('tenants')
@@ -2193,6 +2203,7 @@ class SupabaseDriver implements DataDriver {
         label: input.label,
         stock_destination: input.stockDestination,
         destination_warehouse_id: input.destinationWarehouseId ?? null,
+        allows_cash_refund: input.allowsCashRefund ?? false,
         active: input.active ?? true,
         sort_order: input.sortOrder ?? 0,
       })
@@ -2214,6 +2225,7 @@ class SupabaseDriver implements DataDriver {
     if (input.destinationWarehouseId !== undefined) {
       patch.destination_warehouse_id = input.destinationWarehouseId;
     }
+    if (input.allowsCashRefund !== undefined) patch.allows_cash_refund = input.allowsCashRefund;
     if (input.active !== undefined) patch.active = input.active;
     if (input.sortOrder !== undefined) patch.sort_order = input.sortOrder;
     const { data, error } = await this.sb
@@ -2282,21 +2294,34 @@ class SupabaseDriver implements DataDriver {
   }
 
   async getCustomerCredit(customerId: string): Promise<CustomerCredit | null> {
-    await this.requireSession();
-    const { data, error } = await this.sb
+    const s = await this.requireSession();
+    // Sprint DEV.fix: usar el RPC que excluye movements vencidos.
+    const { data: available, error: rpcErr } = await this.sb.rpc(
+      'get_customer_available_credit',
+      { p_tenant_id: s.tenantId, p_customer_id: customerId },
+    );
+    if (rpcErr) throw new Error(rpcErr.message);
+    const balance = Number(available ?? 0);
+    // Para currency/updatedAt leemos el row de customer_credits si existe.
+    const { data: row } = await this.sb
       .from('customer_credits')
-      .select('customer_id, balance, currency, updated_at')
+      .select('customer_id, currency, updated_at')
       .eq('customer_id', customerId)
       .maybeSingle();
-    if (error) throw new Error(error.message);
-    return data ? mapCustomerCredit(data as CustomerCreditRow) : null;
+    if (!row && balance === 0) return null;
+    return {
+      customerId,
+      balance,
+      currency: (row?.currency as string | undefined) ?? 'ARS',
+      updatedAt: (row?.updated_at as string | undefined) ?? new Date().toISOString(),
+    };
   }
 
   async listCustomerCreditMovements(customerId: string): Promise<CustomerCreditMovement[]> {
     await this.requireSession();
     const { data, error } = await this.sb
       .from('customer_credit_movements')
-      .select('id, customer_id, amount, reason, related_sale_id, related_doc_id, notes, created_at')
+      .select('id, customer_id, amount, reason, related_sale_id, related_doc_id, notes, expires_at, created_at')
       .eq('customer_id', customerId)
       .order('created_at', { ascending: false })
       .limit(50);

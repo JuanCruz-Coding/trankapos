@@ -114,6 +114,54 @@ Deno.serve(async (req) => {
       return jsonResponse({ error: 'La venta está anulada' }, 400);
     }
 
+    // --- 5b. Tenant policy + motivo (allows_cash_refund) (Sprint DEV.fix) ---
+    const { data: tenRow } = await admin
+      .from('tenants')
+      .select('refund_policy, store_credit_validity_months')
+      .eq('id', tenantId)
+      .maybeSingle();
+    const refundPolicy = ((tenRow?.refund_policy as string | null) ??
+      'cash_or_credit') as 'cash_or_credit' | 'credit_only' | 'cash_only';
+    const validityMonths = (tenRow?.store_credit_validity_months as number | null) ?? null;
+
+    let reasonAllowsCash = false;
+    let reasonStockDest: 'original' | 'specific_warehouse' | 'discard' = 'original';
+    let reasonDestWh: string | null = null;
+    if (body.reasonId) {
+      const { data: rRow } = await admin
+        .from('return_reasons')
+        .select('allows_cash_refund, stock_destination, destination_warehouse_id, tenant_id')
+        .eq('id', body.reasonId)
+        .maybeSingle();
+      if (rRow && rRow.tenant_id === tenantId) {
+        reasonAllowsCash = !!rRow.allows_cash_refund;
+        reasonStockDest = rRow.stock_destination as typeof reasonStockDest;
+        reasonDestWh = (rRow.destination_warehouse_id as string | null) ?? null;
+      }
+    }
+
+    // Validar policy contra refundMode (con override por motivo)
+    if (refundPolicy === 'cash_only' && body.refundMode === 'credit') {
+      return jsonResponse(
+        {
+          ok: false,
+          error:
+            'La política del comercio es solo efectivo: no se pueden generar vales. Cambiala en Settings → Devoluciones.',
+        },
+        200,
+      );
+    }
+    if (refundPolicy === 'credit_only' && body.refundMode === 'cash' && !reasonAllowsCash) {
+      return jsonResponse(
+        {
+          ok: false,
+          error:
+            'La política del comercio es entregar vale. Para devolver en efectivo, elegí un motivo que lo habilite (ej: Defectuoso).',
+        },
+        200,
+      );
+    }
+
     const { data: facturaData, error: facturaErr } = await admin
       .from('afip_documents')
       .select('id, status')
@@ -151,20 +199,9 @@ Deno.serve(async (req) => {
       );
     }
 
-    // --- 7. Resolver el motivo (stock_destination) ------------------
-    let stockDestination: 'original' | 'specific_warehouse' | 'discard' = 'original';
-    let destinationWarehouseId: string | null = null;
-    if (body.reasonId) {
-      const { data: reasonRow } = await admin
-        .from('return_reasons')
-        .select('stock_destination, destination_warehouse_id, tenant_id')
-        .eq('id', body.reasonId)
-        .maybeSingle();
-      if (reasonRow && reasonRow.tenant_id === tenantId) {
-        stockDestination = reasonRow.stock_destination as typeof stockDestination;
-        destinationWarehouseId = (reasonRow.destination_warehouse_id as string | null) ?? null;
-      }
-    }
+    // --- 7. Resolver el motivo (stock_destination) — ya cargado en 5b ----
+    const stockDestination = reasonStockDest;
+    const destinationWarehouseId = reasonDestWh;
 
     // --- 8. Devolver stock al destino correcto ----------------------
     if (stockDestination !== 'discard') {
@@ -247,6 +284,11 @@ Deno.serve(async (req) => {
           200,
         );
       }
+      // Sprint DEV.fix: calcular vencimiento del vale según el setting del tenant.
+      const expiresAt =
+        validityMonths && validityMonths > 0
+          ? new Date(Date.now() + validityMonths * 30 * 24 * 60 * 60 * 1000).toISOString()
+          : null;
       const { data: balData, error: balErr } = await admin.rpc('apply_customer_credit_movement', {
         p_tenant_id: tenantId,
         p_customer_id: saleData.customer_id,
@@ -256,6 +298,7 @@ Deno.serve(async (req) => {
         p_related_doc_id: ncResult.documentId,
         p_notes: body.reasonText ?? null,
         p_created_by: callerId,
+        p_expires_at: expiresAt,
       });
       if (balErr) {
         console.warn(`[afip-return-items] credit RPC falló: ${balErr.message}`);

@@ -77,9 +77,14 @@ export function CustomerCreditPanel({ customerId }: Props) {
     );
   }
 
+  // El balance ya viene "disponible" (excluye vencidos) — getCustomerCredit
+  // usa el RPC get_customer_available_credit. El histórico se calcula con
+  // la suma cruda de movements (incluye vencidos).
   const balance = credit?.balance ?? 0;
+  const historicTotal = (movements ?? []).reduce((acc, m) => acc + m.amount, 0);
+  const hasExpired = balance !== historicTotal && movements !== null;
 
-  if (balance === 0) {
+  if (balance === 0 && (movements === null || movements.length === 0)) {
     return (
       <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs text-slate-500">
         <Wallet className="mr-1 inline-block h-3.5 w-3.5 -mt-0.5" />
@@ -110,16 +115,25 @@ export function CustomerCreditPanel({ customerId }: Props) {
         </div>
         <div className="min-w-0 flex-1">
           <div className="text-xs font-semibold uppercase tracking-wide text-slate-600">
-            Saldo a favor
+            {balance === 0 ? 'Saldo a favor (vencido)' : 'Saldo a favor disponible'}
           </div>
           <div
             className={cn(
               'font-display text-2xl font-bold tabular-nums',
-              positive ? 'text-emerald-700' : 'text-red-700',
+              balance === 0
+                ? 'text-slate-400'
+                : positive
+                  ? 'text-emerald-700'
+                  : 'text-red-700',
             )}
           >
             {formatARS(balance)}
           </div>
+          {hasExpired && (
+            <div className="mt-0.5 text-[11px] text-slate-500">
+              Histórico total (incluye vencidos): {formatARS(historicTotal)}
+            </div>
+          )}
         </div>
       </div>
 
@@ -149,22 +163,40 @@ export function CustomerCreditPanel({ customerId }: Props) {
             <ul className="divide-y divide-slate-200 text-xs">
               {movements.map((m) => {
                 const isCredit = m.amount > 0;
+                const expired =
+                  m.expiresAt != null && new Date(m.expiresAt).getTime() <= Date.now();
                 return (
                   <li key={m.id} className="flex items-start justify-between gap-2 py-1.5">
                     <div className="min-w-0 flex-1">
-                      <div className="font-medium text-slate-800">
+                      <div
+                        className={cn(
+                          'font-medium',
+                          expired ? 'text-slate-400 line-through' : 'text-slate-800',
+                        )}
+                      >
                         {REASON_LABELS_ES[m.reason] ?? m.reason}
                       </div>
                       <div className="text-[11px] text-slate-500">
                         {new Date(m.createdAt).toLocaleString('es-AR')}
                       </div>
+                      {m.expiresAt && (
+                        <div
+                          className={cn(
+                            'mt-0.5 text-[11px]',
+                            expired
+                              ? 'font-semibold text-red-600'
+                              : 'text-amber-700',
+                          )}
+                        >
+                          {expired
+                            ? `Vencido el ${new Date(m.expiresAt).toLocaleDateString('es-AR')}`
+                            : `Vence el ${new Date(m.expiresAt).toLocaleDateString('es-AR')}`}
+                        </div>
+                      )}
                       {m.notes && (
                         <div className="mt-0.5 text-[11px] text-slate-600">{m.notes}</div>
                       )}
                       {m.relatedSaleId && (
-                        // Link plano (no router) porque /sales acepta filtros por query
-                        // pero acá no sabemos el path exacto que abre el detalle.
-                        // Lo mostramos como referencia textual.
                         <div className="mt-0.5 font-mono text-[10px] text-slate-400">
                           Venta: {m.relatedSaleId.slice(0, 8)}…
                         </div>
@@ -173,7 +205,11 @@ export function CustomerCreditPanel({ customerId }: Props) {
                     <div
                       className={cn(
                         'shrink-0 text-right font-semibold tabular-nums',
-                        isCredit ? 'text-emerald-700' : 'text-red-700',
+                        expired
+                          ? 'text-slate-400 line-through'
+                          : isCredit
+                            ? 'text-emerald-700'
+                            : 'text-red-700',
                       )}
                     >
                       {isCredit ? '+' : ''}

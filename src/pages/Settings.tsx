@@ -34,6 +34,7 @@ import { LOGO_REQUIREMENTS_TEXT, validateLogoFile } from '@/lib/imageUpload';
 import { ProductionToggleModal } from '@/components/afip/ProductionToggleModal';
 import { AfipOnboardingWizard } from '@/components/afip/AfipOnboardingWizard';
 import { ReturnReasonsEditor } from '@/components/settings/ReturnReasonsEditor';
+import { RefundPolicyPanel } from '@/components/settings/RefundPolicyPanel';
 
 type Tab = 'empresa' | 'ticket' | 'pos' | 'stock' | 'pagos' | 'facturacion' | 'devoluciones';
 
@@ -69,6 +70,8 @@ interface FormState {
   skuAutoEnabled: boolean;
   skuPrefix: string;
   stockAlertsEnabled: boolean;
+  refundPolicy: 'cash_or_credit' | 'credit_only' | 'cash_only';
+  storeCreditValidityMonths: number | null;
   logoUrl: string | null;
 }
 
@@ -95,6 +98,8 @@ function tenantToForm(t: Tenant): FormState {
     skuAutoEnabled: t.skuAutoEnabled,
     skuPrefix: t.skuPrefix,
     stockAlertsEnabled: t.stockAlertsEnabled,
+    refundPolicy: t.refundPolicy,
+    storeCreditValidityMonths: t.storeCreditValidityMonths,
     logoUrl: t.logoUrl,
   };
 }
@@ -166,6 +171,8 @@ export default function Settings() {
         skuAutoEnabled: form.skuAutoEnabled,
         skuPrefix: form.skuPrefix,
         stockAlertsEnabled: form.stockAlertsEnabled,
+        refundPolicy: form.refundPolicy,
+        storeCreditValidityMonths: form.storeCreditValidityMonths,
       };
       const updated = await data.updateTenantSettings(input);
       setForm(tenantToForm(updated));
@@ -232,11 +239,23 @@ export default function Settings() {
           </CardBody>
         </Card>
       ) : tab === 'devoluciones' ? (
-        <Card>
-          <CardBody>
-            <ReturnReasonsEditor />
-          </CardBody>
-        </Card>
+        <div className="space-y-4">
+          <Card>
+            <CardBody>
+              <RefundPolicyPanel
+                refundPolicy={form.refundPolicy}
+                storeCreditValidityMonths={form.storeCreditValidityMonths}
+                onPolicyChange={(p) => update('refundPolicy', p)}
+                onValidityChange={(m) => update('storeCreditValidityMonths', m)}
+              />
+            </CardBody>
+          </Card>
+          <Card>
+            <CardBody>
+              <ReturnReasonsEditor />
+            </CardBody>
+          </Card>
+        </div>
       ) : (
         <form onSubmit={handleSubmit}>
           <Card>

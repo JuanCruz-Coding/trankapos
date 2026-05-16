@@ -49,6 +49,8 @@ export async function seedIfEmpty(): Promise<void> {
     skuAutoEnabled: true,
     skuPrefix: '200',
     posPartialReservesStock: false,
+    refundPolicy: 'cash_or_credit',
+    storeCreditValidityMonths: null,
     logoUrl: null,
   };
 

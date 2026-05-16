@@ -23,6 +23,7 @@ interface FormState {
   label: string;
   stockDestination: 'original' | 'specific_warehouse' | 'discard';
   destinationWarehouseId: string | null;
+  allowsCashRefund: boolean;
   active: boolean;
   sortOrder: string;
 }
@@ -32,6 +33,7 @@ const emptyForm: FormState = {
   label: '',
   stockDestination: 'original',
   destinationWarehouseId: null,
+  allowsCashRefund: false,
   active: true,
   sortOrder: '0',
 };
@@ -116,6 +118,7 @@ export function ReturnReasonsEditor() {
       label: r.label,
       stockDestination: r.stockDestination,
       destinationWarehouseId: r.destinationWarehouseId,
+      allowsCashRefund: r.allowsCashRefund,
       active: r.active,
       sortOrder: String(r.sortOrder),
     });
@@ -169,6 +172,7 @@ export function ReturnReasonsEditor() {
         stockDestination: form.stockDestination,
         destinationWarehouseId:
           form.stockDestination === 'specific_warehouse' ? form.destinationWarehouseId : null,
+        allowsCashRefund: form.allowsCashRefund,
         active: form.active,
         sortOrder,
       };
@@ -249,10 +253,20 @@ export function ReturnReasonsEditor() {
                   <td className="px-3 py-2 font-medium text-navy">{r.label}</td>
                   <td className="px-3 py-2 font-mono text-xs text-slate-600">{r.code}</td>
                   <td className="px-3 py-2">
-                    <StockDestinationBadge
-                      destination={r.stockDestination}
-                      warehouseName={warehouseLabel(r.destinationWarehouseId)}
-                    />
+                    <div className="flex flex-wrap items-center gap-1">
+                      <StockDestinationBadge
+                        destination={r.stockDestination}
+                        warehouseName={warehouseLabel(r.destinationWarehouseId)}
+                      />
+                      {r.allowsCashRefund && (
+                        <span
+                          className="rounded-full bg-amber-50 px-2 py-0.5 text-[10px] font-medium text-amber-700"
+                          title="Este motivo permite devolución en efectivo aún si la política es 'sólo vale'"
+                        >
+                          Permite cash
+                        </span>
+                      )}
+                    </div>
                   </td>
                   <td className="px-3 py-2 text-slate-600">{r.sortOrder}</td>
                   <td className="px-3 py-2">
@@ -364,6 +378,24 @@ export function ReturnReasonsEditor() {
                 accent="red"
               />
             </div>
+          </div>
+
+          <div>
+            <label className="flex cursor-pointer items-start gap-2 rounded-lg border border-slate-300 bg-white p-3 text-sm">
+              <input
+                type="checkbox"
+                checked={form.allowsCashRefund}
+                onChange={(e) => update('allowsCashRefund', e.target.checked)}
+                className="mt-0.5 h-4 w-4"
+              />
+              <span>
+                <span className="font-medium">Permite devolución en efectivo</span>
+                <span className="mt-0.5 block text-xs text-slate-500">
+                  Aún si la política del comercio es "siempre vale". Útil para motivos como
+                  "Defectuoso" (Ley 24.240: derecho del consumidor a la devolución en cash).
+                </span>
+              </span>
+            </label>
           </div>
 
           <div className="grid gap-3 md:grid-cols-2">

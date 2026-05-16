@@ -24,13 +24,18 @@ import { toast } from '@/stores/toast';
 import { confirmDialog } from '@/lib/dialog';
 import { cn } from '@/lib/utils';
 import {
+  CUSTOMER_DOC_TYPES,
+  CUSTOMER_IVA_CONDITIONS,
   PAYMENT_METHODS,
+  type CustomerDocType,
+  type CustomerIvaCondition,
   type PaymentMethod,
   type Product,
   type ProductVariant,
   type ReturnReason,
   type Sale,
 } from '@/types';
+import { getSupabase } from '@/lib/supabase';
 
 /** Operación elegida en paso 1. */
 type OpType = 'return' | 'exchange';
@@ -117,7 +122,21 @@ function ReturnExchangeWizardInner({
   const [step, setStep] = useState<1 | 2 | 3 | 4>(1);
   const [loading, setLoading] = useState(false);
 
-  const hasCustomer = Boolean(sale.customerId);
+  // Sprint DEV.fix: policy del tenant + cliente registrado al vuelo en el wizard.
+  const [refundPolicy, setRefundPolicy] = useState<
+    'cash_or_credit' | 'credit_only' | 'cash_only'
+  >('cash_or_credit');
+  const [attachedCustomerId, setAttachedCustomerId] = useState<string | null>(null);
+  const [registerCustomerOpen, setRegisterCustomerOpen] = useState(false);
+
+  const hasCustomer = Boolean(sale.customerId || attachedCustomerId);
+  const selectedReason = useMemo(
+    () => reasons.find((r) => r.id === reasonId) ?? null,
+    [reasons, reasonId],
+  );
+  const cashAllowed =
+    refundPolicy !== 'credit_only' || !!selectedReason?.allowsCashRefund;
+  const creditAllowed = refundPolicy !== 'cash_only' && hasCustomer;
 
   // Reset al abrir/cerrar.
   useEffect(() => {
@@ -131,7 +150,26 @@ function ReturnExchangeWizardInner({
     setPayments([{ method: 'cash', amount: 0 }]);
     setStep(1);
     setLoading(false);
+    setAttachedCustomerId(null);
+    setRegisterCustomerOpen(false);
   }, [open, sale.id]);
+
+  // Cargar policy del tenant al abrir.
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const t = await data.getTenant();
+        if (!cancelled) setRefundPolicy(t.refundPolicy ?? 'cash_or_credit');
+      } catch {
+        if (!cancelled) setRefundPolicy('cash_or_credit');
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [open]);
 
   // Cargar motivos al abrir.
   useEffect(() => {
@@ -151,10 +189,11 @@ function ReturnExchangeWizardInner({
     };
   }, [open]);
 
-  // Si el cliente no está identificado y refundMode estaba en credit, forzar a cash.
+  // Forzar refundMode válido según policy + motivo + cliente.
   useEffect(() => {
-    if (!hasCustomer && refundMode === 'credit') setRefundMode('cash');
-  }, [hasCustomer, refundMode]);
+    if (refundMode === 'credit' && !creditAllowed) setRefundMode('cash');
+    if (refundMode === 'cash' && !cashAllowed && creditAllowed) setRefundMode('credit');
+  }, [cashAllowed, creditAllowed, refundMode]);
 
   // --- Cálculos derivados ---
 
@@ -298,6 +337,20 @@ function ReturnExchangeWizardInner({
     if (!canConfirm()) return;
     setLoading(true);
     try {
+      // Si el cajero registró un cliente inline (saldo a favor sin customer),
+      // asociarlo a la venta original ANTES de emitir la NC para que el backend
+      // pueda acreditar el saldo al cliente correcto.
+      if (attachedCustomerId && !sale.customerId) {
+        const { error: attachErr } = await getSupabase()
+          .from('sales')
+          .update({ customer_id: attachedCustomerId })
+          .eq('id', sale.id);
+        if (attachErr) {
+          toast.error('No se pudo asociar el cliente a la venta: ' + attachErr.message);
+          return;
+        }
+      }
+
       // Mapear items a devolver al shape del backend.
       const itemsToReturn = sale.items
         .map((it) => ({ saleItemId: it.id, qty: returnQtyById[it.id] ?? 0 }))
@@ -379,6 +432,7 @@ function ReturnExchangeWizardInner({
   const visualStep = step === 4 ? steps.length : step;
 
   return (
+    <>
     <Modal
       open={open}
       onClose={handleClose}
@@ -430,6 +484,10 @@ function ReturnExchangeWizardInner({
             refundMode={refundMode}
             setRefundMode={setRefundMode}
             hasCustomer={hasCustomer}
+            refundPolicy={refundPolicy}
+            cashAllowed={cashAllowed}
+            creditAllowed={creditAllowed}
+            onRegisterCustomerClick={() => setRegisterCustomerOpen(true)}
             payments={payments}
             setPayments={setPayments}
             paidNew={paidNew}
@@ -483,6 +541,16 @@ function ReturnExchangeWizardInner({
         </div>
       </div>
     </Modal>
+    <RegisterCustomerInlineModal
+      open={registerCustomerOpen}
+      onClose={() => setRegisterCustomerOpen(false)}
+      onCreated={(c) => {
+        setAttachedCustomerId(c.id);
+        setRegisterCustomerOpen(false);
+        toast.success('Cliente registrado. Va a quedar asociado al confirmar.');
+      }}
+    />
+    </>
   );
 }
 
@@ -1071,6 +1139,10 @@ function Step4({
   refundMode,
   setRefundMode,
   hasCustomer,
+  refundPolicy,
+  cashAllowed,
+  creditAllowed,
+  onRegisterCustomerClick,
   payments,
   setPayments,
   paidNew,
@@ -1093,6 +1165,10 @@ function Step4({
   refundMode: RefundMode;
   setRefundMode: (m: RefundMode) => void;
   hasCustomer: boolean;
+  refundPolicy: 'cash_or_credit' | 'credit_only' | 'cash_only';
+  cashAllowed: boolean;
+  creditAllowed: boolean;
+  onRegisterCustomerClick: () => void;
   payments: { method: PaymentMethod; amount: number }[];
   setPayments: React.Dispatch<
     React.SetStateAction<{ method: PaymentMethod; amount: number }[]>
@@ -1151,31 +1227,50 @@ function Step4({
           <label className="block text-xs font-semibold uppercase text-slate-500">
             Cómo se devuelve la diferencia ({formatARS(difference)})
           </label>
+          {refundPolicy === 'credit_only' && (
+            <p className="mt-1 text-[11px] text-slate-500">
+              Política del comercio: siempre vale.
+              {!cashAllowed && ' Para devolver en efectivo elegí un motivo que lo permita (ej: Defectuoso).'}
+            </p>
+          )}
+          {refundPolicy === 'cash_only' && (
+            <p className="mt-1 text-[11px] text-slate-500">
+              Política del comercio: siempre efectivo.
+            </p>
+          )}
           <div className="mt-2 grid gap-2 sm:grid-cols-2">
-            <label
-              className={cn(
-                'flex cursor-pointer items-start gap-2 rounded-lg border p-2 text-sm transition',
-                refundMode === 'cash'
-                  ? 'border-brand-500 bg-brand-50'
-                  : 'border-slate-200 hover:border-slate-300',
-              )}
+            <Tooltip
+              label={cashAllowed ? '' : 'No permitido por la política del comercio'}
             >
-              <input
-                type="radio"
-                className="mt-0.5"
-                checked={refundMode === 'cash'}
-                onChange={() => setRefundMode('cash')}
-              />
-              <div>
-                <div className="font-semibold text-navy">Efectivo</div>
-                <div className="text-xs text-slate-500">Sale del cajón abierto.</div>
-              </div>
-            </label>
+              <label
+                className={cn(
+                  'flex w-full cursor-pointer items-start gap-2 rounded-lg border p-2 text-sm transition',
+                  refundMode === 'cash'
+                    ? 'border-brand-500 bg-brand-50'
+                    : 'border-slate-200 hover:border-slate-300',
+                  !cashAllowed && 'cursor-not-allowed opacity-50',
+                )}
+              >
+                <input
+                  type="radio"
+                  className="mt-0.5"
+                  checked={refundMode === 'cash'}
+                  onChange={() => setRefundMode('cash')}
+                  disabled={!cashAllowed}
+                />
+                <div>
+                  <div className="font-semibold text-navy">Efectivo</div>
+                  <div className="text-xs text-slate-500">Sale del cajón abierto.</div>
+                </div>
+              </label>
+            </Tooltip>
             <Tooltip
               label={
-                !hasCustomer
-                  ? 'La venta no tiene cliente identificado'
-                  : 'Sumar al saldo a favor del cliente'
+                refundPolicy === 'cash_only'
+                  ? 'No permitido por la política del comercio'
+                  : !hasCustomer
+                    ? 'La venta no tiene cliente identificado'
+                    : 'Sumar al saldo a favor del cliente'
               }
             >
               <label
@@ -1184,7 +1279,7 @@ function Step4({
                   refundMode === 'credit'
                     ? 'border-brand-500 bg-brand-50'
                     : 'border-slate-200 hover:border-slate-300',
-                  !hasCustomer && 'cursor-not-allowed opacity-50',
+                  !creditAllowed && 'cursor-not-allowed opacity-50',
                 )}
               >
                 <input
@@ -1192,7 +1287,7 @@ function Step4({
                   className="mt-0.5"
                   checked={refundMode === 'credit'}
                   onChange={() => setRefundMode('credit')}
-                  disabled={!hasCustomer}
+                  disabled={!creditAllowed}
                 />
                 <div>
                   <div className="font-semibold text-navy">Saldo a favor</div>
@@ -1203,6 +1298,25 @@ function Step4({
               </label>
             </Tooltip>
           </div>
+          {refundPolicy !== 'cash_only' && !hasCustomer && (
+            <div className="mt-2 rounded-md border border-amber-200 bg-amber-50 p-2 text-xs">
+              <div className="font-medium text-amber-800">
+                La venta no tiene cliente identificado.
+              </div>
+              <div className="mt-0.5 text-amber-700">
+                Para entregar saldo a favor, registrá un cliente ahora.
+              </div>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                className="mt-2"
+                onClick={onRegisterCustomerClick}
+              >
+                Registrar cliente
+              </Button>
+            </div>
+          )}
         </div>
       )}
 
@@ -1313,5 +1427,121 @@ function Step4({
         </div>
       </div>
     </div>
+  );
+}
+
+// --- Mini-form para registrar un cliente desde el wizard (Sprint DEV.fix) ---
+
+function RegisterCustomerInlineModal({
+  open,
+  onClose,
+  onCreated,
+}: {
+  open: boolean;
+  onClose: () => void;
+  onCreated: (c: { id: string; legalName: string }) => void;
+}) {
+  const [docType, setDocType] = useState<CustomerDocType>(80);
+  const [docNumber, setDocNumber] = useState('');
+  const [legalName, setLegalName] = useState('');
+  const [ivaCondition, setIvaCondition] = useState<CustomerIvaCondition>('consumidor_final');
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    if (!open) return;
+    setDocType(80);
+    setDocNumber('');
+    setLegalName('');
+    setIvaCondition('consumidor_final');
+    setSaving(false);
+  }, [open]);
+
+  async function handleSubmit(e: FormEvent) {
+    e.preventDefault();
+    if (!docNumber.trim()) return toast.error('Número de documento es requerido');
+    if (!legalName.trim()) return toast.error('Razón social / nombre es requerido');
+    setSaving(true);
+    try {
+      const c = await data.createCustomer({
+        docType,
+        docNumber: docNumber.trim(),
+        legalName: legalName.trim(),
+        ivaCondition,
+        email: null,
+        notes: null,
+      });
+      onCreated({ id: c.id, legalName: c.legalName });
+    } catch (err) {
+      toast.error((err as Error).message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <Modal open={open} onClose={onClose} title="Registrar cliente">
+      <form onSubmit={handleSubmit} className="space-y-3">
+        <p className="text-xs text-slate-600">
+          Carga rápida para asociar el saldo a favor. Después podés completar más datos
+          desde Clientes.
+        </p>
+        <div className="grid gap-2 sm:grid-cols-[120px_1fr]">
+          <label className="block">
+            <span className="mb-1 block text-xs font-medium text-slate-700">Tipo doc</span>
+            <select
+              className="h-10 w-full rounded-lg border border-slate-300 bg-white px-2 text-sm"
+              value={docType}
+              onChange={(e) => setDocType(Number(e.target.value) as CustomerDocType)}
+            >
+              {CUSTOMER_DOC_TYPES.map((o) => (
+                <option key={o.value} value={o.value}>
+                  {o.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="block">
+            <span className="mb-1 block text-xs font-medium text-slate-700">Número</span>
+            <Input
+              value={docNumber}
+              onChange={(e) => setDocNumber(e.target.value.replace(/\D/g, ''))}
+              autoFocus
+            />
+          </label>
+        </div>
+        <label className="block">
+          <span className="mb-1 block text-xs font-medium text-slate-700">
+            Razón social / Nombre
+          </span>
+          <Input
+            value={legalName}
+            onChange={(e) => setLegalName(e.target.value)}
+            placeholder="Ej: Juan Pérez"
+          />
+        </label>
+        <label className="block">
+          <span className="mb-1 block text-xs font-medium text-slate-700">Condición IVA</span>
+          <select
+            className="h-10 w-full rounded-lg border border-slate-300 bg-white px-2 text-sm"
+            value={ivaCondition}
+            onChange={(e) => setIvaCondition(e.target.value as CustomerIvaCondition)}
+          >
+            {CUSTOMER_IVA_CONDITIONS.map((o) => (
+              <option key={o.value} value={o.value}>
+                {o.label}
+              </option>
+            ))}
+          </select>
+        </label>
+        <div className="flex justify-end gap-2 pt-2">
+          <Button type="button" variant="ghost" onClick={onClose} disabled={saving}>
+            Cancelar
+          </Button>
+          <Button type="submit" disabled={saving}>
+            {saving ? 'Guardando…' : 'Registrar'}
+          </Button>
+        </div>
+      </form>
+    </Modal>
   );
 }

@@ -104,6 +104,11 @@ export interface Tenant {
   skuPrefix: string;
   // Señas
   posPartialReservesStock: boolean;
+  // Devoluciones (Sprint DEV.fix)
+  /** Política de devolución de dinero. cash_or_credit (default), credit_only (siempre vale), cash_only. */
+  refundPolicy: 'cash_or_credit' | 'credit_only' | 'cash_only';
+  /** Meses de vigencia del vale generado por devolución. null = sin vencimiento. */
+  storeCreditValidityMonths: number | null;
   // Branding
   logoUrl: string | null;
 }
@@ -130,6 +135,8 @@ export interface TenantSettingsInput {
   skuAutoEnabled?: boolean;
   skuPrefix?: string;
   posPartialReservesStock?: boolean;
+  refundPolicy?: 'cash_or_credit' | 'credit_only' | 'cash_only';
+  storeCreditValidityMonths?: number | null;
 }
 
 export interface User {
@@ -295,6 +302,8 @@ export interface ReturnReason {
   label: string;
   stockDestination: 'original' | 'specific_warehouse' | 'discard';
   destinationWarehouseId: string | null;
+  /** Si true, este motivo permite cash incluso bajo refundPolicy='credit_only'. */
+  allowsCashRefund: boolean;
   active: boolean;
   sortOrder: number;
   createdAt: string;
@@ -317,6 +326,8 @@ export interface CustomerCreditMovement {
   relatedSaleId: string | null;
   relatedDocId: string | null;
   notes: string | null;
+  /** Vencimiento individual. null = no vence. */
+  expiresAt: string | null;
   createdAt: string;
 }
 

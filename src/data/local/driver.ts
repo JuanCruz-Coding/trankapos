@@ -94,6 +94,8 @@ function withTenantDefaults(t: Partial<Tenant> & Pick<Tenant, 'id' | 'name' | 'c
     skuAutoEnabled: t.skuAutoEnabled ?? true,
     skuPrefix: t.skuPrefix ?? '200',
     posPartialReservesStock: t.posPartialReservesStock ?? false,
+    refundPolicy: t.refundPolicy ?? 'cash_or_credit',
+    storeCreditValidityMonths: t.storeCreditValidityMonths ?? null,
     logoUrl: t.logoUrl ?? null,
   };
 }

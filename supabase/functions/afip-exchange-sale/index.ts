@@ -168,6 +168,50 @@ Deno.serve(async (req) => {
       return jsonResponse({ error: 'La venta original está anulada' }, 400);
     }
 
+    // --- 5b. Tenant policy + motivo allows_cash_refund (Sprint DEV.fix) ----
+    const { data: tenRow } = await admin
+      .from('tenants')
+      .select('refund_policy, store_credit_validity_months')
+      .eq('id', tenantId)
+      .maybeSingle();
+    const refundPolicy = ((tenRow?.refund_policy as string | null) ??
+      'cash_or_credit') as 'cash_or_credit' | 'credit_only' | 'cash_only';
+    const validityMonths = (tenRow?.store_credit_validity_months as number | null) ?? null;
+
+    let reasonAllowsCash = false;
+    if (body.reasonId) {
+      const { data: rRow } = await admin
+        .from('return_reasons')
+        .select('allows_cash_refund, tenant_id')
+        .eq('id', body.reasonId)
+        .maybeSingle();
+      if (rRow && rRow.tenant_id === tenantId) {
+        reasonAllowsCash = !!rRow.allows_cash_refund;
+      }
+    }
+
+    // El refundMode acá solo afecta cuando hay diferencia a favor del cliente.
+    // Validamos contra la policy del tenant (mismo criterio que return-items).
+    if (refundPolicy === 'cash_only' && body.refundMode === 'credit') {
+      return jsonResponse(
+        {
+          ok: false,
+          error: 'La política del comercio es solo efectivo: no se pueden generar vales.',
+        },
+        200,
+      );
+    }
+    if (refundPolicy === 'credit_only' && body.refundMode === 'cash' && !reasonAllowsCash) {
+      return jsonResponse(
+        {
+          ok: false,
+          error:
+            'La política del comercio es entregar vale. Para devolver en efectivo, elegí un motivo que lo habilite (ej: Defectuoso).',
+        },
+        200,
+      );
+    }
+
     const { data: facturaData, error: facturaErr } = await admin
       .from('afip_documents')
       .select('id')
@@ -566,6 +610,11 @@ Deno.serve(async (req) => {
             200,
           );
         }
+        // Sprint DEV.fix: vencimiento del vale.
+        const expiresAt =
+          validityMonths && validityMonths > 0
+            ? new Date(Date.now() + validityMonths * 30 * 24 * 60 * 60 * 1000).toISOString()
+            : null;
         const { data: balData, error: balErr } = await admin.rpc('apply_customer_credit_movement', {
           p_tenant_id: tenantId,
           p_customer_id: targetCustomerId,
@@ -575,6 +624,7 @@ Deno.serve(async (req) => {
           p_related_doc_id: ncId,
           p_notes: body.reasonText ?? null,
           p_created_by: callerId,
+          p_expires_at: expiresAt,
         });
         if (balErr) {
           console.warn(`[afip-exchange-sale] credit RPC falló: ${balErr.message}`);

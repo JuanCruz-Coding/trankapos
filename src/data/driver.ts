@@ -208,6 +208,8 @@ export interface ReturnReasonInput {
   label: string;
   stockDestination: 'original' | 'specific_warehouse' | 'discard';
   destinationWarehouseId?: string | null;
+  /** Sprint DEV.fix: si true permite cash en refundPolicy=credit_only. */
+  allowsCashRefund?: boolean;
   active?: boolean;
   sortOrder?: number;
 }
